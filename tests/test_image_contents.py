@@ -1,0 +1,96 @@
+"""The Docker image must contain every package the application imports.
+
+**This test exists because the dev deployment was down for four days and
+nothing said so.** `kernel/` and `contexts/` were created by CHY-101 on 24.08.
+and never added to the Dockerfile. The image built without complaint,
+`docker compose up -d` returned 0, and the container then crash-looped on
+`ModuleNotFoundError: No module named 'kernel'`.
+
+`deploy:dev` reported **success** through all of it. That is the same shape as
+INFRA-63 (jobs reported success and did nothing) and as the coverage source
+list of CHY-105 (a metric that measured less and called it an improvement):
+something answers "fine" because it never looked.
+
+Two lists have to agree — `[tool.hatch.build] packages` in pyproject.toml and
+the COPY lines in the Dockerfile — and until now the only thing connecting them
+was somebody remembering. That is not a mechanism.
+
+Offline and cheap: this reads two files. It does not build the image; that
+belongs in CI. What it catches is the case that actually happened — a new
+top-level package that one list knows about and the other does not.
+"""
+from __future__ import annotations
+
+import pathlib
+import re
+import sys
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+REPO = pathlib.Path(__file__).resolve().parent.parent
+DOCKERFILE = REPO / "Dockerfile"
+PYPROJECT = REPO / "pyproject.toml"
+
+
+def _declared_packages() -> set[str]:
+    """The packages pyproject.toml says belong to the distribution."""
+    text = PYPROJECT.read_text(encoding="utf-8")
+    m = re.search(r"^packages = \[(.*?)\]", text, re.M | re.S)
+    assert m, "no `packages = [...]` in pyproject.toml — has the build backend changed?"
+    return {p.strip().strip('"').split("/")[0] for p in m.group(1).split(",") if p.strip()}
+
+
+def _copied_packages() -> set[str]:
+    """The top-level directories the image actually receives."""
+    return set(re.findall(r"^COPY ([a-z_]+)/ \./", DOCKERFILE.read_text(encoding="utf-8"), re.M))
+
+
+def _imported_top_level() -> set[str]:
+    """First-party packages imported anywhere under api/ — what the app needs to start."""
+    import ast
+
+    first_party = {p.name for p in REPO.iterdir() if p.is_dir() and (p / "__init__.py").exists()}
+    found = set()
+    for path in (REPO / "api").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                found |= {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                found.add(node.module.split(".")[0])
+    return found & first_party
+
+
+def test_every_declared_package_reaches_the_image():
+    missing = _declared_packages() - _copied_packages()
+    assert not missing, (
+        f"pyproject declares {sorted(missing)} but the Dockerfile never copies them. "
+        f"The image builds, the container crash-loops on ModuleNotFoundError, and "
+        f"deploy reports success — exactly what happened between 24. and 28.08."
+    )
+
+
+def test_everything_api_imports_reaches_the_image():
+    """The stronger check: not what is declared, but what is actually imported.
+
+    A package could be missing from *both* lists and still be needed — that is
+    the version of this failure that the test above would not catch.
+    """
+    missing = _imported_top_level() - _copied_packages()
+    assert not missing, f"api/ imports {sorted(missing)}, which the image does not contain"
+
+
+def test_the_dockerfile_copies_nothing_that_no_longer_exists():
+    """CHY-121 removed `domain/`; the Dockerfile kept `COPY domain/`.
+
+    From then on the build itself failed — which is the *better* failure, because
+    it is loud. This test makes it louder still, and before the pipeline.
+    """
+    ghosts = [p for p in _copied_packages() if not (REPO / p).is_dir()]
+    assert not ghosts, f"the Dockerfile copies {ghosts}, which do not exist"
+
+
+@pytest.mark.parametrize("pkg", sorted(_declared_packages()))
+def test_each_declared_package_exists_on_disk(pkg):
+    assert (REPO / pkg).is_dir(), f"pyproject declares {pkg}, which is not a directory"

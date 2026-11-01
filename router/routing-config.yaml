@@ -1,0 +1,65 @@
+# What this deployment can reach — infrastructure, not governance (CHY-87).
+#
+# Which models exist and what data they may see is a fact about the
+# installation, in the same category as `litellm_base_url`. It belongs here.
+#
+# WHICH model serves WHICH task is something else: a decision with data
+# protection consequences, made by a person and reviewed by another. Those rules
+# left this file in CHY-87 and live in `context_blocks` as `routing_rule` blocks
+# — versioned, approval-bound, and inherited along the scope chain (ADR-037).
+#
+# The split follows CHY-42: `workflow_configs` carries only tuning, while
+# infrastructure stays in ENV and SOPS. A base URL a PUT can change is an SSRF
+# vector; a routing table a PUT can change is a governance bypass.
+#
+# Model names must match the model IDs configured in the LiteLLM gateway (in the
+# reference installation that configuration lives in the infrastructure
+# repository; this comment pointed at a stale location until CHY-157). Nothing checks the
+# two lists against each other: they live in different repositories. On
+# 24.09.2026 LiteLLM served seven models and this file declared five.
+
+# `max_privacy_level` is the strictest class of data the model may process — a
+# local model may see everything, a hosted one may not. The chain check in
+# router/config.py reads it, and a rule may not fall back to something lower.
+models:
+  gemma3-4b:
+    runs_on: local-apple-silicon
+    max_privacy_level: critical
+  gemma4-e4b:
+    runs_on: local-apple-silicon
+    max_privacy_level: critical
+  phi3-mini:
+    runs_on: local-raspberry-pi
+    max_privacy_level: critical
+  gemma3-1b:
+    runs_on: local-raspberry-pi
+    max_privacy_level: critical
+  nomic-embed-text:
+    runs_on: local-raspberry-pi
+    max_privacy_level: critical
+
+  # --- Ollama Cloud (CHY-157) ------------------------------------------------
+  #
+  # Until these two entries, every declared model was local and `critical`, so
+  # the chain check in router/rules.py compared five equal ranks and could never
+  # refuse anything. The check existed; it had nothing to say no to. These are
+  # the first entries a chain can fall *down* to, and the first time the check
+  # can actually bite.
+  #
+  # `public`, not `internal`: the request leaves the house to a third-party
+  # processor, and there is no data processing agreement (Art. 28 GDPR) with
+  # it. Starting strict is the direction that needs no justification;
+  # loosening it later is a reviewed change to this file.
+  #
+  # The intended use is cloud FIRST, local as fallback -- [gemma4-cloud,
+  # gemma4-e4b] is a sound chain, because every candidate after the first sits
+  # at or above its level. The reverse is a descent and is refused. That is the
+  # shape the Free Plan's usage limits need: when the quota is spent, Ollama
+  # answers 429 and core/completion.py moves on (ADR-035). Skipping an
+  # exhausted model instead of asking it on every request is CHY-159.
+  gemma4-cloud:
+    runs_on: ollama-cloud
+    max_privacy_level: public
+  gpt-oss-20b:
+    runs_on: ollama-cloud
+    max_privacy_level: public
