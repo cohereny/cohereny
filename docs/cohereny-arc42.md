@@ -4,9 +4,9 @@
 
 **SHAPE · ADAPT · LEARN · REPEAT**
 
-> **Version:** 2.45 (basiert auf Whitepaper v4.24)
+> **Version:** 2.47 (basiert auf Whitepaper v4.26)
 > **Autor:** Thomas Roth
-> **Datum:** 2026-11-01
+> **Datum:** 2026-11-03
 > **Status:** Pre-Release (vor 1.0)
 > **Template:** Arc42 v8.2 (arc42.org)
 
@@ -20,6 +20,15 @@
 >
 > **Ziel und Stand:** Cohereny ist ein Pre-Release. Das Dokument beschreibt das Ziel 1.0; was
 > heute fehlt, trägt den Meilenstein, der es bringt (→ M5 … M8, Übersicht im Whitepaper §10).
+
+**Änderungen v2.46 → v2.47 (2026-11-03) — CHY-181, CHY-220: Drift-Erkennung (ADR-044):**
+- **ADR-044 neu:** Drift wird automatisch erkannt und von einem Menschen beurteilt. Drei Ursachen (Modell, eigener Kontext, veränderte Eingaben), vier Wege: Läufe bei Änderungen mit Probelauf vor der Freigabe, Nachtlauf nach Zeitplan, Signale aus dem Betrieb, ab M7 ein Messfühler mit Einbettungen. Wiederholungen statt Einzelmessung, Kontextstand an jeder Messung, vorgeführter Fehlerfall je Ursache als Bedingung für M8. Neu angelegt: CHY-217 bis CHY-220.
+- **ADR-043, zweiter Nachtrag:** Punkt 6 („auf Abruf“) beschrieb die Referenzinstallation, deren lokale Inferenz-Rechner nachts aus sind, nicht das Produkt; abgelöst durch ADR-044. CHY-181 (Zeitplan) von „Nach 1.0“ nach M6. Der Entscheidungstext bleibt stehen.
+- **ADR-036:** Kasten „Präzisiert durch ADR-044“ — „Einbettungen“ in der Non-Goal-Zeile meint Einbettungen für Retrieval. Die Entscheidung bleibt unverändert.
+- **Nachgezogen:** §1.4, §4.2, §4.3, §5.1, §5.5, §6.3, §6.6, §8.7, §8.9, §13.2, §13.4, die Kästen an ADR-006, ADR-019, ADR-020 und ADR-024, die Anmerkung Prompt-Injection in ADR-019, Glossar („Nightly Benchmark“, neu „Drift-Erkennung“, „Messfühler“, „Probelauf“).
+
+**Änderungen v2.45 → v2.46 (2026-11-02) — CHY-22: SBOM gebaut:**
+- **§13.3 und Regulatorik-Übersicht:** Anhang I Teil II Nr. 1 auf ✅. Jede Pipeline erzeugt eine CycloneDX-SBOM der Python-Abhängigkeiten, mit Lieferant je Komponente und gegen das Schema geprüft; `scripts/check_sbom.py` erzwingt alle Top-Level-Abhängigkeiten. Grenze: Auflösung zur Pipeline-Zeit, Lock-Datei → M8 (CHY-211). EVB-IT-Zeilen und Maßnahmenliste nachgezogen; CVE-Prüfung blockierend bleibt offen (CHY-198).
 
 **Änderungen v2.44 → v2.45 (2026-11-01) — CHY-197: Entscheidungen aus der Durchsicht:**
 - **Ziel und heutiger Stand:** Das Dokument beschreibt weiter das Ziel 1.0. Lücken werden nicht herabgestuft, sondern bekommen den Meilenstein, der sie schließt (→ M5 … M8, Übersicht im Whitepaper §10 „Weg zu 1.0“), immer mit Ticket und Beschreibung. Das Zeichen zeigt den heutigen Stand. Neu angelegt: CHY-199 bis CHY-209, CHYUI-11.
@@ -460,7 +469,7 @@ Diese Übersicht folgt der Tabelle „What is built“ in der README; die Zeilen
 | Append-only Audit-Log (schützt gegen Fehler der Anwendung; gegen die eigene Datenbankrolle → M5, CHY-85); API je Oberfläche (`serve`, `author`, `observe`, `admin`) hinter OpenID Connect | ✅ | Migration 011, ADR-009, ADR-029, ADR-031 |
 | Pilot-Endpunkte `/v1/pilots/*` mit SSE und gespeicherten Ereignissen (`events_json`); Altbestand auf LangGraph, wird auf den Workflow-Runner gezogen | ✅ | ADR-013, ADR-028, CHY-58 |
 | Langfuse-Tracing (optional) | ✅ | ADR-012 |
-| Benchmark: Kalibrieranker und Messtabellen gespeichert; Läufe und Drift → M6 | 🔧 | ADR-043, CHY-67/68/64 |
+| Drift-Erkennung: Kalibrieranker und Messtabellen gespeichert; Läufe, Zeitplan, Läufe bei Änderungen und Signale aus dem Betrieb → M6, Messfühler → M7 | 🔧 | ADR-043, ADR-044, CHY-67/68/64 |
 | Adaption von Prompt und Kontext je Modell | 📋 → M6 | CHY-204 |
 | Installation mit einem Befehl (Docker Compose) | 📋 → M8 | CHY-189 |
 
@@ -495,7 +504,7 @@ Die Bausteinsicht (§5) und die Laufzeitsicht (§6) beschreiben die **Ziel-Archi
 | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | DSGVO-Konformität                              | Personenbezogene Daten müssen löschbar / anonymisierbar sein — gilt auch für Payload-Daten (Prompts/Traces), siehe §8.3                                                                                                                         |
 | EU AI Act beachten (i. d. F. der VO (EU) 2026/1744, Digital Omnibus) | Anhang III Hochrisiko ab 02.12.2027; Anhang I ab 02.08.2028;**Art.-50-Transparenzpflichten unverändert ab 02.08.2026** (betrifft die Referenz-UI und jede andere Oberfläche, über die Dritte mit KI-Ausgaben interagieren); Art.-25-Risiko: Gesamtsystem Cohereny+LLM ist ein KI-System |
-| EU CRA: Herstellerpflichten                    | Mit der Veröffentlichung unter AGPLv3 und dem Angebot einer kommerziellen Lizenz behandelt sich Cohereny als Hersteller. Art.-14-Meldepflichten (24h/72h/14d) gelten seit 11.09.2026, die volle Anwendung ab 11.12.2027. Die Herstellerpflichten gelten ab der Veröffentlichung: `SECURITY.md` mit Meldeadresse und Richtlinie zur koordinierten Offenlegung steht; Meldeprozess (CHY-16), Unterstützungszeitraum (CHY-149), Patch-SLA (CHY-12) und SBOM (CHY-22) → M7b |
+| EU CRA: Herstellerpflichten                    | Mit der Veröffentlichung unter AGPLv3 und dem Angebot einer kommerziellen Lizenz behandelt sich Cohereny als Hersteller. Art.-14-Meldepflichten (24h/72h/14d) gelten seit 11.09.2026, die volle Anwendung ab 11.12.2027. Die Herstellerpflichten gelten ab der Veröffentlichung: `SECURITY.md` mit Meldeadresse und Richtlinie zur koordinierten Offenlegung steht; ein SBOM entsteht in jeder Pipeline (CHY-22); Meldeprozess (CHY-16), Unterstützungszeitraum (CHY-149) und Patch-SLA (CHY-12) → M7b |
 
 ---
 
@@ -632,7 +641,7 @@ der Referenzinstallation geplant, nicht in diesem Repository.
 ```mermaid
 graph TD
     PROB1[Problem:\nModell-Varianz] --> SOL1[Loesung:\nAdaptions-Engine +\nKontext-Repository]
-    PROB2[Problem:\nModel Drift] --> SOL2[Loesung:\nBenchmark auf Abruf +\nHuman Oversight]
+    PROB2[Problem:\nModel Drift] --> SOL2[Loesung:\nDrift-Erkennung +\nHuman Oversight]
     PROB3[Problem:\nPrompt Sensitivity] --> SOL3[Loesung:\nKuratiertes Repository\nFormulierungsregeln]
     PROB4[Problem:\nAgentic Context\nExplosion] --> SOL4[Loesung:\nStep-spezifische\nKomposition]
     PROB5[Problem:\nWissens-Isolation] --> SOL5[Loesung:\nScope-Hierarchie +\nGovernance]
@@ -648,12 +657,12 @@ graph TD
 
 ### 4.3 Lösungsmechanismus pro LLM-Qualitätsphänomen
 
-Die drei grundlegenden Phänomene werden durch drei getrennte Mechanismen adressiert. Gebaut ist bisher das versionierte, geprüfte Kontext-Repository; der Benchmark ist teilweise gebaut (🔧, Läufe → M6), die Adaption je Modell geplant (📋 → M6, CHY-204):
+Die drei grundlegenden Phänomene werden durch drei getrennte Mechanismen adressiert. Gebaut ist bisher das versionierte, geprüfte Kontext-Repository; die Drift-Erkennung ist teilweise gebaut (🔧, Läufe → M6, Messfühler → M7, ADR-044), die Adaption je Modell geplant (📋 → M6, CHY-204):
 
 | Phänomen                    | Mechanismus                                                                                                                                                                                                    | Beteiligte Komponenten                                                                    |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | **Modell-Varianz**     | Adaptionsschicht übersetzt Kontext modell-spezifisch — jedes Modell im Workflow erhält einen auf seine Eigenheiten kalibrierten Prompt                                                                      | Adaptions-Engine (📋 → M6, CHY-204), Kontext-Repository |
-| **Model Drift**        | Der Benchmark (auf Abruf, ADR-043) misst die Modelle gegen freigegebene Kalibrieranker; eine Regression setzt am Lauf das Merkmal `review_needed`, das nur ein Reviewer zurücknimmt — Human Oversight ist Pflicht (nicht abschaltbar, ADR-004). Läufe → M6 (🔧, CHY-68, CHY-64) | Benchmark (Kontext `learning`), Kalibrieranker (`calibration_anchor`), Human Oversight |
+| **Model Drift**        | Die Drift-Erkennung (ADR-044) misst die Modelle gegen freigegebene Kalibrieranker — nach Zeitplan, bei jeder Änderung und als Probelauf vor der Freigabe — und beobachtet den Betrieb; ab M7 meldet ein Messfühler, wenn die Anker nicht mehr zum Betrieb passen. Eine Regression setzt am Lauf das Merkmal `review_needed`, das nur ein Reviewer zurücknimmt — Human Oversight ist Pflicht (nicht abschaltbar, ADR-004). → M6/M7 (🔧, CHY-68, CHY-181, CHY-217, CHY-218, CHY-219, CHY-64) | Benchmark und Messfühler (Kontext `learning`), Kalibrieranker (`calibration_anchor`), Human Oversight |
 | **Prompt Sensitivity** | Kuratiertes Kontext-Repository speichert modell-spezifische Formulierungsregeln — instabile Wortlaute werden durch erprobte, versionierte Bausteine ersetzt                                                     | Kontext-Repository (versionierte Blöcke, Prüf-Lebenszyklus, ADR-042) |
 
 **Abgrenzung zu LiteLLM und Langfuse (ADR-012):**
@@ -686,7 +695,7 @@ graph TB
         AD[Adaptions-Engine 📋 M6\nPrompt-Transform]
         GOV[Freigabeweg ✅\nBlock-Lebenszyklus, ADR-042]
         EV[Evaluations-Engine 🔧\nAnker-Validatoren gebaut,\nim Runner M5]
-        BM[Benchmark 🔧\nauf Abruf, Laeufe M6]
+        BM[Benchmark 🔧\nZeitplan + Aenderungen, M6]
     end
 
     subgraph Storage["Storage Layer"]
@@ -817,11 +826,11 @@ den Zustand mit dem Prozess.
 
 **Verantwortung:** Führt Benchmark-Runs durch. Erkennt Qualitäts-Regressionen. Erzwingt Human Oversight wenn Regressionen gefunden.
 
-> **Seit ADR-043 (06.10.2026):** kein Cron. Der Lauf geschieht **auf Abruf** — CLI `cc benchmark run` (geplant mit CHY-68; die CLI kennt den Befehl noch nicht). Ein Zeitplan folgt, sobald die Inferenz-Hardware nachts erreichbar ist (CHY-181). Testfälle sind Kalibrieranker im Kontext-Repository. Umsetzung in drei Schritten: CHY-67, CHY-68, CHY-64.
+> **Seit ADR-044 (03.11.2026):** Der Lauf geschieht **nach Zeitplan** (einstellbar, Vorgabe nächtlich; CHY-181), **bei Änderungen** an Blöcken, Routing-Regeln, Ankern oder Modellen, als **Probelauf vor einer Freigabe** (CHY-217) und auf Abruf über die CLI `cc benchmark run` (CHY-68; die CLI kennt den Befehl noch nicht). Alles kommt mit M6. Die Referenzinstallation misst auf Abruf, solange ihre lokalen Inferenz-Rechner nachts aus sind; das ist Betrieb, keine Produkteigenschaft. Testfälle sind Kalibrieranker im Kontext-Repository (ADR-043). Umsetzung: CHY-67 ✅, CHY-68, CHY-64, dazu CHY-181 und CHY-217.
 
 **Schnittstellen:**
 
-- Eingehend: CLI `cc benchmark run` (geplant, CHY-68); ein Zeitplan ist geparkt (CHY-181)
+- Eingehend: Zeitplan (CHY-181), Änderungen aus Freigabeweg und Modellkonfiguration, Probelauf vor einer Freigabe (CHY-217), CLI `cc benchmark run` (CHY-68) — alle geplant
 - Ausgehend: ein Lauf in `benchmark_runs` mit Merkmal `review_needed`, je Anker-Version, Modell und Variante (`composed`/`raw`) eine Messung in `benchmark_measurements` (Migration 028); Report und Freigabe nach einer Regression geplant (CHY-64)
 
 **Vorgesehen (CHY-64):** Eine Regression setzt `review_needed` am Lauf, und das ist nicht abschaltbar.
@@ -1853,7 +1862,7 @@ sequenceDiagram
 
 ### 6.3 Szenario (📋 → M6): Benchmark-Lauf mit Regression und Human Oversight
 
-> **Seit ADR-043:** Den Cron-Auslöser im Diagramm gibt es vorerst nicht. Der Lauf beginnt auf Abruf (CLI), der Ablauf danach ist geplant (CHY-68, CHY-64). Zeitplan: CHY-181.
+> **Seit ADR-044 (03.11.2026):** Der Cron-Auslöser im Diagramm gilt wieder — als Zeitplan, einstellbar, Vorgabe nächtlich (CHY-181); daneben starten Änderungen und die CLI denselben Lauf (CHY-217, CHY-68). Gebaut ist davon noch nichts, ebenso der Ablauf danach (→ M6, CHY-68, CHY-64).
 
 ```mermaid
 sequenceDiagram
@@ -2038,7 +2047,7 @@ sequenceDiagram
 
 - **Hybrides Routing nach ADR-041:** Die Datenklasse gehört dem Geltungsbereich, und ein Workflow hat genau einen. Die Rohdaten verarbeitet ein Workflow in einem Geltungsbereich der Klasse `confidential` (nur lokale Modelle); die abstrahierten Kennzahlen gehen als Eingabe an einen zweiten Workflow in einem Bereich, in dem ein gehostetes Modell zugelassen ist. Die Herabstufung ist eine ausdrückliche Entscheidung des Betreibers, keine Eigenschaft eines Knotens.
 - **Audit-Trail für DORA:** Freigabeentscheidungen und Rückfälle im Routing stehen mit Zeitstempel und Actor-Ref im Audit-Log, das verwendete Modell je Knoten und Durchlauf in `node_executions`; beides wird in PostgreSQL persistiert.
-- **Benchmark auf Abruf (ADR-043):** Prüfung, ob Provider-Updates die Präzision der Risikoanalysen beeinflussen → `review_needed` bei Regression, kein automatisches Rollout (→ M6, CHY-68/CHY-64).
+- **Drift-Erkennung (ADR-044):** Der Benchmark nach Zeitplan und bei Änderungen prüft, ob Provider-Updates die Präzision der Risikoanalysen beeinflussen → `review_needed` bei Regression, kein automatisches Rollout (→ M6, CHY-68/CHY-181/CHY-64).
 
 ### 6.7 Szenario (📋 Referenz-Design): Healthcare Arztbrief-Strukturierung (Datenklasse critical, Human Oversight)
 
@@ -2365,14 +2374,14 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
 | **DSGVO** (EU 2016/679)                                                                              | ✅ Voll anwendbar — personenbezogene Daten via Actor-Pattern**und in Payloads** (§8.3)                                                           | ⚠️   | Löschung über `POST /v1/admin/actors/{actor_ref}/anonymize` gebaut (CHY-34), Payloads nicht erfasst; PII-Redaction → M5 (ADR-018, CHY-63); Aufbewahrungsfristen → M5 (CHY-17); DPIA vor einem Einsatz mit Patientendaten → M5 (CHY-18) |
 | **EU AI Act** (2024/1689, i. d. F. VO (EU) 2026/1744)                                                | ⚠️ Cohereny selbst wahrscheinlich kein KI-System (Komm.-Leitlinien C(2025) 924); Deployer-Pflichten beim Betreiber;**Art.-25-Risiko:** Gesamtsystem Cohereny+LLM ist ein KI-System | ⚠️   | Art.-50-Hinweis in der Referenz-UI (Veröffentlichung → M8, CHYUI-11); Kennzeichnung nach Art. 50(2) → M7b (CHY-118); Anhang III ab 02.12.2027, Anhang I ab 02.08.2028 |
-| **CRA** (2024/2847)                                                                                  | ✅ Anwendbar — Cohereny behandelt sich mit der Veröffentlichung als Hersteller; Art.-14-Meldepflichten seit 11.09.2026, volle Anwendung ab 11.12.2027 | ⚠️     | `SECURITY.md` ✅; CVE-Prüfung in CI (pip-audit, Container Scanning; meldend, CHY-75); SBOM (CHY-22), Unterstützungszeitraum (CHY-149), Patch-SLA (CHY-12), Meldeprozess (CHY-16) → M7b; die Pflichten gelten ab der Veröffentlichung |
+| **CRA** (2024/2847)                                                                                  | ✅ Anwendbar — Cohereny behandelt sich mit der Veröffentlichung als Hersteller; Art.-14-Meldepflichten seit 11.09.2026, volle Anwendung ab 11.12.2027 | ⚠️     | `SECURITY.md` ✅; CVE-Prüfung in CI (pip-audit, Container Scanning; meldend, CHY-75); SBOM ✅ (CHY-22); Unterstützungszeitraum (CHY-149), Patch-SLA (CHY-12), Meldeprozess (CHY-16) → M7b; die Pflichten gelten ab der Veröffentlichung |
 | **DORA** (EU 2022/2554)                                                                              | ⚠️ Kapitel II bei Finanzinstitut-Betreibern vollständig                                                                                               | ⚠️   | Incident-Handling-Konzept → M7b (CHY-16); BCP als Betreiber-Checkliste nach 1.0 (CHY-8); **Restore-Tests dokumentieren (Art. 12)** beim Betreiber                                     |
 | **MaRisk AT 4.3.4** (RS 06/2026, 9. Novelle, in Kraft seit 30.06.2026 — AT 7.2 ohne IT-Anforderungen) | ⚠️ Finanzinstitut-Betreiber mit automatisierten Modellen                                                                                               | ⚠️     | Regelmäßige Analyse der Modellergebnisse über Benchmark-Läufe → M6 (CHY-68); formales Pre-Deployment-Assessment-Dokument (Betreiber-Checkliste nach 1.0, CHY-9) |
 | **BaFin-Orientierungshilfe KI** (18.12.2025)                                                         | ⚠️ Kreditinstitute/Versicherungen (unverbindlich) — adressiert**explizit Model Drift + Lebenszyklus inkl. Stilllegung**                         | ⚠️     | Decommissioning → Model-Sunset-Workflow vorgeschlagen (ADR-020), Umsetzung → M6 (CHY-158); Prozessbeschreibung nach 1.0 (CHY-11) |
 | **BSI IT-Grundschutz** (Edition 2023; Übergang zu **Grundschutz++** seit 04/2026, OSCAL/JSON) | ⚠️ Behörden-Betreiber                                                                                                                                 | ⚠️   | Kryptokonzept CON.1 (ADR-014); Mapping künftig gegen Grundschutz++-Bibliothek automatisierbar              |
 | **BSI Kriterienkatalog KI** (24.06.2025)                                                             | ⚠️ Bundesverwaltung (empfehlend)                                                                                                                       | ⚠️     | Prompt-Injection-Schutz aus Dokumenten (ADR-039; verdrahtet nur im Banking-Piloten) → M7b (CHY-5); `/v1/complete` ohne Gate → M5 (CHY-199) |
 | **BSI C5:2026** (07.04.2026 — keine KI-Anforderungen; einschlägig ist der freiwillige Katalog AIC4) | n/a On-Premise → C5 nicht anwendbar                                                                                                                   | n/a     | Vorteil ggü. Cloud-Lösungen                                                                              |
-| **EVB-IT 2026** (Open Source als Standard, veröffentlicht 03/2026) | ⚠️ Öffentliche Beschaffung | ✅ | SBOM, das die Muster vorsehen → M7b (CHY-22) |
+| **EVB-IT 2026** (Open Source als Standard, veröffentlicht 03/2026) | ⚠️ Öffentliche Beschaffung | ✅ | SBOM, das die Muster vorsehen: CycloneDX in jeder Pipeline (CHY-22) |
 | **MDR** + **IEC 62304**                                                                        | ❌ Nur bei SaMD-Klassifizierung                                                                                                                          | ❌     | SaMD-Entscheidung erforderlich (nach 1.0, CHY-4)                                                                        |
 | **Gematik ePA**                                                                                      | ❌ Nur bei ePA-Integration                                                                                                                               | ❌     | FHIR R4, VAU, gematik IDP                                                                                   |
 | **PCI-DSS v4.0.1** (bestätigt aktuell)                                                              | ❌ Nur bei CHD-Verarbeitung                                                                                                                              | n/a    | —                                                                                                          |
@@ -2383,7 +2392,7 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 | Architekturmerkmal                   | Regulatorische Wirkung                                                    |
 | ------------------------------------ | ------------------------------------------------------------------------- |
 | Pflicht-Gate `human_review` in jedem Workflow (Validator, Runner), Vier-Augen-Gates | EU AI Act Art. 14(3)(a) — im Workflow-Weg nicht abschaltbar; `/v1/complete` liefert ohne Gate (→ M5, CHY-199) |
-| Benchmark auf Abruf + `review_needed` (Läufe → M6, CHY-68/CHY-64) | EU AI Act Art. 9(2)(c), Art. 14(4)(a), Art. 72; MaRisk AT 4.3.4 Tz. 5; DORA Art. 10 |
+| Drift-Erkennung + `review_needed` (Läufe, Zeitplan, Läufe bei Änderungen → M6, Messfühler → M7; ADR-044) | EU AI Act Art. 9(2)(c), Art. 14(4)(a), Art. 72; MaRisk AT 4.3.4 Tz. 5; DORA Art. 10 |
 | Actor-Pattern (Append-Only)          | DSGVO Art. 25 Privacy by Design; Art. 17 Löschrecht ohne Datenverlust    |
 | OIDC mandatory in prod               | DORA Art. 9; DSGVO Art. 32; BSI ORP.4                                     |
 | Self-hosted, kein Call-Home          | BSI C5 nicht erforderlich; Datensouveränität                            |
@@ -2394,7 +2403,7 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 
 | Lücke                                                                        | Betrifft                   | Status           |
 | ----------------------------------------------------------------------------- | -------------------------- | ---------------- |
-| SBOM (`cyclonedx-bom`) in CI; CVE-Prüfung blockierend machen (pip-audit und Container Scanning laufen, melden nur) | CRA, DORA, BSI | 🔵 → M7b, CHY-22; CVE-Prüfung meldend ✅ CHY-75 |
+| SBOM (`cyclonedx-bom`) in CI; CVE-Prüfung blockierend machen (pip-audit und Container Scanning laufen, melden nur) | CRA, DORA, BSI | SBOM ✅ CHY-22; CVE-Prüfung meldend ✅ CHY-75, blockierend 🔵 CHY-198 |
 | `SECURITY.md` + CVD-Prozess                                                 | CRA Herstellerpflicht      | ✅ `SECURITY.md` |
 | Löschung nach DSGVO Art. 17: `POST /v1/admin/actors/{actor_ref}/anonymize` | DSGVO | ✅ CHY-34; Payloads offen (ADR-018, CHY-63) |
 | DPIA vor einem Einsatz mit Patientendaten (Arztbrief-Szenario)               | DSGVO Art. 35              | 🔘 → M5, CHY-18      |
@@ -2449,7 +2458,7 @@ Kameradaten, Sprachaufnahmen und biometrische Merkmale unterliegen erhöhtem Sch
 
 ### 8.9 AdaptVault: Versioniertes Adaption-Repository + DPO-Flywheel (📋 geplant; Erkennung teilweise gebaut)
 
-> **Seit ADR-043 (06.10.2026):** Testfälle sind Kalibrieranker im Kontext-Repository statt einer Tabelle `prompt_benchmarks`, der Lauf geschieht auf Abruf statt nächtlich. Gebaut sind Anker, Validatoren und Messtabellen (CHY-67); Läufe (CHY-68), Varianten-Generierung (CHY-69), DPO (CHY-70) und der Export-Endpunkt sind nicht gebaut.
+> **Seit ADR-043 (06.10.2026):** Testfälle sind Kalibrieranker im Kontext-Repository statt einer Tabelle `prompt_benchmarks`. Gemessen wird nach Zeitplan, bei Änderungen und auf Abruf (ADR-044). Gebaut sind Anker, Validatoren und Messtabellen (CHY-67); Läufe (CHY-68), Zeitplan (CHY-181), Läufe bei Änderungen (CHY-217), Varianten-Generierung (CHY-69), DPO (CHY-70) und der Export-Endpunkt sind nicht gebaut.
 
 **Kontext:** Die Adaptionsschicht kann nur so gut sein wie die Übersetzungsregeln im Kontext-Repository. Manuelle Pflege skaliert nicht bei wachsender Modell- und Domänenanzahl.
 
@@ -2461,7 +2470,7 @@ Kameradaten, Sprachaufnahmen und biometrische Merkmale unterliegen erhöhtem Sch
 
 | Schicht | Mechanismus | Status |
 |---|---|---|
-| **Erkennung** | Benchmark auf Abruf über alle aktiven Kalibrieranker × Modelle (ADR-043) | Anker und Messtabellen ✅ CHY-67; Läufe CHY-68 |
+| **Erkennung** | Benchmark nach Zeitplan und bei Änderungen über alle aktiven Kalibrieranker × Modelle (ADR-043, ADR-044) | Anker und Messtabellen ✅ CHY-67; Läufe CHY-68; Zeitplan CHY-181; Änderungen CHY-217 |
 | **Adaption** | Varianten-Generierung (CoT, Format, Kontext, Meta-Prompt) + HITL-Queue bei Konfidenz < Schwellwert | CHY-69, M6 |
 | **Lernen** | DPO-Training aus ranked pairs → intern: `cohereny-phi3-dpo:v1` (Ollama, via LiteLLM) / extern: `GET /v1/adaptvault/export/dpo` JSONL | 📋 → M6, CHY-70 |
 
@@ -2469,7 +2478,7 @@ Kameradaten, Sprachaufnahmen und biometrische Merkmale unterliegen erhöhtem Sch
 
 ```mermaid
 flowchart TD
-    RUN[Lauf auf Abruf\ncc benchmark run] --> ITER[Iteriere alle\naktiven Kalibrieranker]
+    RUN[Lauf nach Zeitplan,\nbei Aenderung oder Abruf] --> ITER[Iteriere alle\naktiven Kalibrieranker]
     ITER --> EVAL[Sende an alle\nLiteLLM-Modelle]
     EVAL --> SCORE[Evaluiere Output\nschema / contains / llm_judge]
     SCORE --> |Score ok| DB[benchmark_results\nschreiben]
@@ -2624,7 +2633,7 @@ nicht erreichbarer Kollektor bricht keine Anfrage ab (CHY-29).
 
 **Status:** Entschieden (2026-06-30)
 
-> **Präzisiert durch ADR-043 (06.10.2026):** Der Benchmark läuft auf Abruf, nicht nächtlich, und bewertet nur mit Stufe 1 und 2; der LLM-Judge (Stufe 3) gehört nicht dazu. **Umsetzungsstand (31.10.2026):** Stufe 1 und 2 sind als Validatoren eines Kalibrierankers gebaut (`contexts/learning/validators.py`, CHY-67): JSON Schema, Regex, Länge, Pflicht- und Verbotsbegriffe, ROUGE-L. TF-IDF, Jaccard und die Abweichung zur Baseline sind nicht gebaut, ebenso Stufe 3. Läufe gegen die Modelle kommen mit CHY-68. ADR-021 ist nicht geschrieben; das Korrektur-Protokoll nach Stufe 3b kommt mit CHY-40 (→ M6).
+> **Präzisiert durch ADR-043 (06.10.2026):** Der Benchmark bewertet nur mit Stufe 1 und 2; der LLM-Judge (Stufe 3) gehört nicht dazu. Er läuft nach Zeitplan, bei Änderungen und auf Abruf (ADR-044, 03.11.2026). **Umsetzungsstand (31.10.2026):** Stufe 1 und 2 sind als Validatoren eines Kalibrierankers gebaut (`contexts/learning/validators.py`, CHY-67): JSON Schema, Regex, Länge, Pflicht- und Verbotsbegriffe, ROUGE-L. TF-IDF, Jaccard und die Abweichung zur Baseline sind nicht gebaut, ebenso Stufe 3. Läufe gegen die Modelle kommen mit CHY-68. ADR-021 ist nicht geschrieben; das Korrektur-Protokoll nach Stufe 3b kommt mit CHY-40 (→ M6). **Abgrenzung (03.11.2026):** Einbettungen gehören nicht in die Pyramide. Ein Embedding-Modell im Score wäre ein Lineal, das selbst driftet; als Messfühler außerhalb des Scores sind sie vorgesehen (ADR-044, → M7).
 
 **Kontext:** Lokale Modelle als Judge für andere lokale Modelle sind ungeeignet — sie bevorzugen strukturierte Formatierung gegenüber semantischer Korrektheit (Bias für gut formatierte aber inhaltlich falsche Artefakte). Cloud-Modelle als Judge verursachen bei großen Dokumenten prohibitive nächtliche API-Kosten. Rein heuristische Qualitätsmessung ist nicht verlässlich.
 
@@ -3083,7 +3092,7 @@ Stufen: (1) regelbasiert/deterministisch (Namenslisten aus Dokument-Metadaten, D
 
 **Status:** Entschieden (2026-10-06, Thomas; ADR-043) — vorgeschlagen in v2.0; Umsetzung CHY-64 (offen)
 
-> **Umsetzungsstand (31.10.2026):** Das Schema steht (Migration 028: `benchmark_runs.mode` mit `drift` | `ab_adaptation`, Variante `composed` | `raw` je Messung). Läufe (CHY-68), A/B-Auswertung und Report (CHY-64) sind nicht gebaut. Einen `NightlyBenchmarkReport` gibt es nicht; seit ADR-043 läuft der Benchmark auf Abruf.
+> **Umsetzungsstand (31.10.2026):** Das Schema steht (Migration 028: `benchmark_runs.mode` mit `drift` | `ab_adaptation`, Variante `composed` | `raw` je Messung). Läufe (CHY-68), A/B-Auswertung und Report (CHY-64) sind nicht gebaut. Einen `NightlyBenchmarkReport` gibt es nicht; der Benchmark läuft nach Zeitplan, bei Änderungen und auf Abruf (ADR-044), der Report kommt mit CHY-64.
 
 **Kontext:** Qualitätsziel Nr. 1 und Szenario Q1 fordern „Adaption verbessert Output messbar > 10 % gegenüber unadaptiertem Prompt" — das Benchmark-Modell (Domäne 5) misst aber nur Modell × Anchor. Ohne A/B-Messung bleibt die Kernthese des Projekts unbelegt.
 
@@ -3095,7 +3104,7 @@ Stufen: (1) regelbasiert/deterministisch (Namenslisten aus Dokument-Metadaten, D
 - (+) Nutzt vorhandene Validatoren; Mehrkosten nur doppelte LLM-Calls auf der Teilmenge
 - (-) Roher Prompt muss pro Anchor definiert/eingefroren sein (Baseline-Disziplin)
 
-**Anmerkung Prompt-Injection (CHY-5):** Dieselbe Maschinerie trägt Injection-Regressionstests — präparierte Dokumente mit eingebetteten Anweisungen als eigene CalibrationAnchors; erwartetes Verhalten: Ignorieren. Damit testet der Benchmark die Injection-Resilienz bei jedem Lauf mit (seit ADR-043 auf Abruf; Läufe kommen mit CHY-68).
+**Anmerkung Prompt-Injection (CHY-5):** Dieselbe Maschinerie trägt Injection-Regressionstests — präparierte Dokumente mit eingebetteten Anweisungen als eigene CalibrationAnchors; erwartetes Verhalten: Ignorieren. Damit testet der Benchmark die Injection-Resilienz bei jedem Lauf mit (nach Zeitplan, bei Änderungen und auf Abruf, ADR-044; Läufe kommen mit CHY-68).
 
 ---
 
@@ -3103,7 +3112,7 @@ Stufen: (1) regelbasiert/deterministisch (Namenslisten aus Dokument-Metadaten, D
 
 **Status:** Vorgeschlagen (v2.0)
 
-> **Umsetzungsstand (31.10.2026):** nicht gebaut, Umsetzung CHY-158. `model_profile`, `translation_rules` und `optimal_prompts` gibt es nicht: Modelle stehen in `router/routing-config.yaml`, Kandidatenketten in `routing_rule`-Blöcken (ADR-038), Testfälle sind Anker-Blöcke (ADR-043). Die GIN-Index-Zeile entfällt (ADR-043), und der Benchmark läuft auf Abruf, nicht nächtlich.
+> **Umsetzungsstand (31.10.2026):** nicht gebaut, Umsetzung CHY-158. `model_profile`, `translation_rules` und `optimal_prompts` gibt es nicht: Modelle stehen in `router/routing-config.yaml`, Kandidatenketten in `routing_rule`-Blöcken (ADR-038), Testfälle sind Anker-Blöcke (ADR-043). Die GIN-Index-Zeile entfällt (ADR-043). Der Benchmark läuft nach Zeitplan, bei Änderungen und auf Abruf (ADR-044); dass er stillgelegte Modelle überspringt, gilt weiter.
 
 **Kontext:** Die BaFin-Orientierungshilfe KI (18.12.2025) fordert den vollständigen Lebenszyklus **inkl. Stilllegung** — die selbst notierte Lücke „Phase 6 Decommissioning fehlt". Konkret: Wird ein Modell aus der LiteLLM-Config entfernt, referenzieren `translation_rules` (source/target), `calibration_anchors` (optimal_prompts je model_id), `routing_rules` und `model_profiles` ins Leere — ohne definiertes Verhalten.
 
@@ -3149,7 +3158,7 @@ Beides schließt sich nicht aus: Cohereny nutzt für den Modellzugang selbst ein
 
 **Status:** Entschieden (2026-08-01)
 
-> **Teilweise überholt durch ADR-043 (06.10.2026):** Punkt 1 und der nächtliche Lauf aus Punkt 2 gelten nicht mehr — Testfälle sind Kalibrieranker im Kontext-Repository, Messungen stehen in `benchmark_runs`/`benchmark_measurements`, gemessen wird auf Abruf. **Umsetzungsstand (31.10.2026):** Adaption-Discovery, `PromptAdaptation`, die DPO-Pipeline (CHY-70) und `GET /v1/adaptvault/export/dpo` sind nicht gebaut. `TranslationRule`-Einträge, auf die sich der Kontext stützt, gab es nie als Blocktyp.
+> **Teilweise überholt durch ADR-043 (06.10.2026):** Punkt 1 gilt nicht mehr — Testfälle sind Kalibrieranker im Kontext-Repository, Messungen stehen in `benchmark_runs`/`benchmark_measurements`. Der nächtliche Lauf aus Punkt 2 gilt wieder (ADR-044, 03.11.2026), dazu Läufe bei Änderungen und auf Abruf. **Umsetzungsstand (31.10.2026):** Adaption-Discovery, `PromptAdaptation`, die DPO-Pipeline (CHY-70) und `GET /v1/adaptvault/export/dpo` sind nicht gebaut. `TranslationRule`-Einträge, auf die sich der Kontext stützt, gab es nie als Blocktyp.
 
 **Kontext:** Die Adaptionsschicht von Cohereny wird aktuell durch manuell gepflegte `TranslationRule`-Einträge im Kontext-Repository betrieben. Das ist für den PoC ausreichend, skaliert aber nicht: Bei wachsender Modell- und Domänenanzahl (jedes neue Modell × jede neue Domäne = eigene Regeln) übersteigt der Pflegeaufwand die verfügbare Zeit. Gleichzeitig entstehen durch den Multi-Modell-Betrieb natürliche ranked pairs (Modell A liefert bessere Outputs als Modell B auf demselben Prompt), die für DPO-Training genutzt werden könnten.
 
@@ -3983,6 +3992,8 @@ Geschrieben wird sie im Transport, nicht in `core.completion`: dort gibt es eine
 
 > **Umsetzungsstand (31.10.2026):** nicht gebaut. Den Knotentyp gibt es nicht (CHY-140, offen), und `as_prompt()` reiht weiterhin nur aneinander. Auch `tool_call`, auf dessen Reihenfolge Punkt 1 verweist, hat noch keinen Executor (CHY-136).
 
+> **Präzisiert durch ADR-044 (03.11.2026):** „Einbettungen“ in der Zeile „Bleibt Non-Goal“ meint Einbettungen für Retrieval — als Index, für Ähnlichkeitssuche, als gespeicherter Bestand. Als Messfühler für Drift sind sie zulässig: ohne Index, ohne Suche, ohne Vektoren je Anfrage; gespeichert werden Kennzahlen je Zeitfenster. Die Entscheidung selbst bleibt, wie sie getroffen wurde.
+
 **Kontext:** Das Whitepaper führte unter den Non-Goals „**Vector-Datenbank / RAG-System** — kein Retrieval-Augmented Generation Stack; das Kontext-Repository speichert Adaptionsregeln, keine Dokument-Chunks".
 
 Das ist eine Aussage über die **Speicherung**. Gelesen wurde sie als Aussage über das **Verfahren** — und traf damit auch die Frage mit, *welche Abschnitte in einen Prompt geraten sind*. Genau diese zweite Frage ist die regulatorisch harte, und sie hat mit einem Vektorspeicher nichts zu tun.
@@ -4253,7 +4264,7 @@ Offen: Im direkten Scope schaltet ein Contributor einen Block live, zurückziehe
 
 **Status:** Entschieden (2026-10-06, Thomas; CHY-67, CHY-68, CHY-64) · **Präzisiert:** ADR-006 · **Entscheidet:** ADR-019
 
-> **Umsetzungsstand (31.10.2026):** Schritt 1 ist gebaut (CHY-67: Anker als Blöcke, Messtabellen, Validatoren — Migration 028, `contexts/learning/`). Schritt 2 und 3 sind offen: Einen Lauf starten (`POST /v1/benchmarks/run`, CLI `cc benchmark run`) gibt es noch nicht (CHY-68), Report und Freigabe antworten 501 (CHY-64).
+> **Umsetzungsstand (31.10.2026):** Schritt 1 ist gebaut (CHY-67: Anker als Blöcke, Messtabellen, Validatoren — Migration 028, `contexts/learning/`). Schritt 2 und 3 sind offen: Einen Lauf starten (`POST /v1/benchmarks/run`, CLI `cc benchmark run`) gibt es noch nicht (CHY-68), Report und Freigabe antworten 501 (CHY-64). **Zweiter Nachtrag (03.11.2026):** Punkt 6 beschrieb die Referenzinstallation, nicht das Produkt. Zeitplan, Läufe bei Änderungen und Probelauf regelt ADR-044 (→ M6).
 
 **Kontext:** Drei Tickets aus dem Juli beschrieben Teile derselben Maschine: CHY-67 ein Datenmodell mit eigener Tabelle `prompt_benchmarks` für Testfälle, CHY-68 einen nächtlichen Lauf gegen alle Modelle mit Vergleich zum Vortag, CHY-64 Drift, A/B-Messung und Report. ADR-006 hatte schon entschieden, dass Testfälle **CalibrationAnchors** sind, „manuell gepflegt, versioniert im Kontext-Repository"; der Block-Typ `calibration_anchor` existiert seit Migration 001. Eine eigene Tabelle daneben wäre die Doppelung, die ADR-042 bei den Merge Requests aufgelöst hat.
 
@@ -4288,7 +4299,107 @@ Beim Lesen fiel auf: `calibration_anchor` stand in `COMPOSABLE_BLOCK_TYPES`. Ein
 - **Die gesperrte Zeile einer Freigabe trägt `content`** (`lock_current_block`). Auf dem direkten Weg (ADR-042) bekommt die Prüfung vor der Aktivierung die Zeile aus `RETURNING *`, auf dem strengen fehlte die Spalte — die Freigabe eines Ankers wäre dort mit 500 geendet, und nur ein Test gegen echtes PostgreSQL sieht das
 - Validatoren mit unbekanntem Schlüssel werden abgelehnt, nicht übergangen. Regex laufen ohne Zeitgrenze; dass ein Muster einen Lauf nicht aufhalten darf, gehört zu CHY-68
 
-**Betrifft:** CHY-67, CHY-68, CHY-64, CHY-181, CHY-183, CHY-154 (Prüfsumme, nicht hier), ADR-004, ADR-006, ADR-019, ADR-030, ADR-037, ADR-041, ADR-042
+**Zweiter Nachtrag (2026-11-03, Thomas; CHY-181): Punkt 6 und „Verworfen: nächtlicher Zeitplan jetzt“ sind durch ADR-044 abgelöst.**
+
+Beide begründen sich mit Rechnern, die nachts nicht laufen. Das ist eine Eigenschaft der Referenzinstallation, nicht von Cohereny. Der Benchmark läuft nach Zeitplan (einstellbar, Vorgabe nächtlich), bei Änderungen, als Probelauf vor einer Freigabe und auf Abruf; alle Auslöser starten denselben Lauf über dieselben Anker. Punkt 5 trägt den Zeitplan: Ein Modell, das zum geplanten Zeitpunkt nicht erreichbar ist, wird als `unreachable` gespeichert, nie als Wert, der wie eine Verschlechterung aussähe. Die Referenzinstallation misst weiter auf Abruf, solange ihre lokalen Inferenz-Rechner nachts aus sind — dieselbe Trennung von Produkt und Betrieb, die Whitepaper v4.22 für Monitoring und Backup gezogen hat. Alles Weitere, auch was über die Anker hinausgeht, regelt ADR-044.
+
+**Betrifft:** CHY-67, CHY-68, CHY-64, CHY-181, CHY-183, CHY-154 (Prüfsumme, nicht hier), ADR-004, ADR-006, ADR-019, ADR-030, ADR-037, ADR-041, ADR-042, ADR-044
+
+---
+
+### ADR-044: Drift-Erkennung — drei Ursachen, vier Wege, das Urteil fällt ein Mensch (neu in v2.47)
+
+**Status:** Entschieden (2026-11-03, Thomas; CHY-220) · **Ergänzt:** ADR-043 · **Präzisiert:** ADR-036 · **Grenzt ab gegen:** ADR-006
+
+> **Umsetzungsstand (03.11.2026):** nicht gebaut. Gebaut sind Anker, Validatoren und Messtabellen (ADR-043, CHY-67). Läufe mit Wiederholungen und Kontextstand (CHY-68), Zeitplan (CHY-181), Läufe bei Änderungen und Probelauf (CHY-217), Signale aus dem Betrieb (CHY-218) sowie Report, Freigabe und Frische-Alarm (CHY-64) → M6; Messfühler (CHY-219) → M7; vorgeführter Fehlerfall je Ursache (CHY-220) → Bedingung für M8. `nomic-embed-text` steht in `router/routing-config.yaml`, wird aber von nichts benutzt (CHY-141).
+
+**Kontext:** Model Drift ist eines der drei Qualitätsphänomene, gegen die Cohereny antritt (Whitepaper §1.1), und Drift-Monitoring ist die Erwartung, die Aufsicht und Leitlinien quer durch die Branchen formulieren (Whitepaper §5.5); für Kreditinstitute verlangt MaRisk AT 4.3.4 Tz. 5, die Qualität der Modellergebnisse regelmäßig zu analysieren. Daran muss sich die Architektur messen lassen: Woran merkt Cohereny, dass ein Ablauf über Wochen schlechter wird, obwohl Tests und Protokoll unauffällig bleiben? ADR-043 beantwortet das nur zum Teil:
+
+- **Punkt 6 lässt den Benchmark nur auf Abruf laufen**, begründet mit Rechnern, die nachts aus sind. Das ist eine Eigenschaft der Referenzinstallation, nicht des Produkts. Ein Ablauf, der fehlerfrei läuft und vollständig protokolliert ist, gibt niemandem Anlass, einen Lauf zu starten — auch dann nicht, wenn er leise schlechter wird
+- **Ein Lauf weiß nicht, was sich geändert hat.** Er sieht, dass ein Wert gefallen ist, aber nicht, ob ein Anbieter-Update, eine eigene Blockänderung oder eine neue Routing-Regel die Ursache war. Eine Messung nennt bisher nicht einmal den Kontextstand, den sie gemessen hat
+- **Eine Messung ist verrauscht.** Dasselbe Modell antwortet auf denselben Prompt nicht immer gleich. Eine Baseline aus einer einzigen Messung mit fester Schwelle meldet Zufall als Drift; jeder Fehlalarm kostet eine menschliche Prüfung, und nach wenigen falschen prüft niemand mehr genau
+- **Anker messen feste Eingaben.** Ändert sich, was im Betrieb hereinkommt — andere Dokumenttypen, längere Vorlagen, eine neue Fachsprache —, bleiben die Anker grün, während die echten Ergebnisse schlechter werden. Der Testsatz veraltet, und nichts meldet das
+- **Anker messen Aufgaben, nicht den Workflow.** Eine Verschiebung, die erst aus dem Zusammenspiel der Schritte entsteht, sieht kein einzelner Anker
+
+Im August entstand die Idee eines Embedding-basierten Drift-Detektors, der bei jeder Anfrage mitläuft. Sie ist in kein Dokument gelangt und stößt auf zwei Festlegungen:
+
+1. **`contexts/learning/validators.py` ist modellfrei, und das ist der Kern seiner Aussage:** „No model, no database, no clock — the same output scores the same tomorrow, which is the only way a drop in the score can mean the model changed rather than the ruler.“ Ein Embedding-Modell im Score macht das Lineal selbst zu einem Modell, das driften kann
+2. **Die Non-Goal-Zeile aus ADR-036 nennt „Einbettungen“.** Geschrieben wurde sie über Retrieval und Speicherung, gelesen wird sie als Verbot jeder Einbettung — dieselbe Verwechslung von Speicherung und Verfahren, die ADR-036 bei RAG aufgelöst hat
+
+**Entscheidung: Drift wird automatisch erkannt und von einem Menschen beurteilt. Cohereny erkennt drei Ursachen auf vier Wegen; jede Meldung endet bei einem Reviewer.**
+
+| Ursache | Was sich ändert | Erkannt durch |
+|---|---|---|
+| **Modell** | Ein Modell antwortet anders: Anbieter-Update, neue Version, Austausch unter gleichem Namen | Lauf bei geänderter Modellkennung (Weg 1), Nachtlauf (Weg 2) |
+| **Kontext** | Eigene Änderungen an Blöcken, Routing-Regeln oder Ankern verschlechtern das Ergebnis | Probelauf vor der Freigabe, Lauf nach der Aktivierung (Weg 1) |
+| **Eingaben** | Was im Betrieb hereinkommt, entfernt sich von den Ankern; der Testsatz veraltet | Signale aus dem Betrieb (Weg 3), Messfühler (Weg 4) |
+
+1. **Alle drei Ursachen sind Ziel 1.0.**
+2. **Weg 1 — Läufe bei Änderungen.** Gemessen wird, sobald sich nachweislich etwas geändert hat, und nur, was die Änderung betrifft:
+   - eine Blockversion wird aktiv → alle Anker, deren Geltungsbereichskette den Bereich enthält (darunterliegende Bereiche erben)
+   - eine Routing-Regel wird aktiv (ADR-038) → die Anker der betroffenen `task_type`
+   - ein Anker ist neu oder geändert → dieser Anker, als erste Messung seiner Version
+   - ein Modell in `router/routing-config.yaml` ist neu oder anders angebunden, oder eine neue Cohereny-Version ändert Komposition oder Validatoren → beim Start erkannt, alle betroffenen Anker
+   - die Modellkennung ändert sich: Jede Antwort nennt das Modell, das geantwortet hat, und Cohereny liest diese Angabe schon (`core/completion.py`); bei lokalen Modellen kommt der Digest dazu (CHY-154). Meldet ein Modell einen anderen Stand als bei der letzten Messung, laufen alle Anker gegen dieses Modell
+
+   Ein solcher Lauf nennt seine Ursache: „schlechter seit Freigabe von Block X“ statt „schlechter seit gestern“. Änderungen kurz hintereinander werden zu einem Lauf zusammengefasst; für gehostete Modelle gilt ein Tagesbudget
+3. **Probelauf vor der Freigabe.** Wird eine Blockversion in einem strengen Geltungsbereich zur Freigabe eingereicht, laufen die betroffenen Anker mit dieser Version, bevor sie aktiv wird. Der Reviewer sieht das Ergebnis neben der Änderung; freigeben kann er erst, wenn es vorliegt — „nicht erreichbar“ ist ein Ergebnis und steht so im Audit. Geprüft wird das im Haken `before_activation`, durch den jede Aktivierung geht: eine Abfrage, kein Modellaufruf in der Transaktion. Der Probelauf sperrt nicht von selbst: Eine Verschlechterung kann gewollt sein, etwa wenn eine strengere Vorgabe von einer alten Referenz abweicht. Gibt der Reviewer trotzdem frei, steht seine Entscheidung mit der Messung im Audit, und der Lauf nach der Aktivierung verweist darauf, statt dieselbe Verschlechterung ein zweites Mal als neu zu melden. In direkten Geltungsbereichen bleibt es bei der sofortigen Aktivierung (ADR-042, Punkt 2); dort läuft die Messung unmittelbar danach, und spätestens beim Promote in einen strengen Bereich greift der Probelauf
+4. **Weg 2 — Nachtlauf nach Zeitplan.** Für das, was kein Ereignis meldet: Ein Anbieter tauscht Gewichte unter gleichem Namen und gleicher Kennung, ändert Quantisierung, Inferenz-Software oder Hardware. Der Zeitplan ist Produktfunktion, einstellbar, Vorgabe nächtlich (CHY-181). Ausgeliefert wird er als Konfiguration für den Betrieb (Timer, Dienst im Compose-Stack, CronJob), nicht als Scheduler im API-Prozess; der Lauf selbst ist derselbe wie auf Abruf (`cc benchmark run`). Ein Modell, das zum geplanten Zeitpunkt nicht erreichbar ist, wird `unreachable` (ADR-043, Punkt 5), nie ein Wert, der wie eine Verschlechterung aussähe. Die Referenzinstallation misst weiter auf Abruf, solange ihre lokalen Inferenz-Rechner nachts aus sind — das gehört zu ihrem Betrieb, nicht zu den Eigenschaften des Produkts
+5. **Jeder Lauf nennt seinen Auslöser:** Zeitplan, Änderung (mit Verweis auf sie), Probelauf oder Person. `triggered_by` bleibt die Person, wo es eine gibt; die Art des Auslösers bekommt eine eigene Spalte (neue Migration; 028 bleibt unverändert)
+6. **Messrauschen wird beherrscht, nicht übergangen.** Jeder Anker wird je Lauf mehrfach gemessen (Anzahl einstellbar); Temperatur und weitere Sampling-Parameter werden festgelegt, wo das Modell es zulässt, und stehen an der Messung. Die Baseline ist eine Spanne aus mehreren Messungen, kein Einzelwert. Als Verschlechterung gilt ein Ergebnis außerhalb der Spanne, das eine Wiederholung bestätigt. Dafür braucht `benchmark_measurements` eine neue Migration: Heute erlaubt die Tabelle je Lauf, Anker-Version, Modell und Variante genau eine Zeile
+7. **Jede Messung nennt ihren Kontextstand.** In der Variante `composed` schreibt jede Messung die `block_versions` des komponierten Kontexts (wie `ComposedContext`) in eine eigene Spalte; bei `raw` bleibt sie leer. Damit trennt ein Report die Ursachen: das Modell (`raw` bewegt sich mit), den Kontext (`composed` bewegt sich, `raw` nicht) und die einzelnen Blöcke, die sich zwischen Baseline und Messung geändert haben (CHY-64)
+8. **Weg 3 — Signale aus dem Betrieb, ohne Modell.** Am Gate sieht ein Mensch echte Ausgaben, und jede Entscheidung ist gespeichert (`review_votes`, `approved` oder `rejected`, Migration 027). Steigt die Ablehnungsquote eines Workflow-Schritts in einem Zeitfenster gegenüber einem Referenzfenster, ist das ein Signal aus dem echten Betrieb statt aus dem Testsatz. Dazu laufen die deterministischen Validatoren an echten Ausgaben, wo ein Ausgabeschema existiert (CHY-175), und Verweigerungs-, Fehler- und Längenraten je Schritt werden beobachtet. Quelle sind Workflow-Läufe (`node_executions`); einzelne Aufrufe von `/v1/complete` stehen nur im Trace. Ein Signal erzeugt einen Audit-Eintrag (`drift.signal`) und einen Hinweis an die Reviewer. Kein Modell ist beteiligt — das Lineal driftet nicht
+9. **Weg 4 — Messfühler mit Einbettungen (M7).** Seine Hauptaufgabe ist, den Testsatz zu überwachen, nicht das Modell:
+   - **Kein Score.** Ein Embedding-Abstand geht nie in `benchmark_measurements.score` und nie in den Mittelwert der Validatoren; `validators.py` bleibt modellfrei
+   - **Eingabeverschiebung gegen die Anker:** Je `task_type` werden Eingaben echter Workflow-Läufe eingebettet und mit den Eingaben der aktiven Anker desselben `task_type` verglichen. Entfernt sich der Betrieb von den Ankern, entstehen ein Audit-Eintrag (`drift.input_shift`) und ein Hinweis an die Reviewer: Anker prüfen, ergänzen oder ersetzen
+   - **Ausgabeverschiebung je Schritt:** Je `node_ref` werden Ausgaben gegen ein Referenzfenster verglichen (`drift.output_shift`). Das kann einen zusätzlichen Ankerlauf auslösen, ersetzt aber keinen geplanten
+   - **Gepinnt:** Modellkennung und Version stehen an jedem Signal. Wechselt das Embedding-Modell, beginnt ein neues Referenzfenster; über einen Wechsel hinweg wird nicht verglichen. Sonst misst der Fühler nach einem Update seine eigene Drift
+   - **Kein Vektorspeicher:** Gespeichert werden je Zeitfenster, `task_type` und `node_ref` Kennzahlen — Schwerpunkt, Streuung, Abstand zur Referenz und zu den Ankern —, keine Vektoren je Anfrage. Die Einbettungen der Anker-Eingaben werden je Anker-Version und Modellversion berechnet, nicht als Bestand gehalten. So entsteht kein Bestand an Ableitungen von Payload-Daten (Whitepaper §4.2), aus dem sich Inhalte annähernd zurückgewinnen ließen
+   - **Außerhalb des Antwortpfads:** Die Einbettung läuft nachgelagert und darf keine Antwort verzögern oder verhindern. Die Stichprobe je `task_type` ist einstellbar; „jede Anfrage“ ist die Obergrenze, nicht die Pflicht
+   - **Dieselben Regeln wie jedes Modell:** Aufruf über LiteLLM, Datenklasse des Geltungsbereichs (ADR-041). Mitgeliefert ist ein lokales Modell mit Obergrenze `critical`
+10. **Jede Meldung endet bei einem Menschen.** Eine Regression im Lauf setzt `review_needed` am Lauf; ein Signal aus Weg 3 oder 4 erzeugt einen Hinweis an die Reviewer. Nichts wird automatisch zurückgerollt, umgeschaltet oder freigegeben (ADR-004). Ein Reviewer bestätigt oder verwirft, und seine Entscheidung steht im Audit (CHY-64)
+11. **Die Erkennung wird selbst überwacht.** Bleiben Läufe eines Modells oder Signale einer Quelle länger aus als erwartet, schlägt der Frische-Alarm an (CHY-64). Ein grüner Status ist kein Nachweis, eine Messung schon
+12. **Wasserdicht heißt vorgeführt.** Für jede Ursache gibt es einen vorgeführten Fehlerfall, den Cohereny meldet, und eine Gegenprobe, bei der es schweigt:
+    - Modell: ein schlechteres Modell unter demselben Namen → der Nachtlauf meldet; eine geänderte Kennung → der sofortige Lauf meldet
+    - Kontext: eine verschlechterte Blockversion → der Probelauf zeigt es vor der Freigabe; nach der Aktivierung `review_needed` mit Ursache
+    - Eingaben: verschobene Eingaben bei grünen Ankern → Messfühler und Ablehnungsquote melden
+    - Gegenprobe: Ein unverändertes System bleibt über mehrere Läufe still; die Fehlalarmrate ist gemessen und steht im Report
+
+    Das ist Bedingung für M8 (CHY-220)
+13. **Eigentum:** Läufe, Signale und Messfühler gehören dem Kontext `learning`, wie die Validatoren (ADR-030); Messungen und Kennzahlen sind Beobachtungen, nur anfügbar, nicht freigegeben (ADR-043, Punkt 3). Änderungen aus dem Freigabeweg erreichen `learning` über den Kernel (Audit-Einträge) und über den Haken `before_activation`, der in Zone 1 verdrahtet wird wie heute die Prüfung eines Ankers vor der Aktivierung; kein Kontext importiert einen anderen
+14. **Die Non-Goal-Zeile aus ADR-036 wird präzisiert, nicht geändert.** Ausgeschlossen bleiben Einbettungen für Retrieval — als Index, für Ähnlichkeitssuche, als gespeicherter Bestand. Der Kasten an ADR-036 und die Zeile „Vektorspeicher und Retrieval-Maschinerie“ im Whitepaper sagen das ausdrücklich
+
+**Verworfen: nur auf Abruf** (ADR-043, Punkt 6, als Produkteigenschaft) — verfehlt genau den Ablauf, der leise schlechter wird.
+
+**Verworfen: nur ein Nachtlauf.** Er findet Modell-Drift, aber nicht ihre Ursache, und eine schlechte Blockversion erst, nachdem sie aktiv war.
+
+**Verworfen: der Probelauf als automatische Sperre.** Eine Verschlechterung gegen eine alte Referenz kann gewollt sein; entscheiden muss der Mensch, der freigibt (ADR-004).
+
+**Verworfen: der Messfühler als Ersatz für den Zeitplan.** „Verschoben“ ist ein schwächeres Signal als „gemessen“; der Fühler ergänzt die Läufe, er ersetzt keinen.
+
+**Verworfen: Embedding-Ähnlichkeit als Validator im Ankerscore** (ADR-006, Stufe 2). Sie würde die Schwäche von ROUGE-L ausgleichen, das nur Wortlaut vergleicht: Eine richtige Umformulierung schneidet schlecht ab, eine falsche Antwort mit ähnlichen Wörtern gut. Der Preis wäre ein Lineal, das selbst driftet. Verworfen für jetzt, nicht grundsätzlich: Wird es gebraucht, dann als eigene Messung mit Version des Embedding-Modells, getrennt vom Mittelwert — nie darin.
+
+**Verworfen: LLM-Judge im Betrieb.** Kosten je Anfrage, und der Richter driftet wie das Gerichtete. ADR-006 hat ihn ans Ende der Pyramide gestellt; im laufenden Verkehr gehört er erst recht nicht hin.
+
+**Verworfen: Vektoren je Anfrage speichern** (pgvector). Würde Abfragen im Nachhinein erlauben, ist aber genau der Vektorspeicher, den die Non-Goal-Zeile ausschließt, und ein neuer Bestand an Payload-Ableitungen ohne Löschkonzept (CHY-17, CHY-63).
+
+**Nicht Teil dieser Entscheidung:** der LoRA-Adapter für Korrekturvorschläge aus derselben Idee vom August. Er gehört zur Adaptionsschicht und zum internen Validierungsmodell (→ M6, CHY-70, CHY-204) und braucht eine eigene Abwägung. Für ihn gilt dieselbe Regel wie für jedes Prüfmodell: Er lernt in Stufen, jeder Stand ist versioniert, freigegeben und selbst gegen die Anker gemessen. Ein Prüfer, der laufend mit dem Geprüften mitlernt, driftet mit ihm.
+
+**Konsequenzen:**
+
+- (+) Eine Verschlechterung kommt mit ihrer Ursache: Modell, Kontext oder einzelner Block
+- (+) Drift durch eigenen Kontext wird in strengen Bereichen vor der Freigabe sichtbar, nicht danach
+- (+) Es gibt eine Messgröße dafür, ob der Testsatz noch zum Betrieb passt
+- (+) Die Validatoren bleiben modellfrei; ein Rückgang im Score heißt weiterhin, dass sich das Modell bewegt hat und nicht das Lineal
+- (−) Mehr Läufe, mehr Kosten bei gehosteten Modellen; Bündelung und Tagesbudget begrenzen sie
+- (−) Eine Freigabe im strengen Bereich wartet auf den Probelauf, in der Regel Minuten
+- (−) **Verschoben heißt nicht schlechter.** Neue Dokumenttypen oder eine geänderte Vorlage lösen Weg 3 und 4 ebenfalls aus. Schwellen müssen je `task_type` kalibriert werden; ein Fehlalarm kostet einen Blick, keinen Stillstand
+- (−) Eine Antwort, die gleich klingt und sachlich falsch ist, erkennen nur die Anker (Pflichtbegriffe, Referenz) und der Mensch am Gate
+- (−) Ein weiteres Modell im Betrieb (Weg 4), dessen Version gepflegt werden muss; jeder Wechsel setzt das Referenzfenster zurück
+- (−) Weg 3 und 4 hängen an Payload-Daten: Aufbewahrungsfristen (CHY-17) und PII-Redaction (CHY-63) gelten für ihre Eingaben mit
+- **Meilensteine:** M6 — Läufe mit Wiederholungen und Kontextstand (CHY-68), Zeitplan (CHY-181), Läufe bei Änderungen und Probelauf (CHY-217), Signale aus dem Betrieb (CHY-218), Report, Freigabe und Frische-Alarm (CHY-64); M7 — Messfühler (CHY-219); M8 — vorgeführter Fehlerfall je Ursache (CHY-220)
+
+**Betrifft:** CHY-220, CHY-217, CHY-218, CHY-219, CHY-64, CHY-68, CHY-70, CHY-141, CHY-154, CHY-175, CHY-17, CHY-63, CHY-181, ADR-004, ADR-006, ADR-030, ADR-036, ADR-041, ADR-042, ADR-043
 
 ---
 
@@ -4409,21 +4520,24 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | **CalibrationAnchor**                     | Testfall des Benchmarks, gespeichert als Block vom Typ `calibration_anchor`: `content` ist die Referenzantwort, `metadata` trägt Aufgabentyp, Eingabe, den eingefrorenen unadaptierten Prompt und die Validatoren (ADR-006 Stufe 1 und 2). Versioniert und freigegeben wie jeder Block, aber kein Prompt-Material; Messwerte liegen in `benchmark_measurements` (ADR-043).                                                                                                                                                                                                                         |
 | **Composed Context**                      | Das Ergebnis der Kontext-Komposition: eine Zusammenstellung von Blöcken aus Global + Team + Projekt für einen spezifischen Workflow-Step.                                                                                                                                                                                                |
 | **Contributor**                           | Nutzerrolle (`contributor`): Legt Kontext-Blöcke an, bearbeitet sie und reicht sie ein. In strengen Scopes (org, team, workspace) wird ein Block erst durch einen Reviewer aktiv, in direkten Scopes (project, sub_project, personal) mit dem Schreiben (ADR-011, ADR-042).                                                                                                                                                                                                                                                  |
+| **Drift-Erkennung** (📋 → M6/M7, ADR-044)  | Automatische Erkennung von Drift aus drei Ursachen — Modell, eigener Kontext, veränderte Eingaben — auf vier Wegen: Läufe bei Änderungen mit Probelauf vor der Freigabe, Nachtlauf nach Zeitplan, Signale aus dem Betrieb, ab M7 ein Messfühler. Jede Meldung beurteilt ein Mensch.                                                       |
 | **DSGVO**                                 | Datenschutz-Grundverordnung — EU-Verordnung zum Schutz personenbezogener Daten.                                                                                                                                                                                                                                                           |
 | **Headless**                              | Architekturmuster: Keine Geschäftslogik exklusiv in einem UI; alle Funktionen über API verfügbar.                                                                                                                                                                                                                                       |
 | **Human Oversight**                       | Verpflichtende menschliche Freigabe, nicht abschaltbar (ADR-004). Gebaut: Jeder Workflow braucht einen `human_review`-Knoten, kein Pfad von einem `llm_call` endet ohne ihn; Gates mit `four_eyes` verlangen zwei verschiedene Personen. Geplant: Freigabepflicht nach einer im Benchmark erkannten Regression (CHY-64).                                                                                                                                                                                                               |
 | **Kontext-Block**                         | Kleinste versionierbare Einheit im Repository. Typen: `system_prompt`, `user_context`, `tool_schema`, `example_io` (Prompt-Material, werden komponiert) sowie `calibration_anchor` und `routing_rule` (kein Prompt-Material, ADR-037, ADR-043).                                                                                                                                                                                                  |
 | **LiteLLM**                               | Open-Source Gateway der verschiedene LLM-Provider (OpenAI-API-kompatibel, Anthropic, Ollama etc.) hinter einer einheitlichen API abstrahiert. Stack-Baustein von Cohereny — kein Konkurrent (ADR-012).                                                                                                                              |
 | **Merge Request**                         | Früherer Name für die **Freigabe** einer Änderung an einem Kontext-Block. Seit ADR-042 kein eigener Datensatz: freigegeben wird die Block-Version (`pending_review → active`); in direkten Scopes (ADR-011) aktiv ohne Zweitperson.                                                                                                                                                                                                                            |
+| **Messfühler** (📋 → M7, ADR-044)          | Einbettungsbasierte Beobachtung des Betriebs: meldet, wenn sich die Eingaben eines Aufgabentyps von den Kalibrierankern entfernen (der Testsatz veraltet) oder die Ausgaben eines Workflow-Schritts von ihrem Referenzfenster. Löst eine Prüfung oder einen Ankerlauf aus, bewertet nicht und geht in keinen Score ein.                   |
 | **Model Drift (LLM Drift)**               | *Wenn dasselbe Modell über die Zeit anders antwortet*, weil der Anbieter ein Update, Patch oder Fine-Tuning eingespielt hat. Ungewollt aus Nutzersicht. Cohereny soll dies über den Benchmark gegen Kalibrieranker erkennen (🔧: Anker und Messtabellen stehen, Läufe folgen, ADR-043). Nicht zu verwechseln mit Modell-Varianz (verschiedene Modelle) oder Prompt Sensitivity (gleiche Modell-Version). |
 | **Model Drifting**                        | Marketing-Oberbegriff der alle drei LLM-Qualitätsphänomene zusammenfasst: Modell-Varianz, Model Drift und Prompt Sensitivity. In technischen Dokumenten wird die präzise Taxonomie bevorzugt.                                                                                                                                           |
 | **Modell-Differenz / Modell-Varianz**     | Das normale und gewollte unterschiedliche Verhalten*verschiedener* Modelle — verschiedene Architekturen und Trainingsdaten führen zu verschiedenen "Persönlichkeiten". Cohereny überbrückt diese Unterschiede durch die Adaptionsschicht.                                                                                     |
 | **Reviewer**                              | Nutzerrolle (`reviewer`): Gibt eingereichte Kontext-Blöcke frei, lehnt sie ab oder zieht sie zurück; im strengen Scope Voraussetzung für die Freigabe.                                                                                                                                                                                                                                                                  |
-| **Nightly Benchmark**                     | Benchmark über die freigegebenen Kalibrieranker gegen die konfigurierten Modelle, Instrument zur Erkennung von Model Drift (ADR-006, ADR-043). Der Name stammt aus dem ursprünglichen Plan; entschieden ist ein Lauf auf Abruf, ein Zeitplan ist geparkt (CHY-181). Gebaut sind Anker und Messtabellen, die Läufe folgen (🔧, CHY-68).                                                                                                                                                                                       |
+| **Nightly Benchmark**                     | Benchmark über die freigegebenen Kalibrieranker gegen die konfigurierten Modelle, Instrument zur Erkennung von Model Drift (ADR-006, ADR-043). Läuft nach Zeitplan — einstellbar, Vorgabe nächtlich —, bei Änderungen und auf Abruf (ADR-044, → M6, CHY-68, CHY-181, CHY-217). Gebaut sind Anker und Messtabellen (🔧).                                                                                                                                                                                                      |
 | **OIDC**                                  | OpenID Connect — Authentifizierungsprotokoll auf Basis von OAuth 2.0, genutzt für SSO.                                                                                                                                                                                                                                                   |
 | **RevisionedEntity**                      | Modellbegriff aus §5.6 für versionierte Fachdaten: Version, Autor als Actor-Referenz, Zeitstempel, Vorgänger. Im Code keine Basisklasse, sondern Spalten, in `context_blocks` etwa `block_id`, `version`, `superseded_by_version`, `author_id` und `created_at`.                                                                                                                                                                                                                            |
 | **Scope-Hierarchie**                      | Dynamische Hierarchie via`scope_path` (ADR-008): org, team, workspace, project, sub_project, personal — beliebige Tiefe. Tiefere Scopes erben: Die Komposition fügt die Blöcke aller Vorfahren flach nach tief aneinander und überschreibt nichts (§5.3), bei Routing-Regeln gilt die des tiefsten Scopes; Privacy-Regeln nur verschärfend (Ratchet, ADR-017). „Global → Team → Projekt" ist die didaktische Kurzform.                                                       |
 | **Step-spezifischer Kontext**             | Für einen einzelnen Workflow-Step komponierter Kontext — minimal, modell-optimiert, aus der Scope-Hierarchie zusammengestellt.                                                                                                                                                                                                           |
+| **Probelauf** (📋 → M6, ADR-044)           | Lauf der betroffenen Kalibrieranker mit einer vorgeschlagenen Blockversion, bevor sie in einem strengen Geltungsbereich aktiv wird. Der Reviewer sieht das Ergebnis vor der Freigabe; freigeben kann er erst, wenn es vorliegt.                                                                                                           |
 | **Prompt Sensitivity**                    | Eigenschaft eines Modells: minimale Änderungen im Prompt-Wortlaut führen zu anderen Ergebnissen — beim gleichen Modell, gleicher Version. Nicht eliminierbar, aber durch kuratierte Formulierungsbausteine im Kontext-Repository systematisch managebar.                                                                                |
 | **Übersetzungsregel (Translation Rule)** (📋 → M6) | Regelsatz, der beschreibt wie Prompt-Elemente von Modell A nach Modell B übertragen / adaptiert werden.                                                                                                                                                                                                                                    |
 
@@ -4472,10 +4586,10 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | Art. 9 Risikomanagementsystem                          | ⚠️   | Benchmark als Basis: Anker und Messtabellen gebaut, Läufe → M6 (CHY-68)                        | Kein formales RM-Dokument (nur bei High-Risk-Provider-Status)                          |
 | Art. 13 Transparenz / Instructions for Use             | ⚠️   | Langfuse-Tracing mit den verwendeten Bausteinen samt Version; Audit-Log                      | Kein formales "Instructions for Use" nach Art. 13(3) — nach 1.0 (CHY-203); TransparencyRecord für Workflow-Läufe und `/v1/complete` → M7b (CHY-201) |
 | Art. 14 Human Oversight                                | ⚠️     | Pflicht-Gate `human_review` in jedem Workflow (Validator, Runner), Vier-Augen-Gates; Abbruch von Pilotläufen (`cancel_event`) | `/v1/complete` liefert Modellantworten ohne Gate → M5 (CHY-199); Abbruch von Workflow-Läufen → M5 (CHY-200); Freigabe nach einer Benchmark-Regression → M6 (CHY-64) |
-| Art. 14(4)(a) Anomalien erkennen                       | 📋     | Benchmark → `review_needed` (Anker und Messtabellen gebaut; Läufe und Drift → M6, CHY-68)      | —                                                                                     |
+| Art. 14(4)(a) Anomalien erkennen                       | 📋     | Drift-Erkennung → `review_needed` (Anker und Messtabellen gebaut; Läufe → M6, Messfühler → M7; ADR-044) | —                                                                                     |
 | Art. 26 Deployer-Pflichten                             | ⚠️   | Human Oversight Gate als technische Grundlage ✅                                                | Betreiber muss qualifizierte Oversight-Personen benennen (Art. 26(2))                  |
 | Art. 50 Transparenz (Deployer,**ab 02.08.2026**) | ⚠️   | TransparencyRecord für Pilotläufe; KI-Hinweis in der Referenz-UI (Veröffentlichung → M8, CHYUI-11) | TransparencyRecord für Workflow-Läufe und `/v1/complete` → M7b (CHY-201); Kennzeichnung nach Art. 50(2) → M7b (CHY-118) |
-| Art. 72 Post-Market Monitoring                         | ⚠️     | Langfuse-Tracing; Benchmark-Läufe → M6 (CHY-68)                                                | Kein schriftlicher Monitoring-Plan (Art. 72(3))                                        |
+| Art. 72 Post-Market Monitoring                         | ⚠️     | Langfuse-Tracing; Drift-Erkennung → M6/M7 (ADR-044)                                            | Kein schriftlicher Monitoring-Plan (Art. 72(3))                                        |
 | Art. 73 Incident Reporting                             | ❌     | —                                                                                              | Kein Incident-Meldeprozess (nur bei Provider-Status + High-Risk)                       |
 | Art. 71 EU-Datenbank-Registrierung                     | ❌     | —                                                                                              | Nur bei Hochrisiko + Provider-Status                                                   |
 
@@ -4483,7 +4597,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 
 ### 13.3 EU Cyber Resilience Act (CRA, Regulation 2024/2847)
 
-**Geltungsbereich:** Anwendbar. Mit der Veröffentlichung unter AGPLv3 und dem Angebot einer kommerziellen Lizenz behandelt sich Cohereny als Hersteller. Die Herstellerpflichten gelten ab der Veröffentlichung. Vorhanden sind Meldeadresse und Richtlinie zur koordinierten Offenlegung (`SECURITY.md`); in Arbeit (→ M7b) sind ein beschriebener Meldeprozess nach Art. 14 (CHY-16), der Unterstützungszeitraum (CHY-149) und ein SBOM (CHY-22). Art.-14-Meldepflichten ab **11.09.2026** (24h Frühwarnung / 72h Meldung / 14 Tage Bericht, ENISA-Plattform; gelten auch für Bestandsprodukte). Volle Anwendung 11.12.2027.
+**Geltungsbereich:** Anwendbar. Mit der Veröffentlichung unter AGPLv3 und dem Angebot einer kommerziellen Lizenz behandelt sich Cohereny als Hersteller. Die Herstellerpflichten gelten ab der Veröffentlichung. Vorhanden sind Meldeadresse und Richtlinie zur koordinierten Offenlegung (`SECURITY.md`); ein SBOM entsteht seit 02.11.2026 in jeder Pipeline (CHY-22); in Arbeit (→ M7b) sind ein beschriebener Meldeprozess nach Art. 14 (CHY-16) und der Unterstützungszeitraum (CHY-149). Art.-14-Meldepflichten ab **11.09.2026** (24h Frühwarnung / 72h Meldung / 14 Tage Bericht, ENISA-Plattform; gelten auch für Bestandsprodukte). Volle Anwendung 11.12.2027.
 
 | Anforderung                                   | Status | Cohereny-Feature                             | Lücke                                                           |
 | --------------------------------------------- | ------ | -------------------------------------- | ---------------------------------------------------------------- |
@@ -4491,7 +4605,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | Anhang I Teil I Nr. 2 Buchst. d: Zugriffsschutz | ⚠️ | OIDC (getestet mit Authentik); Rollen aus dem Gruppen-Claim, Audience je Oberfläche (ADR-031) | Rollen gelten installationsweit, keine Autorisierung je Geltungsbereich → M5 (CHY-92) |
 | Anhang I Teil I Nr. 2 Buchst. c: Sicherheitsupdates | ⚠️ | Korrekturen fließen in die laufende Entwicklungslinie und erscheinen als neuer Stand des Repositorys (`SECURITY.md`) | Keine Release-Zweige, keine Backports; Patch-SLA und Unterstützungszeitraum → M7b (CHY-12, CHY-149) |
 | Anhang I Teil I Nr. 2 Buchst. a: Keine bekannten ausnutzbaren Schwachstellen | ⚠️ | Basis-Image `python:3.14-slim`; pip-audit auf die Abhängigkeiten in CI | Prüfungen blockieren nicht; Container Scanning prüft ein anderes Basis-Image als das Dockerfile (CHY-198); kein Digest-Pinning → M7b (CHY-14) |
-| Anhang I Teil II Nr. 1: SBOM                  | ❌     | Abhängigkeiten in `pyproject.toml`         | Kein maschinenlesbares SBOM → M7b (CHY-22)                     |
+| Anhang I Teil II Nr. 1: SBOM | ✅ | CycloneDX-SBOM in jeder Pipeline, mit Lieferant je Komponente und gegen das Schema geprüft (`sbom`-Job, `scripts/check_sbom.py`, CHY-22) | Beschreibt die Auflösung zur Pipeline-Zeit; ohne Lock-Datei kann ein späteres Image neuere Releases enthalten → M8 (CHY-211) |
 | Anhang I Teil II Nr. 5: Koordinierte Offenlegung | ✅  | `SECURITY.md`, Meldeweg security@cohereny.com | —                                                     |
 | Art. 14 Meldepflichten (ab 11.09.2026)        | ❌     | Meldeadresse (`SECURITY.md`)          | Kein beschriebener Meldeprozess für ausgenutzte Schwachstellen und schwere Vorfälle (24h/72h/14d) → M7b (CHY-16) |
 
@@ -4516,7 +4630,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | Anforderung                        | Status | Cohereny-Feature                                       | Lücke                                           |
 | ---------------------------------- | ------ | ------------------------------------------------ | ------------------------------------------------ |
 | Modell-Governance / Human Override | ⚠️     | Pflicht-Gate `human_review` im Workflow-Runner; Versionierung und Freigabe der Bausteine; Actor-Pattern | Regelmäßige Analyse der Modellergebnisse über Benchmark-Läufe → M6 (CHY-68); `/v1/complete` ohne Gate → M5 (CHY-199) |
-| Regelmäßige Validierung          | 📋     | Benchmark → `review_needed` (Läufe → M6, CHY-68) | Betreiber muss Ergebnisse formal dokumentieren   |
+| Regelmäßige Validierung          | 📋     | Benchmark nach Zeitplan und bei Änderungen → `review_needed` (→ M6, CHY-68, CHY-181; ADR-044) | Betreiber muss Ergebnisse formal dokumentieren   |
 | Pre-Deployment-Bewertung           | ⚠️   | Benchmark als Grundlage (Anker gebaut, Läufe → M6) | Kein formales Pre-Deployment-Assessment-Dokument; Betreiber-Checkliste nach 1.0 (CHY-9) |
 | Erklärbarkeit                     | ⚠️   | Je Workflow-Lauf `node_executions` mit Modell und Zeitstempeln; Langfuse-Traces mit Bausteinen samt Version | Keine formale Explainability-Dokumentation       |
 
@@ -4539,7 +4653,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | BSI Kriterienkatalog KI (Juni 2025): Menschliche Aufsicht | ⚠️     | Pflicht-Gate `human_review` im Workflow-Runner                 | `/v1/complete` ohne Gate → M5 (CHY-199); Abbruch von Workflow-Läufen → M5 (CHY-200) |
 | BSI Kriterienkatalog KI: Prompt Injection                 | ⚠️   | Klare Trennung Systemkontext/User-Input ✅                     | Zaun und Musterprüfung (ADR-039) nur im Banking-Piloten verdrahtet; `/v1/complete` und Workflow-Runner prüfen zugelieferten Text nicht → M7b (CHY-5) |
 | EVB-IT System (on-prem Integration)                       | ✅     | Self-hosted Stack passt zu EVB-IT System Vertragstyp           | —                                                                               |
-| EVB-IT 2026: Open Source als Standard (veröffentlicht 03/2026) | ✅ | Cohereny ist Open Source (AGPLv3)                         | SBOM, das die Muster vorsehen → M7b (CHY-22)                                     |
+| EVB-IT 2026: Open Source als Standard (veröffentlicht 03/2026) | ✅ | Cohereny ist Open Source (AGPLv3)                         | SBOM, das die Muster vorsehen: CycloneDX in jeder Pipeline (CHY-22)                                     |
 | BSI C5 (§ 393 SGB V)                                     | n/a    | **Nicht anwendbar** — kein Cloud-Dienst; on-premise | Strategischer Vorteil                                                            |
 
 ---

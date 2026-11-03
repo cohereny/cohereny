@@ -456,7 +456,6 @@ def test_approving_a_block_without_a_claim_asks_nothing():
 
 # ── Through the composition path ──────────────────────────────────────────────
 
-@pytest.mark.anyio
 async def test_composing_a_conflicting_scope_is_refused():
     """The backstop, exercised through compose_from_db rather than asserted.
 
@@ -495,7 +494,6 @@ async def test_composing_a_conflicting_scope_is_refused():
         await compose_from_db(pool, ComposeRequest(scope_id=_PROJECT), chain)
 
 
-@pytest.mark.anyio
 async def test_composing_a_clean_scope_returns_the_claims():
     """The counter-probe, and the reason the fields are on ComposedBlock.
 

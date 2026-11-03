@@ -45,8 +45,6 @@ from contexts.orchestration.execution import ExecutorRegistry, NodeContext, Node
 from contexts.orchestration.schema import OversightDecision
 from tests.conftest import stub_user
 
-pytestmark = pytest.mark.anyio
-
 
 # ── a store that remembers ────────────────────────────────────────────────────
 

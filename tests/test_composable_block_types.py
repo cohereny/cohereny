@@ -23,12 +23,8 @@ import typing
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
-import pytest
-
 from contexts.repository import store
 from contexts.repository.schema import COMPOSABLE_BLOCK_TYPES, BlockType
-
-pytestmark = pytest.mark.anyio
 
 ALL_BLOCK_TYPES = frozenset(typing.get_args(BlockType))
 

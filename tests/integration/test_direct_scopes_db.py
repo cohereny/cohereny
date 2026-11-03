@@ -37,7 +37,7 @@ from kernel.identity import resolve_actor
 from kernel.schema import scope_label
 from tests.integration._callers import caller
 
-pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+pytestmark = pytest.mark.integration
 
 _KEY = "cloud_routing"
 

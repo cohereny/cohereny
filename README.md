@@ -74,7 +74,7 @@ wanted to find out in practice what works and what doesn't.
 | Routing rules as reviewed blocks; data classes per scope, model ceilings per model | ✅ |
 | Workflow runner: graph definitions, branching and joins, `human_review` gates with four-eyes approval | ✅ |
 | Append-only audit log — guards against errors in the application; against its own database role from M5 (CHY-85). Per-surface API (`serve`, `author`, `observe`, `admin`) behind OpenID Connect | ✅ |
-| Benchmark: calibration anchors and measurement tables are in place; runs against the configured models in M6 | 🔧 |
+| Drift detection: calibration anchors and measurement tables are in place; scheduled (nightly by default) and change-triggered runs with a trial run before approval in M6, signals from operation in M6, an embedding sensor for stale anchors in M7 | 🔧 |
 | Adaptation of prompt and context per model, derived from the benchmark results (M6) | 📋 |
 | One-command setup with Docker Compose (M8) | 📋 |
 

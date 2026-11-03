@@ -37,8 +37,6 @@ from contexts.orchestration.execution import (
 )
 from contexts.orchestration.schema import ContextRequirements
 
-pytestmark = pytest.mark.anyio
-
 
 def _ctx(node_type: str, node_ref: str = "n", **kw) -> NodeContext:
     """A node context, with everything the caller did not pin made up.
@@ -342,7 +340,6 @@ class TestComposeExecutor:
         message = str(refused.value)
         assert "answer" in message
         assert "input_mapping" in message
-
 
 
 class TestLlmCallExecutor:

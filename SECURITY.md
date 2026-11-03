@@ -36,6 +36,34 @@ block become active without the review its scope requires, are treated as securi
 In a `direct` scope (project, sub-project, personal) a block goes live on write by design;
 that is not a finding.
 
+## Software bill of materials
+
+Every pipeline of the development repository writes a CycloneDX SBOM of the Python
+dependencies (CRA Annex I Part II (1)). It covers everything the Dockerfile installs (the
+service and both pilots), transitive dependencies included, each with version, package URL,
+license and supplier. The pipeline fails if a declared top-level dependency or a supplier
+is missing from it, or if the file does not validate against the CycloneDX 1.6 schema
+(`scripts/check_sbom.py`).
+
+It describes the resolution at pipeline time. Runtime dependencies are declared with lower
+bounds only and there is no lock file yet, so an image built later may contain newer
+releases. If you build Cohereny yourself, generate the SBOM from your own environment the
+same way:
+
+```bash
+python -m venv /tmp/product && /tmp/product/bin/pip install . ./pilots/study ./pilots/banking
+python -m venv /tmp/generator && /tmp/generator/bin/pip install -r scripts/requirements-sbom.txt
+/tmp/generator/bin/cyclonedx-py environment --pyproject pyproject.toml -o sbom.cdx.json /tmp/product/bin/python
+/tmp/product/bin/python scripts/sbom_supplier.py sbom.cdx.json
+/tmp/generator/bin/python scripts/check_sbom.py --schema sbom.cdx.json . ./pilots/study ./pilots/banking
+```
+
+The generator gets a virtual environment of its own; installed next to the product, its
+dependencies would be listed as Cohereny's. The generator leaves the supplier empty;
+`sbom_supplier.py` takes it from the package metadata of the product environment, so it runs
+with that environment's interpreter. The SBOM for a given commit is available on
+request at security@cohereny.com.
+
 ## Known limitations
 
 Cohereny is pre-release. The following gaps are known, tracked, and not treated as

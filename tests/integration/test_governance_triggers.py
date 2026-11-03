@@ -32,7 +32,7 @@ from kernel.schema import ANONYMIZED_DISPLAY_NAME
 from tests.integration._callers import caller as _caller
 from tests.integration._redis import Generations
 
-pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+pytestmark = pytest.mark.integration
 
 
 # ── 011: the audit log is append-only ─────────────────────────────────────────

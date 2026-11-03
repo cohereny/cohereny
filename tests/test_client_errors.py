@@ -194,7 +194,6 @@ class _FailingConn:
         raise self._exc
 
 
-@pytest.mark.anyio
 async def test_an_incoherent_claim_on_a_draft_edit_is_block_not_storable():
     """PATCH on a draft took the in-place path, and only the insert was
     translated. `privacy_impact` without a `governance_key` answered 500."""
@@ -214,7 +213,6 @@ def _sub_workflow(target):
                       target_workflow_id=target, target_workflow_version=1)
 
 
-@pytest.mark.anyio
 async def test_a_sub_workflow_pointing_nowhere_is_target_workflow_not_found():
     from contexts.orchestration import store
     from contexts.orchestration.errors import TargetWorkflowNotFound
@@ -228,7 +226,6 @@ async def test_a_sub_workflow_pointing_nowhere_is_target_workflow_not_found():
     assert str(target) in str(refused.value)
 
 
-@pytest.mark.anyio
 async def test_another_node_foreign_key_is_not_called_a_missing_target():
     """Counter-probe: keyed on the constraint, not on the exception type. The
     path workflow's key must not be reported as a missing sub_workflow target."""

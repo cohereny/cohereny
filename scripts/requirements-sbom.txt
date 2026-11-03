@@ -1,0 +1,9 @@
+# The SBOM generator (CHY-22; SECURITY.md, "Software bill of materials").
+# Installed into a venv of its own, never next to the product: its
+# dependencies are not ours.
+#
+# Pinned for the reason the linters in pyproject.toml are: a new release can
+# describe the same environment differently, and that should arrive as a
+# Renovate MR someone looks at, not mid-pipeline. Renovate finds this file by
+# its name (requirements-*.txt).
+cyclonedx-bom==7.6.0

@@ -126,11 +126,19 @@ def contain_input_file(base_dir: str | Path, input_file: str) -> Path:
     Raises RunNotFound, deliberately worded as "not found" rather than
     "forbidden": a caller probing for /etc/passwd learns nothing from the
     response about whether it exists.
+
+    A name the operating system cannot even look up -- a NUL byte, a lone
+    surrogate that does not encode -- makes resolve() raise ValueError. No file
+    can carry that name, so it gets the same answer as any other absent one,
+    not a 500 (CHY-213, found by the contract fuzzer).
     """
     base = Path(base_dir).resolve()
-    candidate = (base / input_file).resolve()
+    try:
+        candidate = (base / input_file).resolve()
+    except ValueError:
+        candidate = None
 
-    if not candidate.is_relative_to(base):
+    if candidate is None or not candidate.is_relative_to(base):
         raise RunNotFound(f"Input file not found: {input_file}")
     if not candidate.is_file():
         raise RunNotFound(f"Input file not found: {input_file}")

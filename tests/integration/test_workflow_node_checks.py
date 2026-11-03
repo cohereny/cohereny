@@ -22,7 +22,7 @@ from contexts.orchestration import store
 from contexts.orchestration.errors import NodeNotStorable
 from contexts.orchestration.schema import ContextRequirements, NodeCreate
 
-pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+pytestmark = pytest.mark.integration
 
 
 def _node(**kw) -> NodeCreate:

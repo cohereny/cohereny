@@ -25,7 +25,7 @@ from contexts.orchestration.schema import NodeCreate
 from kernel.identity import resolve_actor
 from tests.integration._callers import caller as _caller
 
-pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+pytestmark = pytest.mark.integration
 
 
 async def _gate_execution(pool, workflow):

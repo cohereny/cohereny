@@ -25,7 +25,7 @@ from kernel.errors import ScopeNotFound
 from kernel.identity import resolve_actor
 from tests.integration._callers import caller
 
-pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+pytestmark = pytest.mark.integration
 
 
 async def _author(pool):

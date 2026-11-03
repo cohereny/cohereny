@@ -29,8 +29,6 @@ from core.completion import (
 )
 from core.errors import ModelRefused, ModelUnreachable
 
-pytestmark = pytest.mark.anyio
-
 
 def _http(payload: dict) -> MagicMock:
     response = MagicMock()

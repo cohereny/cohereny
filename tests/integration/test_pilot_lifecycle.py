@@ -34,7 +34,7 @@ from kernel.audit import ACTION_PILOT_RUN_CANCELLED, ACTION_PILOT_RUN_DELETED
 from kernel.identity import resolve_actor
 from tests.integration._callers import caller
 
-pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+pytestmark = pytest.mark.integration
 
 
 async def _run(pool, owner_id, status: str):

@@ -34,8 +34,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
-import pytest
-
 from api.v1 import workflows as transport
 from contexts.orchestration import service
 from contexts.orchestration.execution import ExecutorRegistry, NodeContext, NodeResult
@@ -46,8 +44,6 @@ from tests.test_workflow_advance import (
     _node,
     _run,
 )
-
-pytestmark = pytest.mark.anyio
 
 _SCOPE = uuid4()
 _NOW = datetime(2026, 9, 7, tzinfo=UTC)
@@ -258,7 +254,6 @@ class TestTheCounterProbe:
             "context_requirements did not reach the query — the node composed "
             "everything the scope offers"
         )
-
 
 
 # ── The llm_call routes like /v1/complete does (CHY-145) ─────────────────────

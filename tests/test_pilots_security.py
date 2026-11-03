@@ -101,6 +101,18 @@ class TestPathContainment:
         with pytest.raises(RunNotFound):
             contain_input_file(inputs, "innocent.pdf")
 
+    @pytest.mark.parametrize("name", [
+        "report.pdf\x00.txt",      # NUL: the OS refuses to look the name up
+        "\udad8report.pdf",         # lone surrogate: does not encode to bytes
+    ])
+    def test_a_name_no_file_can_carry_is_not_found(self, inputs, name):
+        """The contract fuzzer sent these and got a 500 (CHY-213).
+
+        resolve() raised ValueError before containment was even checked.
+        """
+        with pytest.raises(RunNotFound):
+            contain_input_file(inputs, name)
+
     def test_a_directory_is_not_an_input_file(self, inputs):
         (inputs / "subdir").mkdir()
         with pytest.raises(RunNotFound):

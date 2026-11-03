@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "cohereny-api"
 version = "0.1.0"
 description = "Cohereny — Context-aware LLM Middleware (FastAPI)"
+# Also the supplier in the SBOM (scripts/sbom_supplier.py, CHY-22).
+authors = [{ name = "Thomas Roth" }]
 # Dual-licensed: AGPLv3 here, a commercial license on request (COMMERCIAL-LICENSE.md)
 license = "AGPL-3.0-only"
 requires-python = ">=3.12"
@@ -131,12 +133,24 @@ packages = ["api", "core", "cli", "router", "kernel", "contexts"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Explicit, because pytest-asyncio announces a different default. Async
+# fixtures share the test's loop; a pool built on another loop fails with
+# "Future attached to a different loop" (CHY-212).
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 # Integration tests need a real PostgreSQL with every migration applied
 # (tests/integration, CHY-124). Deselected here so a checkout without a
 # database runs the unit suite unchanged; the `integration` job selects them
 # with `-m integration`, which overrides this on the command line.
-addopts = "-m 'not integration'"
+#
+# `-p no:anyio`: one plugin runs async tests, not two (CHY-212). anyio ships a
+# pytest plugin of its own, installed with httpx and starlette. With both
+# active, which one runs a test depends on the order pytest loads them -- and
+# that order is the order the file system lists site-packages, a hash of the
+# directory names on ext4. A new anyio release renamed its directory, the
+# order flipped, and every integration test ran on a different loop than its
+# `pool` fixture. Nothing in this repository had changed.
+addopts = "-m 'not integration' -p no:anyio"
 markers = [
     "integration: needs a real PostgreSQL (DATABASE_URL), run by the integration job",
 ]

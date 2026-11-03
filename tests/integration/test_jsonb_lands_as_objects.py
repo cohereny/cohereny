@@ -28,7 +28,7 @@ from kernel.audit import target_ref, write_audit
 from kernel.identity import resolve_actor, set_role
 from tests.integration._callers import caller as _caller
 
-pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+pytestmark = pytest.mark.integration
 
 
 async def _type(pool, sql: str, *args) -> str:

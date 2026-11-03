@@ -27,7 +27,7 @@ from contexts.repository import service as repository
 from contexts.repository.schema import BlockCreate
 from tests.integration._callers import caller
 
-pytestmark = [pytest.mark.integration, pytest.mark.anyio]
+pytestmark = pytest.mark.integration
 
 _CASE = {"task_type": "summarize", "input": "A credit file.",
          "raw_prompt": "Summarize the credit file.",
