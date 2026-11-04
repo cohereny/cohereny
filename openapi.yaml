@@ -1186,6 +1186,78 @@ components:
       - node_type
       title: NodeCreate
       type: object
+    NodeExecutionOut:
+      description: One pass through one node of a run, as a reader sees it (CHY-229).
+      properties:
+        completed_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          title: Completed At
+        error_message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error Message
+        iteration:
+          title: Iteration
+          type: integer
+        model_used:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model Used
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        node_ref:
+          title: Node Ref
+          type: string
+        node_type:
+          enum:
+          - context_compose
+          - llm_call
+          - tool_call
+          - fork_gateway
+          - join_gateway
+          - human_review
+          - sub_workflow
+          title: Node Type
+          type: string
+        output:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          description: 'What the node produced: for an llm_call the model''s answer under `content`, for
+            a context_compose the composed `prompt`, for a human_review the decision. Null until the node
+            completes.'
+          title: Output
+        started_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          title: Started At
+        status:
+          enum:
+          - pending
+          - running
+          - complete
+          - failed
+          - skipped
+          title: Status
+          type: string
+      required:
+      - node_ref
+      - node_type
+      - iteration
+      - status
+      title: NodeExecutionOut
+      type: object
     NotImplementedDetail:
       description: Body of a 501. Names the ticket so the caller can look up the plan.
       properties:
@@ -1414,6 +1486,49 @@ components:
       - max_tokens
       - litellm_base_url
       title: RouteResponse
+      type: object
+    RunNodesOut:
+      description: 'What each node of a run produced, in the order it ran (CHY-229).
+
+
+        Until CHY-229 none of this left the database. A run waiting at a
+
+        `human_review` gate showed its status and its input; whoever decided there
+
+        decided without seeing the output the decision was about. Article 14 of the
+
+        AI Act asks for the opposite: the person overseeing must be able to read
+
+        what the system produced. `WorkflowRunOut.result` deliberately does not
+
+        carry a copy — the outputs live in one place, and every deletion path
+
+        (CHY-17) has to know only that one.'
+      properties:
+        nodes:
+          items:
+            $ref: '#/components/schemas/NodeExecutionOut'
+          title: Nodes
+          type: array
+        run_id:
+          format: uuid
+          title: Run Id
+          type: string
+        status:
+          enum:
+          - pending
+          - running
+          - awaiting_oversight
+          - complete
+          - failed
+          - rejected
+          title: Status
+          type: string
+      required:
+      - run_id
+      - status
+      - nodes
+      title: RunNodesOut
       type: object
     RunStatus:
       description: The state of a pilot run.
@@ -4123,6 +4238,49 @@ paths:
       security:
       - HTTPBearer: []
       summary: Get Run
+      tags:
+      - workflows
+  /v1/workflows/runs/{run_id}/nodes:
+    get:
+      description: 'What each node of the run produced, in the order it ran (CHY-229).
+
+
+        Read this before deciding at a `human_review` gate: the decision is about
+
+        the output of the nodes before it — for an `llm_call` the model''s answer
+
+        under `output.content`.'
+      operationId: get_run_nodes_v1_workflows_runs__run_id__nodes_get
+      parameters:
+      - in: path
+        name: run_id
+        required: true
+        schema:
+          format: uuid
+          title: Run Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunNodesOut'
+          description: Successful Response
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      security:
+      - HTTPBearer: []
+      summary: Get Run Nodes
       tags:
       - workflows
   /v1/workflows/runs/{run_id}/oversight:

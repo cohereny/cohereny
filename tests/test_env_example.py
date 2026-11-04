@@ -42,7 +42,7 @@ def test_settings_load_from_a_copy_of_the_template(tmp_path, monkeypatch):
     settings = Settings()
     assert settings.database_url.endswith("@localhost:5432/cohereny")
     assert settings.environment == "prod"
-    assert settings.dev_mode is False
+    assert settings.api_docs is False
 
 
 def test_an_unknown_key_stops_the_start(tmp_path, monkeypatch):

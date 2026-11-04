@@ -7,7 +7,7 @@
 # This file is part of the snapshot and therefore public. It names no internal
 # host: the internal patterns come from the protected variable LEAK_PATTERNS.
 
-stages: [check, mirror]
+stages: [check, mirror, release]
 
 leak-check:
   stage: check
@@ -30,6 +30,17 @@ secret-scan:
   rules:
     - if: $CI_COMMIT_BRANCH == "publish"
 
+# The changelog in both languages says the same thing (CHY-226). Checked before
+# the mirror, so a snapshot whose German section lags behind never reaches GitHub.
+changelog:
+  stage: check
+  image: python:3.12-slim
+  tags: [docker]
+  script:
+    - python scripts/changelog.py --check
+  rules:
+    - if: $CI_COMMIT_BRANCH == "publish"
+
 visibility:
   stage: check
   image: python:3.12-slim
@@ -43,12 +54,26 @@ github-mirror:
   stage: mirror
   image: alpine:3.22
   tags: [docker]
-  needs: [leak-check, secret-scan, visibility]
+  needs: [leak-check, secret-scan, visibility, changelog]
   before_script:
     - apk add --no-cache git
   script:
     # A full refname: the CI checkout is a detached HEAD, and into an empty repository
     # git cannot guess what `main` means (first push, pipeline 661, 29.10.2026).
     - GIT_TERMINAL_PROMPT=0 git push "https://oauth2:${GITHUB_TOKEN}@github.com/cohereny/cohereny.git" HEAD:refs/heads/main --force
+  rules:
+    - if: $CI_COMMIT_BRANCH == "publish"
+
+# The GitHub release of the snapshot (CHY-226): tag snapshot-<date> of the newest
+# changelog section, both languages as its text, marked as a pre-release. After
+# the mirror, so the commit exists on GitHub. A snapshot without a section of its
+# own fails here: its tag would be the previous snapshot's.
+github-release:
+  stage: release
+  image: python:3.12-slim
+  tags: [docker]
+  needs: [github-mirror]
+  script:
+    - python scripts/changelog.py --release --repo cohereny/cohereny --commit "$CI_COMMIT_SHA"
   rules:
     - if: $CI_COMMIT_BRANCH == "publish"

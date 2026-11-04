@@ -180,4 +180,4 @@ class RunEnvironment:
 
     input_dir: str | Path
     db_dsn: str
-    dev_mode: bool = False
+    node_metrics: bool = False

@@ -4,9 +4,9 @@
 
 **SHAPE · ADAPT · LEARN · REPEAT**
 
-> **Version:** 2.47 (basiert auf Whitepaper v4.26)
+> **Version:** 2.52 (basiert auf Whitepaper v4.30)
 > **Autor:** Thomas Roth
-> **Datum:** 2026-11-03
+> **Datum:** 2026-11-04
 > **Status:** Pre-Release (vor 1.0)
 > **Template:** Arc42 v8.2 (arc42.org)
 
@@ -20,6 +20,24 @@
 >
 > **Ziel und Stand:** Cohereny ist ein Pre-Release. Das Dokument beschreibt das Ziel 1.0; was
 > heute fehlt, trägt den Meilenstein, der es bringt (→ M5 … M8, Übersicht im Whitepaper §10).
+
+**Änderungen v2.51 → v2.52 (2026-11-04) — CHY-189, CHY-229: Schnellstart, Einsicht am Gate:**
+- **§1.4, §3.2, §7, §13.5 (BSI SYS.1.6):** Installation mit einem Befehl gebaut ✅. `deploy/quickstart/` bringt API, Datenbank, Cache, ein lokales Modell (Ollama) und den Entwickler-Issuer auf einen Rechner, mit einem Beispiel: Kundenservice mit Vererbung, Datenschutzregel, Routing-Regeln und einem Workflow mit Freigabe. Der Durchlauf der Anleitung läuft je MR in der CI.
+- **§3.2 Konfiguration:** Die Modellliste (`routing-config.yaml`) liegt an einem Pfad aus `ROUTING_CONFIG`; ohne Angabe gilt `router/routing-config.yaml`. Vorher musste ändern, wer eigene Modelle anbinden wollte, Quellcode.
+- **ADR-034 (Folge für den Datenweg):** `llm_call` nimmt auch `system` über `input_mapping`, damit Kontext (Anweisung) und Eingabe des Laufs (Anfrage) gemeinsam ein Modell erreichen, wie bei `/v1/complete`.
+- **§1.4, §8.7 (Art. 14), ADR-004 (Umsetzungsstand):** Wer am `human_review`-Gate entscheidet, liest vorher, was die Knoten erzeugt haben (`GET /v1/workflows/runs/{id}/nodes`, CHY-229). Bis dahin entschied der Prüfer, ohne den Entwurf zu sehen.
+
+**Änderungen v2.50 → v2.51 (2026-11-04) — CHY-192: `DEV_MODE` entfernt:**
+- **§8.1, §11.2, §13 (CRA Anhang I Teil I Nr. 2 Buchst. b):** `DEV_MODE` ist entfernt. Jede Stufe prüft Tokens; einen Schalter, der die Authentifizierung abschaltet, gibt es nicht mehr. Entwicklung und CI holen Tokens beim lokalen Entwickler-Issuer (`scripts/dev_issuer.py`); einen Issuer über http nimmt die API nur unter `ENVIRONMENT=dev` an. Die API-Doku hängt an einem eigenen Schalter (`API_DOCS`), und das Oberflächen-Gate weist einen Aufrufer ohne Audience ab, statt beiseitezutreten.
+
+**Änderungen v2.49 → v2.50 (2026-11-03) — CHY-225: Meilensteine neu geordnet:**
+- **§1.4, §3.2, §7, §11.2, §13 (CRA Anhang I, BSI SYS.1.6):** `DEV_MODE` entfernen (CHY-192) von M7b nach M5, die Installation mit einem Befehl (CHY-189) von M8 nach M5. Grund: Die Meilensteine laufen jetzt nacheinander, M5 zuerst; der Entwickler-Issuer, den CHY-192 bringt, trägt auch den Schnellstart (Whitepaper v4.28 §10).
+
+**Änderungen v2.48 → v2.49 (2026-11-03) — CHYUI-9: Anmeldung der Referenz-UI:**
+- **§6.5 BFF-Pattern, §7.2:** Die Referenz-UI meldet Nutzer selbst über den OIDC-Client der Oberfläche `author` an (Authorization Code mit PKCE). Zugriffs- und Refresh-Token liegen in der serverseitigen Sitzung, der Browser hält nur ein httpOnly-Cookie. Vorher trug sie einen statischen Token, der leer war; ihre Aufrufe gingen nur durch, weil die dev-Stufe ohne Authentifizierung lief (CHY-192). `.env.ui` enthält jetzt Adresse der API und OIDC-Client.
+
+**Änderungen v2.47 → v2.48 (2026-11-03) — CHY-202, CHY-93: python-jose ersetzt:**
+- **§11.2 Technische Schulden:** `python-jose` erledigt. PyJWT prüft die Tokens; die Audience wird in der Dekodierung gegen die acht Audiences der Oberflächen geprüft, `exp`, `iss`, `aud` und `sub` sind Pflicht. Die Token-Prüfung ist gegen selbst signierte Tokens getestet (21 Fälle durch `require_auth`, CHY-93) und mit echten Tokens von Authentik nachgewiesen, für einen UI- und einen Maschinen-Client.
 
 **Änderungen v2.46 → v2.47 (2026-11-03) — CHY-181, CHY-220: Drift-Erkennung (ADR-044):**
 - **ADR-044 neu:** Drift wird automatisch erkannt und von einem Menschen beurteilt. Drei Ursachen (Modell, eigener Kontext, veränderte Eingaben), vier Wege: Läufe bei Änderungen mit Probelauf vor der Freigabe, Nachtlauf nach Zeitplan, Signale aus dem Betrieb, ab M7 ein Messfühler mit Einbettungen. Wiederholungen statt Einzelmessung, Kontextstand an jeder Messung, vorgeführter Fehlerfall je Ursache als Bedingung für M8. Neu angelegt: CHY-217 bis CHY-220.
@@ -465,13 +483,13 @@ Diese Übersicht folgt der Tabelle „What is built“ in der README; die Zeilen
 | Kontext-Repository: versionierte Blöcke, Prüf-Lebenszyklus, Freigabe je Geltungsbereich (streng, direkt, Promote) | ✅ | ADR-011, ADR-042, CHY-65 |
 | Komposition entlang des Geltungsbereichsbaums mit Privacy-Ratchet und Cache | ✅ | ADR-008/009/010, ADR-017, CHY-62 |
 | Routing-Regeln als geprüfte Blöcke; Datenklassen je Geltungsbereich, Obergrenzen je Modell | ✅ | ADR-037, ADR-041 |
-| Workflow-Runner: Verzweigungen, Zusammenführungen, `human_review`-Gates mit Vier-Augen-Freigabe | ✅ | ADR-028, CHY-127, CHY-176 |
+| Workflow-Runner: Verzweigungen, Zusammenführungen, `human_review`-Gates mit Vier-Augen-Freigabe; wer entscheidet, liest vorher die Ausgaben der Knoten | ✅ | ADR-028, CHY-127, CHY-176, CHY-229 |
 | Append-only Audit-Log (schützt gegen Fehler der Anwendung; gegen die eigene Datenbankrolle → M5, CHY-85); API je Oberfläche (`serve`, `author`, `observe`, `admin`) hinter OpenID Connect | ✅ | Migration 011, ADR-009, ADR-029, ADR-031 |
 | Pilot-Endpunkte `/v1/pilots/*` mit SSE und gespeicherten Ereignissen (`events_json`); Altbestand auf LangGraph, wird auf den Workflow-Runner gezogen | ✅ | ADR-013, ADR-028, CHY-58 |
 | Langfuse-Tracing (optional) | ✅ | ADR-012 |
 | Drift-Erkennung: Kalibrieranker und Messtabellen gespeichert; Läufe, Zeitplan, Läufe bei Änderungen und Signale aus dem Betrieb → M6, Messfühler → M7 | 🔧 | ADR-043, ADR-044, CHY-67/68/64 |
 | Adaption von Prompt und Kontext je Modell | 📋 → M6 | CHY-204 |
-| Installation mit einem Befehl (Docker Compose) | 📋 → M8 | CHY-189 |
+| Installation mit einem Befehl (Docker Compose): lokales Modell, Entwickler-Issuer, Beispiel mit Freigabe; der Durchlauf der Anleitung läuft je MR in der CI | ✅ | CHY-189 |
 
 Die Bausteinsicht (§5) und die Laufzeitsicht (§6) beschreiben die **Ziel-Architektur**; implementierte Teile sind markiert. Diese Trennung ist bewusst: Das Dokument dient zugleich als Referenzarchitektur — für das Whitepaper und für das Buch „Architekturmuster für Enterprise-KI“ (Carl Hanser, erscheint 2027) — und als Bautagebuch. Was bis 1.0 fehlt, steht je Meilenstein im Whitepaper §10.
 
@@ -554,7 +572,7 @@ graph LR
 ### 3.2 Technischer Kontext
 
 Cohereny nutzt ausschließlich Services, die von der **Infrastruktur des Betreibers** bereitgestellt werden.
-Die Konfiguration erfolgt über Umgebungsvariablen und die Datei `router/routing-config.yaml`: Dort steht, welche Modelle erreichbar sind und welche Datenklasse jedes sehen darf (ADR-038).
+Die Konfiguration erfolgt über Umgebungsvariablen und eine `routing-config.yaml`, deren Pfad `ROUTING_CONFIG` nennt (ohne Angabe gilt `router/routing-config.yaml`): Dort steht, welche Modelle erreichbar sind und welche Datenklasse jedes sehen darf (ADR-038).
 Vollständige Konfigurationsreferenz: [`DEPENDENCIES.md`](https://github.com/cohereny/cohereny/blob/main/DEPENDENCIES.md)
 
 #### Abhängigkeits-Tabelle
@@ -573,7 +591,7 @@ Vollständige Konfigurationsreferenz: [`DEPENDENCIES.md`](https://github.com/coh
 
 #### Deployment-Kontext
 
-**Beispiel: die Referenzinstallation.** Die drei Stufen der API (dev, test, prod) und die Referenz-UI laufen als ein Stack auf einem Application-Server; die gemeinsam genutzten Dienste stellt der Betreiber. Stack-Definition (`compose.yaml`) und CI liegen nicht im öffentlichen Repository; veröffentlicht ist das `Dockerfile`, aus dem sich das API-Image bauen lässt. Die Installation mit einem Befehl kommt mit M8 (CHY-189).
+**Beispiel: die Referenzinstallation.** Die drei Stufen der API (dev, test, prod) und die Referenz-UI laufen als ein Stack auf einem Application-Server; die gemeinsam genutzten Dienste stellt der Betreiber. Stack-Definition (`compose.yaml`) und CI liegen nicht im öffentlichen Repository; veröffentlicht ist das `Dockerfile`, aus dem sich das API-Image bauen lässt. Zum Ausprobieren liegt im Repository `deploy/quickstart/`: ein Befehl, alles auf einem Rechner, mit Beispiel und Anleitungen (CHY-189).
 
 ```
 [Internes Netz]
@@ -1978,7 +1996,7 @@ sequenceDiagram
 
 - **Reconnect-Safety:** Events liegen je Lauf als Liste im Prozess-Register (`RunRegistry`), nicht in einer Queue. Jede neue SSE-Verbindung (Page Reload) spielt die History ab cursor=0 ab; erst nach `eof` wird der Speicher freigegeben. Am Laufende werden die Events in `pilot_runs.events_json` geschrieben; einen Lauf, den der Prozess nicht kennt (Neustart, später verbundener Client), spielt der Server von dort ab (CHY-58).
 - **Thread-local Callbacks:** `set_emit` / `set_cancel_event` speichern Callbacks in thread-local Storage, damit LangGraph-Nodes ohne Signaturänderung `try_emit()` und `check_cancel()` aufrufen können.
-- **BFF-Pattern:** Die Referenz-UI (Astro SSR) proxiert alle API-Calls — der Browser spricht nie direkt mit der FastAPI. Token-Handling auf dem Server.
+- **BFF-Pattern:** Die Referenz-UI (Astro SSR) proxiert alle API-Calls — der Browser spricht nie direkt mit der FastAPI. Angemeldet wird über den OIDC-Client der Oberfläche `author` (Authorization Code mit PKCE, ADR-031); Zugriffs- und Refresh-Token liegen in der serverseitigen Sitzung, der Browser hält nur ein httpOnly-Cookie. Jeder Aufruf trägt damit `aud = cohereny.author` und den angemeldeten Nutzer (CHYUI-9).
 
 ### 6.6 Szenario (📋 Referenz-Design): Banking Due Diligence mit hybridem Routing (Ausrichtung DORA)
 
@@ -2189,7 +2207,7 @@ sequenceDiagram
 
 ## 7. Verteilungssicht
 
-> **Beispiel: die Referenzinstallation.** Ihre Stack-Definition (`compose.yaml`) und die Stufen-Vorlagen liegen nicht im öffentlichen Repository; veröffentlicht ist das `Dockerfile` des API-Images (Port 8000). Die Installation mit einem Befehl kommt mit M8 (CHY-189).
+> **Beispiel: die Referenzinstallation.** Ihre Stack-Definition (`compose.yaml`) und die Stufen-Vorlagen liegen nicht im öffentlichen Repository; veröffentlicht ist das `Dockerfile` des API-Images (Port 8000). Zum Ausprobieren liegt im Repository `deploy/quickstart/`: ein Befehl, alles auf einem Rechner, mit Beispiel und Anleitungen (CHY-189).
 
 ### 7.1 Deployment-Topologie
 
@@ -2261,7 +2279,7 @@ In der Referenzinstallation laufen alle Komponenten als Docker-Container auf dem
 ├── compose.yaml          ← API (3 Stages) + PostgreSQL + Redis + UI
 ├── .env                  ← POSTGRES_PASSWORD (Secrets, nie in Git)
 ├── .env.dev / .env.test / .env.prod  ← Stage-spezifische Configs
-└── .env.ui               ← API_URL für die UI
+└── .env.ui               ← API_URL + OIDC-Client der UI (Secret, nie in Git)
 
 <stack>/cohereny-ui/
 └── (geklontes UI-Repository — Build-Context für compose.yaml oben)
@@ -2294,7 +2312,7 @@ In der Referenzinstallation laufen alle Komponenten als Docker-Container auf dem
 
 ### 8.1 Sicherheitskonzept
 
-**Authentifizierung:** Ausschließlich OIDC Bearer Token. Kein API-Key-System, keine Basic Auth. Einzige Ausnahme ist `DEV_MODE` für die lokale Entwicklung: Es schaltet die Authentifizierung ab; der Dienst startet damit nur unter `ENVIRONMENT=dev` und nicht gegen eine Datenbank, deren Name auf `_prod` oder `_test` endet (SECURITY.md, „Known limitations“).
+**Authentifizierung:** Ausschließlich OIDC Bearer Token, auf jeder Stufe. Kein API-Key-System, keine Basic Auth und kein Schalter, der die Prüfung abschaltet; bis CHY-192 gab es dafür `DEV_MODE`. Ohne Token antwortet jede Route außer `/v1/health` mit 401, ein Test über alle Routen hält das fest. Für Entwicklung und CI steht `scripts/dev_issuer.py` an Stelle des Identity Providers: Er stellt Tokens für die acht Issuer aus, ohne Passwörter zu prüfen. Einen Issuer über http nimmt die API deshalb nur unter `ENVIRONMENT=dev` an (SECURITY.md, „Known limitations“).
 
 **Autorisierung:** Die Rolle wird aus dem `groups`-Claim des Tokens abgeleitet — nie aus Request-Parametern; fehlt der Claim, bleibt die gespeicherte Rolle stehen. Die Audience des Tokens muss zur aufgerufenen Oberfläche passen (ADR-031). Den Geltungsbereich nennt die Anfrage (`scope_id`); eine Autorisierung je Geltungsbereich gibt es noch nicht — Rollen gelten für die ganze Installation, Mitgliedschaften werden gespeichert, aber nicht durchgesetzt (SECURITY.md, CHY-92). Verhindert Privilege Escalation durch manipulierte Anfragen.
 
@@ -2391,7 +2409,7 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 
 | Architekturmerkmal                   | Regulatorische Wirkung                                                    |
 | ------------------------------------ | ------------------------------------------------------------------------- |
-| Pflicht-Gate `human_review` in jedem Workflow (Validator, Runner), Vier-Augen-Gates | EU AI Act Art. 14(3)(a) — im Workflow-Weg nicht abschaltbar; `/v1/complete` liefert ohne Gate (→ M5, CHY-199) |
+| Pflicht-Gate `human_review` in jedem Workflow (Validator, Runner), Vier-Augen-Gates; Ausgaben vor der Entscheidung einsehbar (CHY-229) | EU AI Act Art. 14(3)(a), Art. 14(4)(a) — im Workflow-Weg nicht abschaltbar; `/v1/complete` liefert ohne Gate (→ M5, CHY-199) |
 | Drift-Erkennung + `review_needed` (Läufe, Zeitplan, Läufe bei Änderungen → M6, Messfühler → M7; ADR-044) | EU AI Act Art. 9(2)(c), Art. 14(4)(a), Art. 72; MaRisk AT 4.3.4 Tz. 5; DORA Art. 10 |
 | Actor-Pattern (Append-Only)          | DSGVO Art. 25 Privacy by Design; Art. 17 Löschrecht ohne Datenverlust    |
 | OIDC mandatory in prod               | DORA Art. 9; DSGVO Art. 32; BSI ORP.4                                     |
@@ -2591,7 +2609,7 @@ nicht erreichbarer Kollektor bricht keine Anfrage ab (CHY-29).
 
 **Status:** Entschieden
 
-> **Umsetzungsstand (31.10.2026):** Der Fall, für den entschieden wurde — Freigabepflicht nach einer im Benchmark erkannten Regression —, ist nicht gebaut. Ein Feld `human_oversight_required` gibt es nicht; `benchmark_runs.review_needed` steht im Schema (Migration 028), setzen wird es der Lauf (CHY-68), die Freigabe ist CHY-64. Gebaut und nicht abschaltbar ist die Pflicht in Workflows: Der Validator aktiviert keinen Workflow ohne `human_review`, keine Ausgabe eines `llm_call` erreicht das Ende ohne ein `human_review`, und der Runner wartet dort. `/v1/complete` liefert Modellantworten ohne Gate.
+> **Umsetzungsstand (31.10.2026):** Der Fall, für den entschieden wurde — Freigabepflicht nach einer im Benchmark erkannten Regression —, ist nicht gebaut. Ein Feld `human_oversight_required` gibt es nicht; `benchmark_runs.review_needed` steht im Schema (Migration 028), setzen wird es der Lauf (CHY-68), die Freigabe ist CHY-64. Gebaut und nicht abschaltbar ist die Pflicht in Workflows: Der Validator aktiviert keinen Workflow ohne `human_review`, keine Ausgabe eines `llm_call` erreicht das Ende ohne ein `human_review`, und der Runner wartet dort. Was dort entschieden wird, liest der Prüfer seit CHY-229 vorher über `GET /v1/workflows/runs/{id}/nodes`. `/v1/complete` liefert Modellantworten ohne Gate.
 
 **Kontext:** Soll die Pflicht zum Human Review bei Qualitäts-Regressionen konfigurierbar sein?
 
@@ -3946,7 +3964,7 @@ Das ist dasselbe Muster wie die Zonenverstöße, die eingesammelt und nie geprü
 - Komposition **ohne Geltungsbereich** wird abgelehnt statt leer zusammengesetzt. Ein leerer Kontext erreicht ein Modell und sieht dabei aus wie ein echter
 - `llm_call` **ohne Prompt** wird abgelehnt, statt `""` zu senden. Die Gegenprobe zeigt: ohne die Prüfung geht die Anfrage raus und scheitert erst am Gateway — die Meldung nannte dann den Gateway statt den Workflow, dem die Abbildung fehlt
 
-**Folge für den Datenweg.** Nichts verbindet `context_compose` und `llm_call` durch Konvention. Die Kante trägt **Steuerung**, das `input_mapping` trägt **Daten** (ADR-033) — `{"prompt": "<compose-knoten>.prompt"}`, im Workflow benannt und im Graphen sichtbar.
+**Folge für den Datenweg.** Nichts verbindet `context_compose` und `llm_call` durch Konvention. Die Kante trägt **Steuerung**, das `input_mapping` trägt **Daten** (ADR-033) — `{"prompt": "<compose-knoten>.prompt"}`, im Workflow benannt und im Graphen sichtbar. Seit CHY-189 erreicht auch `system` den `llm_call` über das Mapping: `{"system": "compose.prompt", "prompt": "run.message"}` gibt den Kontext als Anweisung und die Eingabe des Laufs als Anfrage, dieselbe Aufteilung wie bei `/v1/complete`.
 
 **Nachweisumfang.** Der Knoten gibt `block_versions` und `scope_generations` mit aus, nicht nur den Prompt. Sie sagen, *was* die Komposition enthielt; ohne sie ist der Lauf nicht reproduzierbar. Ein Nachweis, der nur das Ergebnis nennt, ist ADR-032 mit umgekehrtem Vorzeichen — er sieht vollständig aus und ist nicht prüfbar.
 
@@ -4487,8 +4505,8 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | Autorisierung je Geltungsbereich  | Rollen gelten installationsweit; Mitgliedschaften werden gespeichert, aber nicht durchgesetzt | → M5 (CHY-92) |
 | Vier Augen bei der Block-Freigabe | Autor und Freigebende werden aufgezeichnet; verschiedene Personen sind nicht erzwungen | → M5 (CHY-163), zuerst dort, wo Daten den Ort wechseln: Routing-Regeln und Blöcke mit Datenschutzangabe |
 | Eine Datenbankrolle als Superuser | Die Anwendung könnte die Trigger abschalten; das Audit-Log schützt nur gegen Fehler der Anwendung | → M5 (CHY-85) |
-| `python-jose`                     | Abhängigkeits-Scanner melden Advisories | ersetzen → M7b (CHY-202) |
-| `DEV_MODE`                        | Schaltet die Authentifizierung ab (nur unter `ENVIRONMENT=dev`) | entfernen → M7b (CHY-192) |
+| ~~`python-jose`~~                 | ✅ Ersetzt durch PyJWT (CHY-202): Audience in der Dekodierung, `exp`/`iss`/`aud`/`sub` Pflicht; Token-Prüfung getestet (CHY-93) | erledigt |
+| ~~`DEV_MODE`~~                    | ✅ Entfernt (CHY-192): jede Stufe prüft Tokens, Entwicklung und CI nutzen den lokalen Entwickler-Issuer | erledigt |
 | Tag-Filter der Komposition        | `required_tags`/`exclude_tags` stehen im Modell, nicht im Code | nach 1.0 (CHY-147) |
 
 ### 11.3 Compliance-Risiken
@@ -4601,7 +4619,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 
 | Anforderung                                   | Status | Cohereny-Feature                             | Lücke                                                           |
 | --------------------------------------------- | ------ | -------------------------------------- | ---------------------------------------------------------------- |
-| Anhang I Teil I Nr. 2 Buchst. b: Secure by Default | ⚠️ | `DEV_MODE` ab Werk aus und außerhalb von `ENVIRONMENT=dev` verweigert; OIDC Pflicht | Anwendung verbindet sich mit der mitgelieferten Einrichtung als Superuser → M5 (CHY-85); `DEV_MODE` entfernen → M7b (CHY-192); Voreinstellung von `DATABASE_URL` mit Entwicklungs-Zugangsdaten |
+| Anhang I Teil I Nr. 2 Buchst. b: Secure by Default | ⚠️ | OIDC Pflicht auf jeder Stufe, kein Schalter zum Abschalten (CHY-192); `ENVIRONMENT` ab Werk `prod`, ein Issuer über http nur unter `ENVIRONMENT=dev` | Anwendung verbindet sich mit der mitgelieferten Einrichtung als Superuser → M5 (CHY-85); Voreinstellung von `DATABASE_URL` mit Entwicklungs-Zugangsdaten |
 | Anhang I Teil I Nr. 2 Buchst. d: Zugriffsschutz | ⚠️ | OIDC (getestet mit Authentik); Rollen aus dem Gruppen-Claim, Audience je Oberfläche (ADR-031) | Rollen gelten installationsweit, keine Autorisierung je Geltungsbereich → M5 (CHY-92) |
 | Anhang I Teil I Nr. 2 Buchst. c: Sicherheitsupdates | ⚠️ | Korrekturen fließen in die laufende Entwicklungslinie und erscheinen als neuer Stand des Repositorys (`SECURITY.md`) | Keine Release-Zweige, keine Backports; Patch-SLA und Unterstützungszeitraum → M7b (CHY-12, CHY-149) |
 | Anhang I Teil I Nr. 2 Buchst. a: Keine bekannten ausnutzbaren Schwachstellen | ⚠️ | Basis-Image `python:3.14-slim`; pip-audit auf die Abhängigkeiten in CI | Prüfungen blockieren nicht; Container Scanning prüft ein anderes Basis-Image als das Dockerfile (CHY-198); kein Digest-Pinning → M7b (CHY-14) |
@@ -4647,7 +4665,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | ORP.4 IAM                                                 | ⚠️     | OIDC; Rollen aus dem Gruppen-Claim; Actor-Pattern              | Keine Autorisierung je Geltungsbereich → M5 (CHY-92); Vier Augen bei der Block-Freigabe → M5 (CHY-163) |
 | OPS.1.1.5 Protokollierung                                 | ⚠️     | Audit-Log; Langfuse-Traces (optional)                          | Kein formales Log-Konzept, keine Aufbewahrungsdauer → M5 (CHY-6, CHY-17)        |
 | APP.3.1 Webanwendungen                                    | ⚠️   | FastAPI + OIDC + Pydantic Input-Validierung ✅                 | Kein WAF; dynamische API-Tests mit Schemathesis in CI, kein Sicherheitsscanner; WAF/DAST → M7b (CHY-7) |
-| SYS.1.6 Containerisierung                                 | ⚠️   | Dockerfile auf `python:3.14-slim`; Einrichtung mit Docker Compose → M8 (CHY-189) | Kein Image-Signing, kein Digest-Pinning → M7b (CHY-14)                          |
+| SYS.1.6 Containerisierung                                 | ⚠️   | Dockerfile auf `python:3.14-slim`; Schnellstart mit Docker Compose (`deploy/quickstart/`, CHY-189) | Kein Image-Signing, kein Digest-Pinning → M7b (CHY-14)                          |
 | CON.1 Kryptokonzept                                       | ❌     | TLS am Reverse Proxy des Betreibers; die Anwendung selbst spricht HTTP                                    | Kein dokumentiertes Kryptokonzept, keine at-rest-Verschlüsselung → M5 (CHY-15); nur verschlüsselte Verbindungen → M7b (CHY-195) |
 | OPS.1.1.3 Patch Management                                | ⚠️   | Sicherheitskorrekturen in der laufenden Entwicklungslinie (`SECURITY.md`) | CVE-Prüfung (pip-audit, Container Scanning) nur meldend (CHY-198); Patch-SLA → M7b (CHY-12) |
 | BSI Kriterienkatalog KI (Juni 2025): Menschliche Aufsicht | ⚠️     | Pflicht-Gate `human_review` im Workflow-Runner                 | `/v1/complete` ohne Gate → M5 (CHY-199); Abbruch von Workflow-Läufen → M5 (CHY-200) |

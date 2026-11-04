@@ -4,11 +4,11 @@
 
 **SHAPE · ADAPT · LEARN · REPEAT**
 
-## Version 4.26
+## Version 4.30
 
 > **Projekt:** cohereny.com
 > **Status:** Pre-Release (vor 1.0)
-> **Datum:** 2026-11-03
+> **Datum:** 2026-11-04
 > **Autor:** Thomas Roth
 > **Lizenz:** AGPLv3 + Commercial License
 
@@ -21,6 +21,19 @@
 >
 > **Ziel und Stand:** Cohereny ist ein Pre-Release. Das Whitepaper beschreibt das Ziel 1.0; was
 > heute fehlt, trägt den Meilenstein, der es bringt (→ M5 … M8, Übersicht in §10).
+
+**Änderungen v4.29 → v4.30 (2026-11-04) — CHY-189, CHY-229: Schnellstart, Einsicht am Gate:**
+- **§10 (M5), Anhang A (BSI SYS.1.6):** Installation mit einem Befehl ✅ (CHY-189), mit lokalem Modell, Entwickler-Issuer und einem Beispiel mit Freigabe (arc42 v2.52).
+- **§5.2, §5.4, §10:** Wer am `human_review`-Gate entscheidet, liest vorher die Ausgaben der Knoten ✅ (CHY-229). Bis dahin gab der Prüfer frei, ohne den Entwurf zu sehen.
+
+**Änderungen v4.28 → v4.29 (2026-11-04) — CHY-192: `DEV_MODE` entfernt:**
+- **§9, §10 (M5), Anhang A (DSGVO Art. 32, CRA Anhang I Teil I Nr. 2 Buchst. b):** `DEV_MODE` entfernt ✅. Jede Stufe prüft Tokens, eine Ausnahme gibt es nicht mehr. Entwicklung und CI holen Tokens beim lokalen Entwickler-Issuer (`scripts/dev_issuer.py`), den die API nur unter `ENVIRONMENT=dev` annimmt (arc42 v2.51 §8.1).
+
+**Änderungen v4.27 → v4.28 (2026-11-03) — CHY-225: Weg zu 1.0 neu geordnet:**
+- **§10:** Die Meilensteine laufen nacheinander, M5 vor M6, M7 und M7b. Was eine Frist hat oder seit der Veröffentlichung gilt, kommt in Q4/2026 parallel zu M5: Meldeprozess (CHY-16), Coordinated Vulnerability Disclosure (CHY-20), Kennzeichnung nach Art. 50(2) (CHY-118). M7b damit Q1/2027. `DEV_MODE` entfernen (CHY-192) und die Installation mit einem Befehl (CHY-189) nach M5, auch in den Regulatorik-Tabellen (DSGVO Art. 32, CRA Anhang I, BSI SYS.1.6); Anmeldung der Referenz-UI über den Identity Provider ✅ (CHYUI-9). Die Quartale sind Zusagen, nicht der knappste Plan.
+
+**Änderungen v4.26 → v4.27 (2026-11-03) — CHY-202, CHY-93: python-jose ersetzt:**
+- **§10, M7b:** `python-jose` ersetzt ✅. PyJWT prüft die Tokens, `exp`, `iss`, `aud` und `sub` sind Pflicht; die Token-Prüfung ist getestet (CHY-93).
 
 **Änderungen v4.25 → v4.26 (2026-11-03) — CHY-181, CHY-220: Drift-Erkennung:**
 - **Drift-Erkennung ist Ziel 1.0** (arc42 ADR-044): drei Ursachen — Modell, eigener Kontext, veränderte Eingaben —, vier Wege: Läufe bei Änderungen mit Probelauf vor der Freigabe, Nachtlauf nach Zeitplan (einstellbar, Vorgabe nächtlich), Signale aus dem Betrieb, ab M7 ein Messfühler mit Einbettungen. Jede Meldung beurteilt ein Mensch. „Auf Abruf statt nächtlich“ beschrieb die Referenzinstallation, nicht das Produkt; CHY-181 von „Nach 1.0“ nach M6. Neu angelegt: CHY-217 bis CHY-220.
@@ -1094,7 +1107,7 @@ Mehrere Cohereny-Kernfeatures adressieren regulatorische Anforderungen direkt �
 
 | Feature | Regulatorische Wirkung |
 |---|---|
-| **Pflichtknoten `human_review` im Workflow-Runner** | EU AI Act Art. 14(3)(a): technisch erzwungen, nicht abschaltbar — kein Workflow ohne ihn aktivierbar, kein Pfad von einem `llm_call` endet ohne ihn, `four_eyes`-Gates verlangen zwei Personen. Gilt für Workflows: `/v1/complete` liefert Modellantworten ohne Gate (→ M5, CHY-199); Workflow-Läufe lassen sich noch nicht abbrechen (→ M5, CHY-200); die Freigabe nach einer Regression → M6 (CHY-64) |
+| **Pflichtknoten `human_review` im Workflow-Runner** | EU AI Act Art. 14(3)(a): technisch erzwungen, nicht abschaltbar — kein Workflow ohne ihn aktivierbar, kein Pfad von einem `llm_call` endet ohne ihn, `four_eyes`-Gates verlangen zwei Personen; was entschieden wird, ist vorher einsehbar (CHY-229). Gilt für Workflows: `/v1/complete` liefert Modellantworten ohne Gate (→ M5, CHY-199); Workflow-Läufe lassen sich noch nicht abbrechen (→ M5, CHY-200); die Freigabe nach einer Regression → M6 (CHY-64) |
 | **Drift-Erkennung** (🔧: Anker und Messtabellen gebaut; Läufe, Zeitplan, Läufe bei Änderungen, Signale aus dem Betrieb und Freigabe → M6, Messfühler → M7; CHY-68, CHY-181, CHY-217, CHY-218, CHY-219, CHY-64) | EU AI Act Art. 9(2)(c), Art. 14(4)(a) und Art. 72; MaRisk AT 4.3.4 Tz. 5 (regelmäßige Analyse der Modellergebnisse); DORA Art. 10 Detektion |
 | **Actor-Pattern** | DSGVO Art. 25 (Privacy by Design); Löschrecht ohne Fachhistorie-Verlust |
 | **Append-Only Audit Trail** (gegen Fehler der Anwendung; gegen die eigene Datenbankrolle → M5, CHY-85) | DSGVO Art. 30 (VVT); DelVO (EU) 2024/1774 Art. 12 (Protokollierung, RTS zu DORA); MaRisk AT 4.3.4 (Modell-Governance) |
@@ -1156,7 +1169,7 @@ flowchart TD
     class HUMAN,REVIEW danger
 ```
 
-**Human Oversight ist nicht abschaltbar — gebaut ist es im Workflow-Runner.** Der Validator aktiviert keinen Workflow ohne `human_review`-Knoten, kein Pfad von einem `llm_call` endet ohne ihn, der Lauf hält dort an, bis ein Mensch entscheidet, und `four_eyes`-Gates verlangen zwei verschiedene Personen; konfigurierbar ist das nicht. `/v1/complete` liefert Modellantworten ohne Gate (→ M5, CHY-199). Für den Benchmark ist vorgesehen, dass eine erkannte Regression erst weitergilt, wenn ein Mensch bestätigt, dass sie bekannt und akzeptiert ist oder untersucht wird (CHY-64). Rationale: AI Act Art. 14 fordert menschliche Aufsicht bei Hochrisiko-Systemen; Cohereny implementiert dies als nicht abschaltbaren Sicherheits-Anker.
+**Human Oversight ist nicht abschaltbar — gebaut ist es im Workflow-Runner.** Der Validator aktiviert keinen Workflow ohne `human_review`-Knoten, kein Pfad von einem `llm_call` endet ohne ihn, der Lauf hält dort an, bis ein Mensch entscheidet, und `four_eyes`-Gates verlangen zwei verschiedene Personen; konfigurierbar ist das nicht. Wer entscheidet, liest vorher, was die Knoten erzeugt haben (CHY-229). `/v1/complete` liefert Modellantworten ohne Gate (→ M5, CHY-199). Für den Benchmark ist vorgesehen, dass eine erkannte Regression erst weitergilt, wenn ein Mensch bestätigt, dass sie bekannt und akzeptiert ist oder untersucht wird (CHY-64). Rationale: AI Act Art. 14 fordert menschliche Aufsicht bei Hochrisiko-Systemen; Cohereny implementiert dies als nicht abschaltbaren Sicherheits-Anker.
 
 **Qualitätsmessung: Dreistufige Validator-Pyramide (ADR-006)**
 
@@ -1995,7 +2008,7 @@ nicht ansprechen, statt erst an der Rollenprüfung zu scheitern.
 
 ### 9.2 Festlegungen, die gelten
 
-- **Alles unter `/v1/`.** Authentifizierung über OIDC Bearer Token, getestet mit Authentik (arc42 §4 E4; Audience je Oberfläche, ADR-031). Einzige Ausnahme ist `DEV_MODE` für die lokale Entwicklung: Er schaltet die Authentifizierung ab und wird außerhalb von `ENVIRONMENT=dev` verweigert (SECURITY.md)
+- **Alles unter `/v1/`.** Authentifizierung über OIDC Bearer Token, getestet mit Authentik (arc42 §4 E4; Audience je Oberfläche, ADR-031). Ohne Ausnahme: Einen Schalter, der die Authentifizierung abschaltet, gibt es seit CHY-192 nicht mehr; für Entwicklung und CI stellt ein lokaler Entwickler-Issuer die Tokens aus (SECURITY.md)
 - **Geplant heißt 501, nicht 200.** Eine Operation, die Erfolg meldet und nichts tut, ist
   schädlicher als eine fehlende: sie begründet Vertrauen, das sie nicht trägt
 - **Fehler sind Teil des Contracts** dort, wo der Fehler *die* Wirkung ist — der
@@ -2019,16 +2032,17 @@ Beide Phasen sind gebaut; Modelle ruft daneben auch der Workflow-Runner auf (`PO
 > unter dem es läuft (die Kennungen erklärt die README; der Tracker selbst ist nicht öffentlich).
 > Termine als Quartal; die Roadmap auf cohereny.com zeigt dieselben Phasen. Abgeschlossene
 > Meilensteine (bis M4: Kontext-Repository, Domänenschnitt, Komposition und Runner) stehen nicht
-> mehr hier. M7b kommt zuerst: Die Herstellerpflichten nach dem CRA gelten ab der Veröffentlichung.
-> Stand 01.11.2026.
+> mehr hier. Die Quartale sind Zusagen, nicht der knappste Plan. Die Meilensteine laufen nacheinander;
+> was eine Frist hat oder seit der Veröffentlichung gilt, kommt parallel zu M5 in Q4/2026.
+> Stand 03.11.2026.
 
 | Meilenstein | Quartal | Schließt unter anderem |
 |---|---|---|
-| **M7b — Produktsicherheit & CRA** | Q4/2026 | Meldeprozess nach CRA Art. 14 (CHY-16), Unterstützungszeitraum (CHY-149), Patch-SLA (CHY-12), SBOM ✅ (CHY-22); Kennzeichnung nach Art. 50(2) (CHY-118), TransparencyRecord für Workflow-Läufe und `/v1/complete` (CHY-201); WAF/DAST (CHY-7), Image-Signing und Digest-Pinning (CHY-14), Prompt-Injection-Schutz im Runner (CHY-5); `python-jose` ersetzen (CHY-202), `DEV_MODE` entfernen (CHY-192), Betrieb nur mit verschlüsselten Verbindungen (CHY-195) |
-| **M5 — Governance & Datenschutz** | Q4/2026 | Autorisierung je Geltungsbereich (CHY-92), vier Augen bei der Block-Freigabe (CHY-163), eigene Datenbankrolle statt Superuser (CHY-85); `/v1/complete` und die Freigabepflicht (CHY-199), Abbruch von Workflow-Läufen (CHY-200); PII-Redaction (CHY-63), Aufbewahrungsfristen (CHY-17), Restarbeiten Art. 17 (CHY-19), Kryptokonzept (CHY-15), Log-Konzept (CHY-6), DPIA vor einem Einsatz mit Patientendaten (CHY-18); Validatoren im Runner (CHY-175) |
+| **M5 — Governance & Datenschutz** | Q4/2026 | Autorisierung je Geltungsbereich (CHY-92), vier Augen bei der Block-Freigabe (CHY-163), eigene Datenbankrolle statt Superuser (CHY-85); `/v1/complete` und die Freigabepflicht (CHY-199), Abbruch von Workflow-Läufen (CHY-200); PII-Redaction (CHY-63), Aufbewahrungsfristen (CHY-17), Restarbeiten Art. 17 (CHY-19), Kryptokonzept (CHY-15), Log-Konzept (CHY-6), DPIA vor einem Einsatz mit Patientendaten (CHY-18); Validatoren im Runner (CHY-175); `DEV_MODE` entfernt ✅ (CHY-192), Installation mit einem Befehl ✅ (CHY-189), Einsicht in die Ausgaben am Gate ✅ (CHY-229) |
 | **M6 — Benchmark & Nachweis** | Q1/2027 | Benchmark-Läufe mit Wiederholungen und Drift gegen eine Baseline-Spanne (CHY-68), nach Zeitplan (CHY-181) und bei Änderungen mit Probelauf vor der Freigabe (CHY-217), Signale aus dem Betrieb (CHY-218); A/B-Modus, `adaptation_gain` und Freigabe nach einer Regression (CHY-64); Adaptions-Engine mit Modell-Profilen und Übersetzungsregeln (CHY-204), Varianten-Erzeugung (CHY-69), DPO-Pipeline und internes Validierungsmodell (CHY-70); Model Sunset (CHY-158), Feedback-Protokoll (ADR-021, CHY-40); Banking-Pilot auf den eigenen Runner (CHY-172) |
-| **M7 — Integration & UI** | Q1/2027 | Referenz-UI: Freigabe im Browser (CHYUI-3), Tests (CHYUI-8), Anmeldung ohne statischen Token (CHYUI-9), Benachrichtigungen (CHYUI-2); öffentliche Bundles (CHY-25); Datenmodell-Übersicht statt Kurzreferenz in §8 (CHY-207); englische Fassung von Whitepaper und arc42 (CHY-66); Messfühler für Drift mit Einbettungen (CHY-219) |
-| **M8 — v1.0** | Q1/2027 | Installation mit einem Befehl (CHY-189), Veröffentlichung der Referenz-UI (CHYUI-11); Drift-Erkennung abgenommen: vorgeführter Fehlerfall je Ursache (CHY-220); erstes getaggtes Release |
+| **M7 — Integration & UI** | Q1/2027 | Referenz-UI: Freigabe im Browser (CHYUI-3), Tests (CHYUI-8), Anmeldung über den Identity Provider ✅ (CHYUI-9), Benachrichtigungen (CHYUI-2); öffentliche Bundles (CHY-25); Datenmodell-Übersicht statt Kurzreferenz in §8 (CHY-207); englische Fassung von Whitepaper und arc42 (CHY-66); Messfühler für Drift mit Einbettungen (CHY-219) |
+| **M7b — Produktsicherheit & CRA** | Q1/2027, Fristsachen Q4/2026 | Meldeprozess nach CRA Art. 14 (CHY-16, Q4/2026), Coordinated Vulnerability Disclosure (CHY-20, Q4/2026), Unterstützungszeitraum (CHY-149), Patch-SLA (CHY-12), SBOM ✅ (CHY-22); Kennzeichnung nach Art. 50(2) (CHY-118, Q4/2026), TransparencyRecord für Workflow-Läufe und `/v1/complete` (CHY-201); WAF/DAST (CHY-7), Image-Signing und Digest-Pinning (CHY-14), Prompt-Injection-Schutz im Runner (CHY-5); `python-jose` ersetzt ✅ (CHY-202), Betrieb nur mit verschlüsselten Verbindungen (CHY-195) |
+| **M8 — v1.0** | Q1/2027 | Veröffentlichung der Referenz-UI (CHYUI-11); Drift-Erkennung abgenommen: vorgeführter Fehlerfall je Ursache (CHY-220); erstes getaggtes Release |
 | **Nach 1.0** | — | Chat-Oberfläche mit geteiltem Kontext (v1.1, CHY-50), ausführbare Sub-Workflows (CHY-205), Multimodalität (CHY-206), Bootstrap-Templates (CHY-209), Tag-Filter der Komposition (CHY-147); Betreiberunterlagen: Instructions for Use (CHY-203), BCP, VVT, Pre-Deployment-Assessment, Stilllegung (CHY-8 bis CHY-11), SaMD-Entscheidung (CHY-4) |
 
 > **Bis v4.23 stand hier eine Tabelle M1/M2** mit internen Zeitfenstern und vielem, was zum
@@ -2310,7 +2324,7 @@ Begründungen und Detailentscheidungen stehen in den ADRs in arc42.
 | Art. 17 Recht auf Löschung | ⚠️ | Actor-Anonymisierung per `POST /v1/admin/actors/{actor_ref}/anonymize` (Pseudonymisierung, ADR-016, CHY-34) | Payloads (Prompts, Ergebnisse, Langfuse-Traces) nicht erfasst → M5: PII-Redaction (ADR-018, CHY-63), Aufbewahrungsfristen (CHY-17), Restarbeiten Art. 17 (CHY-19) |
 | Art. 25 Privacy by Design | ✅ | Actor-Pattern als Kern-Architekturmuster: der Personenbezug der Handelnden ist von den Fachdaten getrennt | — |
 | Art. 30 Verzeichnis Verarbeitungstätigkeiten | ❌ | — | Kein maschinenlesbares VVT; organisatorische Aufgabe des Betreibers; Checkliste nach 1.0 (CHY-10) |
-| Art. 32 Technische Sicherheitsmaßnahmen | ⚠️ | OIDC Pflicht (Ausnahme `DEV_MODE`, nur in Entwicklung); Append-only Audit-Log (gegen Fehler der Anwendung) | TLS terminiert der Reverse Proxy des Betreibers, die Anwendung spricht HTTP — Betrieb nur mit verschlüsselten Verbindungen → M7b (CHY-195); Audit-Log gegen die eigene Datenbankrolle → M5 (CHY-85); at-rest-Verschlüsselung beim Betreiber, Kryptokonzept → M5 (CHY-15); `DEV_MODE` entfernen → M7b (CHY-192) |
+| Art. 32 Technische Sicherheitsmaßnahmen | ⚠️ | OIDC Pflicht auf jeder Stufe, ohne Abschaltung (CHY-192); Append-only Audit-Log (gegen Fehler der Anwendung) | TLS terminiert der Reverse Proxy des Betreibers, die Anwendung spricht HTTP — Betrieb nur mit verschlüsselten Verbindungen → M7b (CHY-195); Audit-Log gegen die eigene Datenbankrolle → M5 (CHY-85); at-rest-Verschlüsselung beim Betreiber, Kryptokonzept → M5 (CHY-15) |
 | Art. 35 Datenschutz-Folgenabschätzung (DPIA) | ❌ | — | **Kritisch:** DPIA erforderlich vor einem Einsatz mit Patientendaten (Arztbrief-Szenario, Kapitel 13) → M5 (CHY-18) |
 | NIS2 Sicherheitsanforderungen | ⚠️ | Self-hosted ohne Cloud-Abhängigkeit ✅; Authentik OIDC ✅ | Keine NIS2-Pflicht für Cohereny selbst; indirekt über Betreiber in NIS2-Sektoren |
 
@@ -2342,7 +2356,7 @@ Begründungen und Detailentscheidungen stehen in den ADRs in arc42.
 
 | Anforderung | Status | Cohereny-Feature | Lücke |
 |---|---|---|---|
-| Anhang I Teil I Nr. 2 Buchst. b: Secure by Default | ⚠️ | `DEV_MODE` ab Werk aus und außerhalb von `ENVIRONMENT=dev` verweigert; OIDC Pflicht | Anwendung verbindet sich mit der mitgelieferten Einrichtung als Superuser → M5 (CHY-85); `DEV_MODE` entfernen → M7b (CHY-192); Voreinstellung von `DATABASE_URL` mit Entwicklungs-Zugangsdaten |
+| Anhang I Teil I Nr. 2 Buchst. b: Secure by Default | ⚠️ | OIDC Pflicht auf jeder Stufe, kein Schalter zum Abschalten (CHY-192); `ENVIRONMENT` ab Werk `prod`, ein Issuer über http nur unter `ENVIRONMENT=dev` | Anwendung verbindet sich mit der mitgelieferten Einrichtung als Superuser → M5 (CHY-85); Voreinstellung von `DATABASE_URL` mit Entwicklungs-Zugangsdaten |
 | Anhang I Teil I Nr. 2 Buchst. d: Zugriffsschutz | ⚠️ | OIDC (getestet mit Authentik); Rollen aus dem Gruppen-Claim, Audience je Oberfläche (ADR-031) | Rollen gelten installationsweit, keine Autorisierung je Geltungsbereich → M5 (CHY-92) |
 | Anhang I Teil I Nr. 2 Buchst. c: Sicherheitsupdates | ⚠️ | Korrekturen fließen in die laufende Entwicklungslinie und erscheinen als neuer Stand des Repositorys (`SECURITY.md`) | Keine Release-Zweige, keine Backports, kein Update-Mechanismus; Patch-SLA und Unterstützungszeitraum → M7b (CHY-12, CHY-149) |
 | Anhang I Teil I Nr. 2 Buchst. a: Keine bekannten ausnutzbaren Schwachstellen | ⚠️ | Basis-Image `python:3.14-slim`; pip-audit auf die Abhängigkeiten in CI | Prüfungen blockieren nicht; Container Scanning prüft ein anderes Basis-Image als das Dockerfile (CHY-198); kein Digest-Pinning → M7b (CHY-14) |
@@ -2392,7 +2406,7 @@ Begründungen und Detailentscheidungen stehen in den ADRs in arc42.
 | ORP.4 IAM | ⚠️ | OIDC; Bearer Token Pflicht; Rollen aus dem Gruppen-Claim; Actor-Pattern | Keine Autorisierung je Geltungsbereich → M5 (CHY-92); vier Augen bei der Block-Freigabe → M5 (CHY-163) |
 | OPS.1.1.5 Protokollierung | ⚠️ | Audit-Log; Langfuse-Traces (optional); Actor-UUID bei jeder Zustandsänderung; lesende Aufrufe nicht protokolliert | Kein formales Log-Konzept, keine definierte Aufbewahrungsdauer → M5 (CHY-6, CHY-17) |
 | APP.3.1 Webanwendungen | ⚠️ | FastAPI mit OIDC-Schutz; Pydantic Input-Validierung ✅ | Kein WAF; dynamische API-Tests mit Schemathesis in CI, kein Sicherheitsscanner; WAF/DAST → M7b (CHY-7); keine formale API-Sicherheitsdokumentation |
-| SYS.1.6 Containerisierung | ⚠️ | Dockerfile auf `python:3.14-slim`; Einrichtung mit Docker Compose → M8 (CHY-189) | Kein Image-Signing, kein Digest-Pinning → M7b (CHY-14); kein CIS-Benchmark-Scan |
+| SYS.1.6 Containerisierung | ⚠️ | Dockerfile auf `python:3.14-slim`; Schnellstart mit Docker Compose (`deploy/quickstart/`, CHY-189) | Kein Image-Signing, kein Digest-Pinning → M7b (CHY-14); kein CIS-Benchmark-Scan |
 | CON.1 Kryptokonzept | ❌ | TLS am Reverse Proxy des Betreibers; die Anwendung selbst spricht HTTP | Kein dokumentiertes Kryptokonzept, keine at-rest-Verschlüsselung → M5 (CHY-15); nur verschlüsselte Verbindungen → M7b (CHY-195) |
 | OPS.1.1.3 Patch Management | ⚠️ | Korrekturen als neuer Stand des Repositorys (SECURITY.md) | CVE-Prüfung (pip-audit, Container Scanning) nur meldend (CHY-198); Patch-SLA → M7b (CHY-12) |
 | **BSI Kriterienkatalog KI (Juni 2025)** | | | |

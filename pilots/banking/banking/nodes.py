@@ -89,12 +89,12 @@ def try_emit(event: dict) -> None:
         fn(event)
 
 
-def set_dev_mode(enabled: bool) -> None:
-    _ctx.dev_mode = enabled
+def set_node_metrics(enabled: bool) -> None:
+    _ctx.node_metrics = enabled
 
 
-def is_dev_mode() -> bool:
-    return getattr(_ctx, "dev_mode", False)
+def node_metrics_enabled() -> bool:
+    return getattr(_ctx, "node_metrics", False)
 
 
 # How long the gate waits for a human before giving up. Reaching this is not
@@ -196,7 +196,7 @@ def _call(model: str, system: str, user: str, max_tokens: int = 2048, _node: str
             f"Increase max_tokens for this node."
         )
 
-    if is_dev_mode():
+    if node_metrics_enabled():
         try_emit({
             "type": "node_metrics",
             "node": _node,

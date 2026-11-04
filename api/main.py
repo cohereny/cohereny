@@ -7,14 +7,15 @@ On startup the PostgreSQL connection pool and Redis connection are initialized
 (lifespan context manager). On shutdown both are closed cleanly to prevent
 connection leaks in the asyncio environment.
 
-OpenAPI docs (Swagger UI / ReDoc) are only active in dev mode — in prod an
-unauthenticated endpoint exposing internal schema details would be a security risk.
+OpenAPI docs (Swagger UI / ReDoc / openapi.json) are served only with
+API_DOCS=true. They are unauthenticated, so serving them is a deployment's
+decision, not a default.
 
 Called by:
   - uvicorn (entrypoint: api.main:app)
 
 Dependencies:
-  - api.config      (Settings, api_version, dev_mode)
+  - api.config      (Settings, api_version, api_docs)
   - api.v1.router   (all /v1/* endpoints)
   - core.db         (asyncpg pool management)
   - core.redis      (aioredis connection management)
@@ -154,14 +155,14 @@ app = FastAPI(
     # No `servers`: every deployment has its own address. The list used to name
     # the reference installation's three stages, and every generated contract
     # carried those internal hostnames with it (CHY-188).
-    docs_url="/docs" if settings.dev_mode else None,
-    redoc_url="/redoc" if settings.dev_mode else None,
-    # Gated with the other two. The docstring above has always said the schema
-    # is dev-only "because an unauthenticated endpoint exposing internal schema
-    # details would be a security risk" — but /openapi.json kept its default and
-    # served exactly that in production. Swagger UI was hidden; the data behind
-    # it was not (CHY-28).
-    openapi_url="/openapi.json" if settings.dev_mode else None,
+    # Own switch since CHY-192. They hung on dev_mode before, so reading the
+    # docs on a running instance meant turning authentication off.
+    docs_url="/docs" if settings.api_docs else None,
+    redoc_url="/redoc" if settings.api_docs else None,
+    # Gated with the other two. /openapi.json once kept its default and served
+    # the schema in production while Swagger UI was hidden — the page was
+    # gone, the data behind it was not (CHY-28).
+    openapi_url="/openapi.json" if settings.api_docs else None,
     lifespan=lifespan,
 )
 

@@ -82,13 +82,12 @@ async def start_run(
         # overrode one. It is derived from the effective configuration now, and
         # recorded alongside it.
         #
-        # settings.dev_mode, not the COHERENY_DEV_MODE the executor used to
-        # read for itself (CHY-96). That variable existed in no file of this
-        # repository — only in the dev stage's .env, where DEV_MODE=true anyway. Two
-        # switches for one concept, and the second one undiscoverable from the
-        # code. They agree today; that is the definition of the problem, not a
-        # reason to keep it.
-            dev_mode=settings.dev_mode,
+        # From settings, not from a COHERENY_DEV_MODE the executor used to read
+        # for itself (CHY-96): that variable existed in no file of this
+        # repository, only in the dev stage's .env. Its own switch since
+        # CHY-192 — before, measuring token usage came bundled with turning
+        # authentication off.
+            node_metrics=settings.pilot_node_metrics,
         ),
     )
 

@@ -23,7 +23,7 @@ from api.config import settings
 from contexts.pilots.registry import registry
 from core.db import get_pool
 from core.redis import get_redis
-from tests.conftest import actor_row, make_pool, make_redis
+from tests.conftest import actor_row, as_caller, make_pool, make_redis
 
 _stub_user = CurrentUser(sub="test-sub", username="testuser")
 _RUN_ID = uuid4()
@@ -75,7 +75,7 @@ def _make_pool(**kw) -> MagicMock:
 
 
 def _make_client(pool=None, redis=None) -> TestClient:
-    app.dependency_overrides[require_auth] = lambda: _stub_user
+    app.dependency_overrides[require_auth] = as_caller(_stub_user)
     app.dependency_overrides[get_pool] = lambda: (pool if pool is not None else _make_pool())
     # Starting a run reads the workflow configuration, which prefers Redis
     # (CHY-42). make_redis() misses on every key, so the tests take the

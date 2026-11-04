@@ -19,7 +19,7 @@ from api.main import app
 from api.deps import require_auth, CurrentUser
 from core.db import get_pool
 from core.redis import get_redis
-from tests.conftest import actor_row, make_pool, make_redis
+from tests.conftest import actor_row, as_caller, make_pool, make_redis
 
 # --- Test fixtures ---
 
@@ -81,7 +81,7 @@ def _make_pool(
 
 
 def _make_client(pool: MagicMock) -> TestClient:
-    app.dependency_overrides[require_auth] = lambda: _stub_user
+    app.dependency_overrides[require_auth] = as_caller(_stub_user)
     app.dependency_overrides[get_pool] = lambda: pool
     # DELETE bumps the scope generation counter so the compiled-context cache
     # stops serving a block that was just retired (CHY-61, ADR-010).
@@ -373,7 +373,7 @@ def test_delete_block_invalidates_the_compiled_cache():
         conn_fetch=[{"id": _ROW_ID, "version": 1, "status": "active", "scope_id": _SCOPE_ID}],
     )
     redis = _make_redis()
-    app.dependency_overrides[require_auth] = lambda: _stub_user
+    app.dependency_overrides[require_auth] = as_caller(_stub_user)
     app.dependency_overrides[get_pool] = lambda: pool
     app.dependency_overrides[get_redis] = lambda: redis
     try:
@@ -388,7 +388,7 @@ def test_delete_block_missing_does_not_bump_the_cache():
     """Nothing changed, so nothing should be invalidated."""
     pool = make_pool(actor=actor_row(role="reviewer"), conn_fetch=[])
     redis = _make_redis()
-    app.dependency_overrides[require_auth] = lambda: _stub_user
+    app.dependency_overrides[require_auth] = as_caller(_stub_user)
     app.dependency_overrides[get_pool] = lambda: pool
     app.dependency_overrides[get_redis] = lambda: redis
     try:

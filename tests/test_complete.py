@@ -24,7 +24,7 @@ from api.main import app
 from api.deps import require_auth, CurrentUser
 from core.db import get_pool
 from core.redis import get_redis
-from tests.conftest import make_pool, make_redis
+from tests.conftest import as_caller, make_pool, make_redis
 
 _stub_user = CurrentUser(sub="test-sub", username="testuser")
 _SCOPE_ID = uuid4()
@@ -97,7 +97,7 @@ def _make_pool(fetch_return=None, scope_exists=True) -> MagicMock:
 
 
 def _make_client(pool=None, redis=None) -> TestClient:
-    app.dependency_overrides[require_auth] = lambda: _stub_user
+    app.dependency_overrides[require_auth] = as_caller(_stub_user)
     app.dependency_overrides[get_pool] = lambda: (pool if pool is not None else _make_pool())
     app.dependency_overrides[get_redis] = lambda: redis if redis is not None else make_redis()
     return TestClient(app)

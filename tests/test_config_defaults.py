@@ -11,7 +11,7 @@ trustworthy as the channel that delivered the signing key.
 
 It had made no practical difference, which is its own story: the provider does
 not exist in Authentik (CHY-79/INFRA-92), both schemes answer 404, and nobody
-noticed because DEV_MODE=true skips validation on dev (CHY-91). Three defects
+noticed because DEV_MODE=true skipped validation on dev (CHY-91). Three defects
 propping each other up — the scheme was simply never reached.
 """
 from __future__ import annotations

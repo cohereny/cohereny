@@ -1,0 +1,20 @@
+# Which models the quickstart can reach — infrastructure, not governance.
+#
+# Same format as router/routing-config.yaml, which declares the reference
+# installation's models. The API reads this file because the quickstart sets
+# ROUTING_CONFIG=/app/deploy/quickstart/routing-config.yaml.
+#
+# Declaring a model here does not route anything to it. Which model serves
+# which task is a routing rule: a reviewed block in a scope (guides/routing-rules.md).
+#
+# `max_privacy_level` is the strictest class of data the model may see. The
+# model runs in the Ollama container next to the API, on your machine, so it
+# may see everything: `critical`.
+#
+# Using another model: add it here with the name your gateway serves, rebuild
+# (`docker compose build`), then write a routing rule that names it
+# (guides/your-own-model.md).
+models:
+  qwen2.5:1.5b:
+    runs_on: local-ollama
+    max_privacy_level: critical

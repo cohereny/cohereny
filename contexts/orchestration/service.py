@@ -65,7 +65,9 @@ from contexts.orchestration.errors import (
 )
 from contexts.orchestration.schema import (
     ContextRequirements,
+    NodeExecutionOut,
     OversightDecision,
+    RunNodesOut,
     WorkflowRunOut,
     WorkflowRunStart,
     ConnectionCreate,
@@ -749,6 +751,29 @@ async def get_run(pool, caller: Caller, run_id: UUID) -> WorkflowRunOut:
     if row is None:
         raise RunNotFound
     return _run_out(row)
+
+
+async def run_nodes(pool, caller: Caller, run_id: UUID) -> RunNodesOut:
+    """What each node of a run produced, in the order it ran (CHY-229).
+
+    The same role as reading the run itself: whoever may see its input may see
+    what was made of it. Read this before deciding at a `human_review` gate —
+    the decision is about this output.
+    """
+    require(await resolve_actor(pool, caller), "consumer")
+    row = await store.run(pool, run_id)
+    if row is None:
+        raise RunNotFound
+    history = await store.execution_history(pool, run_id)
+    return RunNodesOut(run_id=run_id, status=row["status"],
+                       nodes=[_execution_out(r) for r in history])
+
+
+def _execution_out(row) -> NodeExecutionOut:
+    d = dict(row)
+    output = d.pop("output_data")
+    d["output"] = json.loads(output) if isinstance(output, str) else output
+    return NodeExecutionOut(**d)
 
 
 #: How many different people must approve before a gate completes, by

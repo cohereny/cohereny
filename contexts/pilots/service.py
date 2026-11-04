@@ -336,7 +336,7 @@ async def start_run(
     spec = RunSpec(
         run_id=started.id, pdf_path=pdf_path, thread_id=thread_id,
         pilot_name=body.pilot_name, db_dsn=env.db_dsn,
-        model_used=model_used, model_map=model_map, dev_mode=env.dev_mode,
+        model_used=model_used, model_map=model_map, node_metrics=env.node_metrics,
     )
     main_loop = asyncio.get_running_loop()
     main_loop.run_in_executor(

@@ -80,17 +80,6 @@ class TestGroupsClaim:
         assert CurrentUser(sub="s", username="u").groups is None
 
 
-class TestDevMode:
-    @pytest.mark.asyncio
-    async def test_dev_user_carries_a_group_the_mapping_knows(self, monkeypatch):
-        """Was ["admins"], which matches no role — the dev user would have
-        provisioned as a consumer and then failed every admin endpoint."""
-        monkeypatch.setattr(settings, "dev_mode", True)
-        user = await require_auth(None)
-        assert user.groups == ["chy-admins"]
-        assert user.sub == "dev-actor"
-
-
 # ── The shared pool double ────────────────────────────────────────────────────
 
 class TestPoolDouble:

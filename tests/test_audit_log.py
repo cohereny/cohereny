@@ -27,7 +27,7 @@ from kernel.errors import AccessDenied
 from kernel.access import ResolvedActor, require
 from kernel.identity import resolve_actor
 from core.db import get_pool
-from tests.conftest import actor_row, make_pool
+from tests.conftest import actor_row, as_caller, make_pool
 
 _stub_user = CurrentUser(sub="caller-sub", username="caller")
 _NOW = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
@@ -57,7 +57,7 @@ def _make_pool(role="admin", rows=None) -> MagicMock:
 
 
 def _client(pool) -> TestClient:
-    app.dependency_overrides[require_auth] = lambda: _stub_user
+    app.dependency_overrides[require_auth] = as_caller(_stub_user)
     app.dependency_overrides[get_pool] = lambda: pool
     return TestClient(app)
 

@@ -27,11 +27,17 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 from datetime import UTC, datetime
+import dataclasses
+import functools
 
 import pytest
+from fastapi import Request
+from fastapi.routing import iter_route_contexts
 
 from api.deps import CurrentUser, require_auth
 from api.main import app
+from api.v1.router import SURFACE_PATHS
+from kernel.surfaces import AUDIENCES
 from core.db import get_pool
 from core.redis import get_redis
 
@@ -54,9 +60,10 @@ def stub_user(sub: str = "test-sub", username: str = "tester", groups=None,
     `groups=None` means the token carried no groups claim — the case that must
     stay distinguishable from an empty claim (see api/deps.py).
 
-    `audience=None` means no token was presented, as in dev mode, and the
-    surface gate stands aside (ADR-031). Tests that exercise the gate pass one
-    explicitly; every other test keeps the old behaviour.
+    `audience=None` means "whatever surface is called": through client_for
+    or as_caller the caller gets that surface's audience, as a real client
+    sends the token issued for it (ADR-031). Tests that exercise the gate pass
+    one explicitly.
     """
     return CurrentUser(sub=sub, username=username, groups=groups, audience=audience)
 
@@ -245,6 +252,36 @@ def domain_calls(pool: MagicMock) -> list:
     return [c for c in pool.fetchrow.call_args_list if _ACTOR_LOOKUP not in c.args[0]]
 
 
+def as_caller(user: CurrentUser):
+    """Override for require_auth: `user`, carrying the audience of the surface called.
+
+    Since CHY-192 the surface gate refuses a caller without an audience. Until
+    then it stood aside, because DEV_MODE presented no token — and so did every
+    stub here, which meant the unit tests never passed through the gate unless
+    they asked to. A real client sends the token issued for the surface it
+    calls; this does the same, from the route the request matched. A user with
+    an explicit audience keeps it, so the gate's own tests stay in control.
+    """
+    def _override(request: Request) -> CurrentUser:
+        if user.audience is not None:
+            return user
+        surface = _surface_of_endpoint().get(request.scope.get("endpoint"))
+        return dataclasses.replace(user, audience=AUDIENCES[surface]) if surface else user
+    return _override
+
+
+@functools.cache
+def _surface_of_endpoint() -> dict:
+    """Endpoint function → surface, for every route behind a surface gate.
+
+    By endpoint rather than path: inside a request, scope["route"] is the
+    included router's own route, whose path lacks the prefix ("/{block_id}"),
+    while SURFACE_PATHS holds full paths. iter_route_contexts yields both.
+    """
+    by_path = {path: surface for surface, paths in SURFACE_PATHS.items() for path in paths}
+    return {c.endpoint: by_path[c.path] for c in iter_route_contexts(app.routes) if c.path in by_path}
+
+
 @contextmanager
 def client_for(pool, *, redis=None, user: CurrentUser | None = None):
     """TestClient with the dependencies overridden, cleaned up on exit.
@@ -255,7 +292,7 @@ def client_for(pool, *, redis=None, user: CurrentUser | None = None):
     """
     from fastapi.testclient import TestClient
 
-    app.dependency_overrides[require_auth] = lambda: user or stub_user()
+    app.dependency_overrides[require_auth] = as_caller(user or stub_user())
     app.dependency_overrides[get_pool] = lambda: pool
     app.dependency_overrides[get_redis] = lambda: redis if redis is not None else make_redis()
     try:

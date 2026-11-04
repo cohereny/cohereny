@@ -194,9 +194,9 @@ async def create_scope(pool, caller: Caller, body: ScopeCreate) -> ScopeNode:
     `architect` and above, unlike the pilot endpoints where a role gate would
     have made an Article 14 decision unreachable in production. Here the
     opposite holds: creating scopes is structural work and should require the
-    role. In dev mode the caller resolves to admin and passes; in test and prod
-    it refuses until the chy-* groups exist (INFRA-92), which is the correct
-    behaviour rather than a gap.
+    role, on every stage: the caller needs a token whose groups map to
+    architect or admin (the chy-* groups, INFRA-92). There is no stage where
+    it passes without one (CHY-192).
     """
     creator = await resolve_actor(pool, caller)
     require(creator, "architect")

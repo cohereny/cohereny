@@ -385,3 +385,59 @@ class TestLlmCallExecutor:
         message = str(failed.value)
         assert "summarize" in message
         assert "gemma4-cloud" in message
+
+
+class TestTheModelGetsContextAndRequest:
+    """`system` reaches the model through `input_mapping`, like `prompt` (CHY-189).
+
+    Until CHY-189 the system message came from the node's config only. A
+    workflow could hand the model the composed context *or* the run's input —
+    the customer-reply example of the quickstart needs both, and `/v1/complete`
+    has always sent both (system = composition, user = prompt).
+    """
+
+    @staticmethod
+    def _capture(monkeypatch):
+        from api.v1 import workflows
+        from router.rules import RoutingRule
+
+        sent = []
+
+        async def chain(*_a, **_k):
+            return RoutingRule("draft_reply", ("local-model",), uuid4(), uuid4(), 1,
+                               max_tokens=256)
+
+        async def answer(request, candidates, **_k):
+            sent.append(request)
+            return SimpleNamespace(content="draft", trace_id=None,
+                                   model_used=candidates[0], attempts=[])
+
+        monkeypatch.setattr(workflows, "route_for", chain)
+        monkeypatch.setattr(workflows.completion, "complete_with_fallback", answer)
+        return workflows, sent
+
+    async def test_a_mapped_system_message_reaches_the_request(self, monkeypatch):
+        workflows, sent = self._capture(monkeypatch)
+        await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 input_data={"system": "Be polite.", "prompt": "Where is my order?"})
+        )
+        assert sent[0].system == "Be polite."
+        assert sent[0].prompt == "Where is my order?"
+
+    async def test_the_config_wins_over_the_input(self, monkeypatch):
+        workflows, sent = self._capture(monkeypatch)
+        await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 config={"system": "Fixed."},
+                 input_data={"system": "Mapped.", "prompt": "hi"})
+        )
+        assert sent[0].system == "Fixed."
+
+    async def test_without_either_the_system_message_stays_empty(self, monkeypatch):
+        workflows, sent = self._capture(monkeypatch)
+        await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 input_data={"prompt": "hi"})
+        )
+        assert sent[0].system == ""

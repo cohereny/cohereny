@@ -29,8 +29,6 @@ Dependencies:
   - api.config        (settings.litellm_base_url)
   - api.deps          (require_auth, CurrentUser)
 """
-from functools import lru_cache
-
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -38,7 +36,7 @@ from pydantic import BaseModel
 
 from api.config import settings
 from api.deps import CurrentUser, require_auth
-from api.v1._routing import route_for
+from api.v1._routing import route_for, router_config
 from api.v1._responses import NOT_FOUND, ROUTING_CONFLICT
 from core.db import get_pool
 from router.config import RouterConfig
@@ -46,15 +44,18 @@ from router.config import RouterConfig
 router = APIRouter()
 
 
-@lru_cache
 def get_router_config() -> RouterConfig:
-    """Load and cache RouterConfig for the application lifetime.
+    """The deployment's model declaration — the instance `_routing` loads.
 
-    lru_cache ensures the YAML file is read once on first call, not on every
-    request. Use app.dependency_overrides[get_router_config] in tests to
-    inject a config with a custom path.
+    This used to load its own, always from the bundled file. So /v1/route
+    answered from a different declaration than /v1/complete and the workflow
+    runner the moment a deployment named its own with ROUTING_CONFIG: in the
+    quickstart, every route request failed with a 500 for a model the rest of
+    the API served (CHY-189). One declaration, read once, for every caller that
+    routes. A dependency still, so tests can inject one through
+    app.dependency_overrides[get_router_config].
     """
-    return RouterConfig()
+    return router_config
 
 
 class RouteRequest(BaseModel):

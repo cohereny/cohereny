@@ -84,12 +84,13 @@ welcome.
   every database in the cluster and run operating-system commands via `COPY … FROM PROGRAM`.
   Treat the application's database credentials as full control of the installation. A
   separate, non-owning role without superuser rights is planned.
-- **`python-jose` verifies the tokens.** Dependency scanners report advisories for it.
-  Cohereny accepts only `RS256` signatures and does not use JWE; replacing the library is
-  planned.
-- **`DEV_MODE` disables authentication.** The service refuses to start with it unless
-  `ENVIRONMENT=dev` is set and the database name does not end in `_prod` or `_test`. It is
-  meant for local development only and is scheduled for removal.
+- **`scripts/dev_issuer.py` issues a token to anyone who asks.** It is the local stand-in
+  for the identity provider in development, CI and the quickstart, listens on loopback by
+  default — the quickstart runs it inside its Compose network and publishes it on
+  127.0.0.1 only — and does not check passwords. The service accepts an issuer over plain
+  http only with `ENVIRONMENT=dev`, which keeps it out of other stages; do not run it where
+  a deployment holding real data could reach it. There is no switch that turns
+  authentication off.
 
 Regulatory positioning — EU Cyber Resilience Act (Regulation 2024/2847) and the EU AI Act —
 is described in the [whitepaper](https://github.com/cohereny/cohereny/blob/main/docs/cohereny-whitepaper.md).

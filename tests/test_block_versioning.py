@@ -25,7 +25,7 @@ from api.deps import CurrentUser, require_auth
 from api.main import app
 from core.db import get_pool
 from core.redis import get_redis
-from tests.conftest import DEFAULT_ACTOR_ID, actor_row, make_pool, make_redis
+from tests.conftest import DEFAULT_ACTOR_ID, actor_row, as_caller, make_pool, make_redis
 
 _stub_user = CurrentUser(sub="test-sub", username="tester")
 _BLOCK_ID = uuid4()
@@ -81,7 +81,7 @@ def _write(pool):
 
 
 def _client(pool) -> TestClient:
-    app.dependency_overrides[require_auth] = lambda: _stub_user
+    app.dependency_overrides[require_auth] = as_caller(_stub_user)
     app.dependency_overrides[get_pool] = lambda: pool
     app.dependency_overrides[get_redis] = make_redis
     return TestClient(app)

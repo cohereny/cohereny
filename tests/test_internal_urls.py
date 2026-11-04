@@ -148,6 +148,7 @@ _ENTRY_POINTS = (
     "cli/main.py",              # cc — bootstraps before the API exists
     "migrations/runner.py",     # standalone migration run
     "scripts/",                 # one-off tooling
+    "deploy/quickstart/",       # seed and check: own processes, told where the API is (CHY-189)
 )
 
 

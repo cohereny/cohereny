@@ -76,10 +76,13 @@ wanted to find out in practice what works and what doesn't.
 | Append-only audit log — guards against errors in the application; against its own database role from M5 (CHY-85). Per-surface API (`serve`, `author`, `observe`, `admin`) behind OpenID Connect | ✅ |
 | Drift detection: calibration anchors and measurement tables are in place; scheduled (nightly by default) and change-triggered runs with a trial run before approval in M6, signals from operation in M6, an embedding sensor for stale anchors in M7 | 🔧 |
 | Adaptation of prompt and context per model, derived from the benchmark results (M6) | 📋 |
-| One-command setup with Docker Compose (M8) | 📋 |
+| One-command setup with Docker Compose: local model, development identity provider and a worked example, checked on every change ([deploy/quickstart](deploy/quickstart/)) | ✅ |
 
 ✅ built · 🔧 in progress · 📋 planned · M5–M8: milestones on the way to 1.0, listed in the
 [whitepaper](https://github.com/cohereny/cohereny/blob/main/docs/cohereny-whitepaper.md), section 10
+
+What changed from one snapshot of this repository to the next: [CHANGELOG.md](CHANGELOG.md)
+(auf Deutsch: [CHANGELOG.de.md](CHANGELOG.de.md)).
 
 ## Tests
 
@@ -122,8 +125,21 @@ record.
 
 ## Getting started
 
-A one-command setup with Docker Compose is planned. Until then, you provide the
-services yourself.
+The quickest way is the one-command setup in [deploy/quickstart](deploy/quickstart/):
+the API, a database, a cache, a local model and a development identity provider on one
+machine, with a worked example already set up — scopes, blocks, routing rules and a
+workflow in which a model drafts and a person approves.
+
+```bash
+git clone https://github.com/cohereny/cohereny.git
+cd cohereny/deploy/quickstart
+docker compose up
+```
+
+Then follow [its README](deploy/quickstart/README.md). It is for trying Cohereny out:
+its identity provider issues a token to anyone who asks.
+
+### Running it yourself
 
 Requirements: Python 3.12 or newer, PostgreSQL 16+ and Redis 7+, an OpenID Connect
 provider and a LiteLLM gateway — see [DEPENDENCIES.md](DEPENDENCIES.md). The provider is
@@ -138,7 +154,7 @@ python -m migrations.runner
 uvicorn api.main:app --port 8000
 ```
 
-### First steps
+#### First steps
 
 An empty database has no admin, no scope and no routing rule, so nothing can be routed
 yet.
@@ -160,7 +176,7 @@ yet.
    approver are both recorded; that they are different people is not enforced yet — see
    the known limitations in [SECURITY.md](SECURITY.md).
 
-The one-command setup will take over these steps.
+The quickstart takes these steps for its example, through the API ([deploy/quickstart/seed.py](deploy/quickstart/seed.py)).
 
 ### Running the tests
 

@@ -94,3 +94,18 @@ def test_the_dockerfile_copies_nothing_that_no_longer_exists():
 @pytest.mark.parametrize("pkg", sorted(_declared_packages()))
 def test_each_declared_package_exists_on_disk(pkg):
     assert (REPO / pkg).is_dir(), f"pyproject declares {pkg}, which is not a directory"
+
+
+def test_a_plain_build_is_the_production_image():
+    """The quickstart stage (CHY-189) must never be what a deploy builds.
+
+    Docker builds the last stage unless told otherwise, and every deploy job
+    builds without a target. So the file has to end in a stage that is `app`
+    and adds nothing — otherwise the development issuer, which hands a token to
+    anyone, would ship in the production image.
+    """
+    stages = re.findall(r"^FROM (\S+)(?: AS (\S+))?$", DOCKERFILE.read_text(encoding="utf-8"), re.M)
+    assert stages[-1] == ("app", ""), stages
+    last = DOCKERFILE.read_text(encoding="utf-8").rsplit("\nFROM app\n", 1)[1]
+    assert not re.search(r"^(COPY|RUN|ADD)\b", last, re.M), "the final stage adds something"
+    assert ("app", "quickstart") in stages

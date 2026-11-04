@@ -343,6 +343,44 @@ class WorkflowRunOut(BaseModel):
     parent_node_id: UUID | None = None
 
 
+class NodeExecutionOut(BaseModel):
+    """One pass through one node of a run, as a reader sees it (CHY-229)."""
+
+    node_ref: str
+    node_type: NodeType
+    name: str | None = None
+    iteration: int
+    status: NodeExecutionStatus
+    model_used: str | None = None
+    output: dict[str, Any] | None = Field(
+        default=None,
+        description="What the node produced: for an llm_call the model's answer "
+                    "under `content`, for a context_compose the composed "
+                    "`prompt`, for a human_review the decision. Null until the "
+                    "node completes.",
+    )
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class RunNodesOut(BaseModel):
+    """What each node of a run produced, in the order it ran (CHY-229).
+
+    Until CHY-229 none of this left the database. A run waiting at a
+    `human_review` gate showed its status and its input; whoever decided there
+    decided without seeing the output the decision was about. Article 14 of the
+    AI Act asks for the opposite: the person overseeing must be able to read
+    what the system produced. `WorkflowRunOut.result` deliberately does not
+    carry a copy — the outputs live in one place, and every deletion path
+    (CHY-17) has to know only that one.
+    """
+
+    run_id: UUID
+    status: RunStatus
+    nodes: list[NodeExecutionOut]
+
+
 # `approved` and `rejected`, and nothing else. No timeout value here on
 # purpose: what happens when nobody decides is a property of the node
 # (`on_timeout`, never `approve`), not of a decision somebody made (ADR-004).

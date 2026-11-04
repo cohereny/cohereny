@@ -16,7 +16,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "asyncpg>=0.30",
     "redis[asyncio]>=5.0",
-    "python-jose[cryptography]>=3.3",
+    "PyJWT[crypto]>=2.10",
     "httpx>=0.27",
     "pydantic-settings>=2.6",
     "typer>=0.12",
@@ -102,6 +102,13 @@ ignore = [
 # Tests may reach into private members to assert on them, and the pool doubles
 # in conftest.py exist precisely to inspect internals.
 "tests/*" = ["SLF"]
+# http.server dispatches requests to do_GET and do_POST by name; there is no
+# other spelling. A noqa per method would count as unused in every ratchet run
+# that does not select N (RUF100), so the exception lives here (CHY-192).
+"scripts/dev_issuer.py" = ["N802"]
+# The publish branch runs it in a bare Python image, so the GitHub call is
+# urllib's urlopen; the URL is the fixed https API base, never user input.
+"scripts/changelog.py" = ["S310"]
 # N818 wants every exception to end in "Error". The zone-3 and zone-2 error
 # modules end the *base* class that way — KernelError, PilotError,
 # RepositoryError — and that is the name a caller catches. The leaves are named

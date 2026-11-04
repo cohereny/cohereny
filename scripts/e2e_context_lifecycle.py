@@ -49,15 +49,21 @@ Tokens (CHY-124, ADR-031):
   The run then also checks that the separation holds on the real deployment:
   a token for one surface is turned away by another.
 
-  Without --token-url no token is sent at all, which is what a target running
-  with DEV_MODE=true expects. The former --token flag is gone: a single token
-  can no longer carry a run that spans three surfaces.
+  --token-url is required. Until CHY-192 a run without it sent no token, for a
+  target running with DEV_MODE; that switch is gone, and every stage wants a
+  token. Locally, scripts/dev_issuer.py stands in for Authentik. The former
+  --token flag is gone too: a single token cannot carry a run that spans three
+  surfaces.
 
 Usage:
-    python scripts/e2e_context_lifecycle.py --base-url https://...
-    python scripts/e2e_context_lifecycle.py --base-url https://... --scope-id <uuid>
     COHERENY_CI_APP_PASSWORD=... python scripts/e2e_context_lifecycle.py \
         --base-url https://... --token-url https://auth.../application/o/token/
+    (add --scope-id <uuid> to reuse an existing scope)
+
+    # against a local instance and scripts/dev_issuer.py (passwords unchecked):
+    COHERENY_CI_APP_PASSWORD=x python scripts/e2e_context_lifecycle.py \
+        --base-url http://127.0.0.1:8000 \
+        --token-url http://127.0.0.1:9010/application/o/token/
 
 Exit code 0 when every check passed, 1 otherwise. Prints one line per check.
 """
@@ -266,8 +272,8 @@ def _ensure_scope(c: httpx.Client) -> str:
     })
     if resp.status_code == 403:
         print("POST /v1/scopes refused: the caller needs the architect role. "
-              "cohereny-ci holds it through chy-architects (INFRA-122); a target "
-              "with DEV_MODE=true passes without a token.", file=sys.stderr)
+              "cohereny-ci holds it through chy-architects (INFRA-122), and so "
+              "does it on scripts/dev_issuer.py.", file=sys.stderr)
         raise SystemExit(2)
     resp.raise_for_status()
     return resp.json()["id"]
@@ -390,16 +396,16 @@ def _check_calibration_anchors(c: httpx.Client, scope_id: str) -> None:
           f"HTTP {r.status_code}: {r.text[:160]}")
 
 
-def client_for(base_url: str, tokens: SurfaceTokens | None,
+def client_for(base_url: str, tokens: SurfaceTokens,
                contract: ContractCheck | None = None) -> httpx.Client:
     """The client every step uses. Tokens go on by request hook, so a call
     added later cannot forget its surface's token."""
-    hooks: dict[str, list] = {"request": [tokens.authorize] if tokens else [],
+    hooks: dict[str, list] = {"request": [tokens.authorize],
                               "response": [contract.observe] if contract else []}
     return httpx.Client(base_url=base_url, timeout=30.0, event_hooks=hooks)
 
 
-def run(base_url: str, scope_id: str, tokens: SurfaceTokens | None) -> int:
+def run(base_url: str, scope_id: str, tokens: SurfaceTokens) -> int:
     contract = ContractCheck()
     c = client_for(base_url, tokens, contract)
 
@@ -590,32 +596,39 @@ def run(base_url: str, scope_id: str, tokens: SurfaceTokens | None) -> int:
     if not contract.mismatches:
         check("no response deviated from the contract", True)
 
-    if tokens is not None:
-        section("13 — one token, one surface (ADR-031)")
-        check(f"tokens used for {sorted(tokens.used)}",
-              {"serve", "author", "observe"} <= tokens.used,
-              "a surface this run needs got no token of its own")
-        # The gate against the real deployment, with real tokens: the author
-        # token is refused by observe, the observe token by author. The unit
-        # tests prove the rule; this proves the deployment enforces it.
-        #
-        # Each request is built so that without the gate it would NOT be a 403:
-        # the audit log with a target needs only reviewer (cohereny-ci is
-        # architect) and would answer 200; an empty block body would be a 422.
-        # And the detail must be the gate's own wording — a 403 from a role
-        # check would otherwise pass this for the wrong reason.
-        foreign = [
-            ("GET", "/v1/audit-log", {"params": {"target": f"block:{bid}"}}, "author"),
-            ("POST", "/v1/blocks", {"json": {}}, "observe"),
-        ]
-        bare = httpx.Client(base_url=base_url, timeout=30.0)
-        for method, path, kwargs, surface in foreign:
-            r = bare.request(method, path, **kwargs,
-                             headers={"Authorization": f"Bearer {tokens.token_for(surface)}"})
-            check(f"{method} {path} refuses the {surface} token",
-                  r.status_code == httpx.codes.FORBIDDEN and "issued for" in r.text,
-                  f"HTTP {r.status_code}: {r.text[:160]}")
-        bare.close()
+    section("13 — one token, one surface (ADR-031); no token, no answer (CHY-192)")
+    check(f"tokens used for {sorted(tokens.used)}",
+          {"serve", "author", "observe"} <= tokens.used,
+          "a surface this run needs got no token of its own")
+    # The gate against the real deployment, with real tokens: the author
+    # token is refused by observe, the observe token by author. The unit
+    # tests prove the rule; this proves the deployment enforces it.
+    #
+    # Each request is built so that without the gate it would NOT be a 403:
+    # the audit log with a target needs only reviewer (cohereny-ci is
+    # architect) and would answer 200; an empty block body would be a 422.
+    # And the detail must be the gate's own wording — a 403 from a role
+    # check would otherwise pass this for the wrong reason.
+    foreign = [
+        ("GET", "/v1/audit-log", {"params": {"target": f"block:{bid}"}}, "author"),
+        ("POST", "/v1/blocks", {"json": {}}, "observe"),
+    ]
+    bare = httpx.Client(base_url=base_url, timeout=30.0)
+    for method, path, kwargs, surface in foreign:
+        r = bare.request(method, path, **kwargs,
+                         headers={"Authorization": f"Bearer {tokens.token_for(surface)}"})
+        check(f"{method} {path} refuses the {surface} token",
+              r.status_code == httpx.codes.FORBIDDEN and "issued for" in r.text,
+              f"HTTP {r.status_code}: {r.text[:160]}")
+
+    # And without any token: 401, not an answer. Until CHY-192 a stage running
+    # with DEV_MODE answered this as a static admin; this is the acceptance
+    # check that no such path is left, on the deployment itself.
+    for method, path in (("GET", "/v1/scopes"), ("GET", "/v1/audit-log"), ("POST", "/v1/complete")):
+        r = bare.request(method, path)
+        check(f"{method} {path} without a token is refused with 401",
+              r.status_code == httpx.codes.UNAUTHORIZED, f"HTTP {r.status_code}: {r.text[:160]}")
+    bare.close()
 
     c.close()
     return 0 if not _failed else 1
@@ -625,19 +638,18 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base-url", required=True)
     p.add_argument("--scope-id", help="Existing scope. Omit to have one created over the API.")
-    p.add_argument("--token-url", help="Authentik token endpoint. Omit when the target "
-                                       "runs with DEV_MODE=true; then no token is sent.")
+    p.add_argument("--token-url", required=True,
+                   help="Token endpoint: Authentik's, or scripts/dev_issuer.py's.")
     p.add_argument("--client-user", default="cohereny-ci",
                    help="Service account whose app password is in COHERENY_CI_APP_PASSWORD.")
     args = p.parse_args()
 
-    tokens = None
-    if args.token_url:
-        password = os.environ.get("COHERENY_CI_APP_PASSWORD", "")
-        if not password:
-            p.error("--token-url needs COHERENY_CI_APP_PASSWORD in the environment "
-                    "(never on the command line: it would show up in the job log)")
-        tokens = SurfaceTokens(args.token_url, (args.client_user, password))
+    password = os.environ.get("COHERENY_CI_APP_PASSWORD", "")
+    if not password:
+        p.error("COHERENY_CI_APP_PASSWORD must be set in the environment (never on the "
+                "command line: it would show up in the job log). scripts/dev_issuer.py "
+                "accepts any value.")
+    tokens = SurfaceTokens(args.token_url, (args.client_user, password))
 
     scope_id = args.scope_id
     if not scope_id:
@@ -645,8 +657,7 @@ def main() -> int:
             scope_id = _ensure_scope(c)
         print(f"created scope {scope_id}")
 
-    print(f"target: {args.base_url}   scope: {scope_id}   "
-          f"tokens: {'per surface' if tokens else 'none (DEV_MODE)'}")
+    print(f"target: {args.base_url}   scope: {scope_id}   tokens: per surface")
     rc = run(args.base_url, scope_id, tokens)
     total = _ok + len(_failed)
     print(f"\n{_ok}/{total} checks passed")

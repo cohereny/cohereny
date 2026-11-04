@@ -250,7 +250,7 @@ def test_complete_records_an_error_on_a_gateway_failure():
     from api.main import app
     from core.db import get_pool
     from core.redis import get_redis
-    from tests.conftest import make_pool, make_redis
+    from tests.conftest import as_caller, make_pool, make_redis
 
     # Two queries now stand between the request and the model: the scope chain
     # and the routing rule (CHY-87 step 2b). Answered by statement, because one
@@ -272,9 +272,9 @@ def test_complete_records_an_error_on_a_gateway_failure():
 
     pool = make_pool()
     pool.fetch = AsyncMock(side_effect=_fetch)
-    app.dependency_overrides[require_auth] = lambda: CurrentUser(
+    app.dependency_overrides[require_auth] = as_caller(CurrentUser(
         sub="test-sub", username="testuser"
-    )
+    ))
     app.dependency_overrides[get_pool] = lambda: pool
     app.dependency_overrides[get_redis] = lambda: make_redis()
 

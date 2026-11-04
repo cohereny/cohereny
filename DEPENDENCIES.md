@@ -4,6 +4,9 @@ Cohereny is a **headless service** that relies on externally provided infrastruc
 configured through environment variables. It does not care where these services run;
 it needs their addresses and credentials, nothing else.
 
+To try Cohereny without providing any of this, use the one-command setup in
+[deploy/quickstart](deploy/quickstart/): it brings all of it along on one machine.
+
 All addresses below use `example.com`, the domain reserved for documentation. The
 defaults in `api/config.py` are the same placeholders on purpose: a deployment that
 forgets to set a value fails visibly instead of talking to somebody else's service.
@@ -56,19 +59,35 @@ OIDC_BASE_URL=https://auth.example.com/application/o
 Roles come from group membership: `chy-consumers`, `chy-contributors`, `chy-reviewers`,
 `chy-architects`, `chy-admins` (`kernel/roles.py`).
 
+The provider is required on every stage; there is no setting that runs the API without
+authentication. For local development and CI, `scripts/dev_issuer.py` stands in for it:
+it serves the eight issuers and issues tokens in the shape above, without checking
+passwords. The API accepts an issuer over plain http only with `ENVIRONMENT=dev`.
+
+```env
+ENVIRONMENT=dev
+OIDC_BASE_URL=http://127.0.0.1:9010/application/o
+```
+
 ### LiteLLM — model gateway
 
-All model calls go through an OpenAI-compatible [LiteLLM](https://github.com/BerriAI/litellm)
-gateway. Which model handles which task is decided by approved routing rules in the
-context repository (ADR-038), not by this setting.
+All model calls go through an OpenAI-compatible endpoint: a
+[LiteLLM](https://github.com/BerriAI/litellm) gateway in the tested setup, Ollama's own
+`/v1` in the quickstart. Which model handles which task is decided by approved routing
+rules in the context repository (ADR-038), not by this setting.
 
 ```env
 LITELLM_BASE_URL=https://litellm.example.com/v1
 LITELLM_API_KEY=            # only if the gateway has authentication enabled
 ```
 
-The model names the router knows, and the data class each may receive, are listed in
-`router/routing-config.yaml` (ADR-041).
+The model names the router knows, and the data class each may receive, are declared in
+a `routing-config.yaml` (ADR-041). `ROUTING_CONFIG` names the file; empty uses
+`router/routing-config.yaml`, which declares the reference installation's models.
+
+```env
+ROUTING_CONFIG=/etc/cohereny/routing-config.yaml
+```
 
 ---
 

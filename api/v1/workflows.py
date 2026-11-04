@@ -47,6 +47,7 @@ from contexts.orchestration.schema import (
     ConnectionCreate,
     OversightDecision,
     NodeCreate,
+    RunNodesOut,
     ValidationOut,
     WorkflowConnection,
     WorkflowCreate,
@@ -330,6 +331,13 @@ def _call_model_for(pool):
 
         **The prompt comes from the node's config or its input** (CHY-131), and
         an empty one is refused before the request is built.
+
+        **So does the system message** (CHY-189). Until then it came from the
+        config only, so a node could hand the model the composed context or the
+        run's input, never both: `{"system": "compose.prompt", "prompt":
+        "run.message"}` now gives the context as instructions and the input as
+        the request — the split `/v1/complete` makes (system = composition,
+        user = prompt). The config wins where both are set, as for the prompt.
         """
         if ctx.scope_id is None:
             reason = (
@@ -371,7 +379,7 @@ def _call_model_for(pool):
                 completion.CompletionRequest(
                     prompt=prompt,
                     model=candidates[0],
-                    system=ctx.config.get("system", ""),
+                    system=ctx.config.get("system") or ctx.input_data.get("system", ""),
                     task_type=ctx.task_type,
                     actor_id=ctx.actor_id,
                     scope_id=ctx.scope_id,
@@ -481,6 +489,21 @@ async def get_run(
     pool=Depends(get_pool),
 ) -> WorkflowRunOut:
     return await service.get_run(pool, actor, run_id)
+
+
+@router.get("/runs/{run_id}/nodes", response_model=RunNodesOut, responses=NOT_FOUND)
+async def get_run_nodes(
+    run_id: UUID,
+    actor: CurrentUser = Depends(require_auth),
+    pool=Depends(get_pool),
+) -> RunNodesOut:
+    """What each node of the run produced, in the order it ran (CHY-229).
+
+    Read this before deciding at a `human_review` gate: the decision is about
+    the output of the nodes before it — for an `llm_call` the model's answer
+    under `output.content`.
+    """
+    return await service.run_nodes(pool, actor, run_id)
 
 
 @router.post(

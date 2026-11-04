@@ -44,12 +44,12 @@ class RunSpec:
     """Everything a run needs to know, decided before the thread starts.
 
     An object rather than ten parameters, and the configuration values in it
-    are the point (CHY-96). `db_dsn` and `dev_mode` were read out of the
+    are the point (CHY-96). `db_dsn` and the metrics switch were read out of the
     process environment inside the thread — the first with
     `os.environ.setdefault`, which mutates the process from within a request
     and lets the first run silently decide for every later one.
 
-    `model_used` and `dev_mode` come from the caller for the same reason
+    `model_used` and `node_metrics` come from the caller for the same reason
     `registry` does: reaching for api.config from a context would be a zone
     violation, and the executor has no business knowing which settings object
     the application uses.
@@ -67,7 +67,9 @@ class RunSpec:
     #: the caller cannot record, and pilot_runs.effective_config claims to
     #: record exactly this one.
     model_map: dict[str, str] = field(default_factory=dict)
-    dev_mode: bool = False
+    #: Emit node_metrics events (token usage per model call). Was `dev_mode`
+    #: until CHY-192 removed the switch it was named after.
+    node_metrics: bool = False
 
 
 def run_in_thread(
@@ -80,7 +82,7 @@ def run_in_thread(
     """Run the pilot and push events to the main loop."""
     run_id = spec.run_id
     db_dsn = spec.db_dsn
-    dev_mode = spec.dev_mode
+    node_metrics = spec.node_metrics
 
     # Accumulate emitted events locally for the bulk write at run end. Reading
     # the registry from this thread instead would be a TOCTOU race — it is
@@ -114,7 +116,7 @@ def run_in_thread(
                 str(spec.pdf_path), spec.thread_id, banking_emit,
                 cancel_event=cancel_event,
                 oversight_gate=oversight_gate,
-                dev_mode=dev_mode,
+                node_metrics=node_metrics,
                 db_dsn=db_dsn,
                 model_map=spec.model_map,
             )

@@ -55,11 +55,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 #: Paths copied into the snapshot. A trailing slash means the whole directory.
 PUBLIC: tuple[str, ...] = (
-    ".env.example", ".gitignore", "COMMERCIAL-LICENSE.md", "CONTRIBUTING.md",
-    "CONVENTIONS.md", "DEPENDENCIES.md", "Dockerfile", "LICENSE.md", "MODEL-DRIFT.md",
+    ".env.example", ".gitignore", "CHANGELOG.md", "CHANGELOG.de.md", "COMMERCIAL-LICENSE.md",
+    "CONTRIBUTING.md", "CONVENTIONS.md", "DEPENDENCIES.md", "Dockerfile", "LICENSE.md",
+    "MODEL-DRIFT.md",
     "README.md", "SECURITY.md", "openapi.yaml", "pyproject.toml", "quality-baseline.json",
-    "api/", "assets/", "cli/", "contexts/", "contracts/", "core/", "docker/", "kernel/",
-    "migrations/", "pilots/", "router/", "scripts/", "tests/",
+    "api/", "assets/", "cli/", "contexts/", "contracts/", "core/", "deploy/", "docker/",
+    "kernel/", "migrations/", "pilots/", "router/", "scripts/", "tests/",
     # Not in this repository: --export --docs copies the whitepaper and arc42 there
     # from the documentation repository. Listed so the snapshot classifies them.
     "docs/",
@@ -73,7 +74,6 @@ INTERNAL: tuple[str, ...] = (
     ".env.test.example",
     ".env.prod.example",
     "compose.yaml",          # the reference installation's stack
-    "compose.override.yaml",
     "Makefile",              # drives compose.yaml
     "renovate.json",         # runs against the self-hosted GitLab
     ".leak-patterns",        # the internal names this check looks for

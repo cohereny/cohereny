@@ -1,0 +1,152 @@
+# Cohereny quickstart — everything on one machine, for trying it out (CHY-189).
+#
+#   cp .env.example .env      # optional: every value has a default
+#   docker compose up
+#
+# Then follow README.md. Not for production: the identity provider is a
+# development stand-in that issues a token to anyone who asks
+# (scripts/dev_issuer.py), and everything runs on one host. For running
+# Cohereny properly see DEPENDENCIES.md at the repository root.
+#
+# Nothing is bind-mounted. The CI runs this file against the host's Docker
+# daemon, where a path in the job's checkout does not exist; configuration is
+# built into the image (Dockerfile, stage `quickstart`) instead.
+
+name: cohereny-quickstart
+
+# One image for the API, the migrations, the issuer and the seed. Only `api`
+# builds it: four services building the same tag in parallel race each other,
+# and the loser fails with "image already exists" — on the second start, not
+# the first, which is how it slipped through.
+x-cohereny: &cohereny
+  image: cohereny-quickstart:local
+  pull_policy: never
+  restart: "no"
+  environment: &cohereny-env
+    DATABASE_URL: postgresql://cohereny:${POSTGRES_PASSWORD:-cohereny}@postgres:5432/cohereny
+    REDIS_URL: redis://redis:6379/0
+    # Plain http to the development issuer, accepted only on dev (api/config.py).
+    ENVIRONMENT: dev
+    OIDC_BASE_URL: http://issuer:9010/application/o
+    # Any OpenAI-compatible endpoint. Ollama serves one at /v1.
+    LITELLM_BASE_URL: ${MODEL_GATEWAY_URL:-http://ollama:11434/v1}
+    LITELLM_API_KEY: ${MODEL_GATEWAY_KEY:-}
+    ROUTING_CONFIG: /app/deploy/quickstart/routing-config.yaml
+    API_DOCS: "true"
+    LANGFUSE_ENABLED: "false"
+
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cohereny
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cohereny}
+      POSTGRES_DB: cohereny
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "cohereny", "-d", "cohereny"]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7.4.12-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  # Applies migrations/ once, then exits. The API waits for it.
+  migrate:
+    <<: *cohereny
+    command: ["python", "-m", "migrations.runner"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The development identity provider: JWKS for the eight applications and a
+  # client_credentials token endpoint. Passwords are not checked.
+  issuer:
+    <<: *cohereny
+    restart: unless-stopped
+    command: ["python", "scripts/dev_issuer.py", "--host", "0.0.0.0", "--port", "9010",
+              "--public-url", "http://issuer:9010"]
+    ports:
+      - "127.0.0.1:${ISSUER_PORT:-9010}:9010"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9010/application/o/cohereny-author/jwks/')"]
+      interval: 2s
+      retries: 30
+
+  api:
+    <<: *cohereny
+    build:
+      context: ../..
+      target: quickstart
+    pull_policy: build
+    restart: unless-stopped
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      issuer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health')"]
+      interval: 2s
+      retries: 60
+
+  ollama:
+    image: ollama/ollama:0.40.14
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 2s
+      retries: 30
+
+  # Downloads the model once (about 1 GB for qwen2.5:1.5b), then exits. Nothing
+  # waits for it: the API starts at once, and a model call made before the
+  # download finished answers 502 — try again a minute later.
+  model-pull:
+    image: ollama/ollama:0.40.14
+    restart: "no"
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["ollama", "pull", "${QUICKSTART_MODEL:-qwen2.5:1.5b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # Writes the example — scopes, blocks, routing rules, a workflow — through the
+  # API, once. A second start finds it and leaves everything as it is.
+  seed:
+    <<: *cohereny
+    command: ["python", "deploy/quickstart/seed.py"]
+    environment:
+      <<: *cohereny-env
+      API_URL: http://api:8000
+      ISSUER_URL: http://issuer:9010
+      QUICKSTART_MODEL: ${QUICKSTART_MODEL:-qwen2.5:1.5b}
+      QUICKSTART_SEED: ${QUICKSTART_SEED:-true}
+      API_PORT: ${API_PORT:-8000}
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  # A fixed name, so the model is downloaded once per machine and not once per
+  # Compose project. `docker compose down -v` removes it like the database; the
+  # CI declares it external so that its clean-up keeps it (compose.ci.yaml).
+  ollama-models:
+    name: ${OLLAMA_MODELS_VOLUME:-cohereny-quickstart-ollama}

@@ -18,18 +18,16 @@ from uuid import UUID, uuid4
 from unittest.mock import patch
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
-from jose import jwk, jwt
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from api.config import settings
-from api.deps import _require_known_audience, _require_known_issuer, _validate_token
+from api.deps import _require_known_issuer, _validate_token
 from api.surfaces import AUDIENCE_PREFIX, AUDIENCES, Surface
 from kernel.surfaces import issuers
 from tests.conftest import actor_row, client_for, make_pool, stub_user
+from tests.signed_tokens import jwk_of, new_key, sign
 
 _ACTOR = UUID("44444444-4444-4444-4444-444444444444")
 
@@ -41,14 +39,12 @@ class TestTheGateLetsTheRightTokenThrough:
         with client_for(pool, user=user) as client:
             assert client.get("/v1/scopes").status_code == 200
 
-    def test_no_token_at_all_stands_aside(self):
-        """Dev mode presents no token, so there is no audience to judge.
-
-        Guarded against production by CHY-91: DEV_MODE is refused unless the
-        stage says dev and the database is not a real one.
-        """
+    def test_a_caller_from_client_for_gets_the_called_surface(self):
+        """The default stub carries no audience; client_for gives it the one of
+        the surface being called, as a real client sends the matching token.
+        This is what every other API test relies on since CHY-192."""
         pool = make_pool(actor=actor_row(_ACTOR, role="admin"), fetch=[])
-        with client_for(pool, user=stub_user(audience=None)) as client:
+        with client_for(pool, user=stub_user()) as client:
             assert client.get("/v1/scopes").status_code == 200
 
 
@@ -72,6 +68,24 @@ class TestTheGateTurnsTheWrongTokenAway:
             detail = client.get("/v1/scopes").json()["detail"]
         assert AUDIENCES["serve"] in detail
         assert AUDIENCES["author"] in detail
+
+    def test_a_caller_without_an_audience_is_refused(self):
+        """No audience is not "every audience" (CHY-192).
+
+        Until CHY-192 the gate stood aside here, because DEV_MODE presented no
+        token and so had no audience. require_auth always sets one now; a caller
+        without it was built past the token check. Set directly, past
+        as_caller, which would otherwise fill the audience in.
+        """
+        from api.deps import require_auth
+        from api.main import app
+
+        pool = make_pool(actor=actor_row(_ACTOR, role="admin"), fetch=[])
+        with client_for(pool) as client:
+            app.dependency_overrides[require_auth] = lambda: stub_user(audience=None)
+            resp = client.get("/v1/scopes")
+        assert resp.status_code == 403, resp.text
+        assert "No token audience" in resp.json()["detail"]
 
     @pytest.mark.parametrize("path,method,wrong", [
         ("/v1/scopes", "get", "serve"),
@@ -99,24 +113,24 @@ class TestHealthTakesNoToken:
 
 
 class TestUnknownAudiencesAreRefused:
-    """`verify_aud` is switched off in the decode, so this check is the only one."""
+    """The decode checks `aud` against the list of our audiences (CHY-202)."""
 
     def test_a_foreign_audience_is_rejected(self):
         with pytest.raises(HTTPException) as e:
-            _require_known_audience({"aud": "some-other-service"})
+            _validate_token(_token("some-other-service"), _JWKS, _AUTHOR_ISS)
         assert e.value.status_code == 401
 
     def test_a_missing_audience_is_rejected(self):
         with pytest.raises(HTTPException):
-            _require_known_audience({})
+            _validate_token(_token(None), _JWKS, _AUTHOR_ISS)
 
     def test_a_list_of_audiences_is_accepted_if_one_matches(self):
         """The spec allows `aud` to be a list, and Authentik has used both."""
-        _require_known_audience({"aud": ["other", AUDIENCES["serve"]]})
+        _validate_token(_token(["other", AUDIENCES["serve"]]), _JWKS, _AUTHOR_ISS)
 
     @pytest.mark.parametrize("surface", list(Surface))
     def test_every_surface_audience_is_known(self, surface):
-        _require_known_audience({"aud": AUDIENCES[surface.value]})
+        _validate_token(_token(AUDIENCES[surface.value]), _JWKS, _AUTHOR_ISS)
 
 
 class TestTheVocabularyHasOneHome:
@@ -139,28 +153,17 @@ class TestTheVocabularyHasOneHome:
 
 # ── The check has to be reached, not merely present ──────────────────────────
 #
-# The first version of this file tested _require_known_audience directly. It was
+# The first version of this file tested the audience helper directly. It was
 # 19 green tests, and deleting the call to it from _validate_token left all 19
 # green — the same blind spot found twice already this week (CHY-103, CHY-90).
 #
-# It matters more here than usual: `verify_aud` is switched off in the decode,
-# so if this call is not reached, *no* audience check happens anywhere. The
-# tokens below are therefore signed for real and put through the real path.
+# The helper is gone since CHY-202: PyJWT checks `aud` in the decode, against
+# the list python-jose could not take. The lesson stays — the tokens below are
+# signed for real (tests/signed_tokens.py, independent of PyJWT) and put
+# through the real path.
 
-_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-_PRIVATE_PEM = _KEY.private_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.PKCS8,
-    encryption_algorithm=serialization.NoEncryption(),
-).decode()
-_PUBLIC_PEM = _KEY.public_key().public_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-).decode()
-
-_JWKS = {"keys": [{**jwk.construct(_PUBLIC_PEM, "RS256").to_dict(), "kid": "test-key"}]}
-_JWKS["keys"][0] = {k: (v.decode() if isinstance(v, bytes) else v)
-                    for k, v in _JWKS["keys"][0].items()}
+_KEY = new_key()
+_JWKS = {"keys": [jwk_of(_KEY)]}
 
 
 _ISSUERS = issuers(settings.oidc_base_url)
@@ -173,8 +176,7 @@ def _token(aud, iss: str = _AUTHOR_ISS) -> str:
               "exp": 4102444800, "iat": 1700000000}
     if aud is not None:
         claims["aud"] = aud
-    return jwt.encode(claims, _PRIVATE_PEM, algorithm="RS256",
-                      headers={"kid": "test-key"})
+    return sign(claims, _KEY)
 
 
 class TestTheAudienceCheckIsOnThePath:
@@ -195,10 +197,10 @@ class TestTheAudienceCheckIsOnThePath:
         assert e.value.status_code == 401
 
     def test_a_foreign_audience_never_gets_past_validation(self):
-        """Delete `_require_known_audience(claims)` from api/deps.py and this fails.
+        """Switch off `verify_aud` in api/deps.py and this fails.
 
-        That is the whole purpose of the test: verify_aud=False means the decode
-        itself is indifferent to `aud`.
+        That is the whole purpose of the test. Until CHY-202 it guarded a
+        separate audience check after the decode; now the decode itself is it.
         """
         with pytest.raises(HTTPException) as e:
             _validate_token(_token("some-other-service"), _JWKS, _AUTHOR_ISS)
@@ -256,9 +258,7 @@ class TestTheIssuerMustBeOneOfOurs:
             _require_known_issuer(_token(AUDIENCES["author"], old))
 
     def test_a_missing_issuer_is_refused(self):
-        claims = {"sub": "abc", "exp": 4102444800}
-        token = jwt.encode(claims, _PRIVATE_PEM, algorithm="RS256",
-                           headers={"kid": "test-key"})
+        token = sign({"sub": "abc", "exp": 4102444800}, _KEY)
         with pytest.raises(HTTPException):
             _require_known_issuer(token)
 
@@ -405,12 +405,12 @@ class TestMachineClients:
 
     def test_a_machine_audience_is_one_of_ours(self):
         from kernel.surfaces import CI_AUDIENCES
-        _require_known_audience({"aud": CI_AUDIENCES["serve"]})
+        _validate_token(_token(CI_AUDIENCES["serve"]), _JWKS, _AUTHOR_ISS)
 
     def test_an_invented_machine_audience_is_not(self):
         """Counter-probe: the suffix alone must not make an audience ours."""
         with pytest.raises(HTTPException):
-            _require_known_audience({"aud": f"{AUDIENCE_PREFIX}nope.ci"})
+            _validate_token(_token(f"{AUDIENCE_PREFIX}nope.ci"), _JWKS, _AUTHOR_ISS)
 
     def test_each_machine_client_has_an_issuer_on_the_same_surface(self):
         from kernel.surfaces import CI_SLUGS

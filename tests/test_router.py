@@ -161,8 +161,54 @@ def test_a_scope_that_does_not_exist_is_a_different_answer():
 def test_route_requires_auth():
     """Without auth override, unauthenticated request must be rejected (403 or 401)."""
     app.dependency_overrides.pop(require_auth, None)
-    # dev_mode=False by default in test settings — OIDC validation active
     # No Authorization header → require_auth raises HTTPException
     client = TestClient(app)
     resp = client.post("/v1/route", json={"task_type": "summarize"})
     assert resp.status_code in (401, 403)
+
+
+# ── ROUTING_CONFIG (CHY-189) ──────────────────────────────────────────────────
+
+class TestTheModelDeclarationIsConfigurable:
+    """Which models a deployment can reach is its own file, named by a setting.
+
+    Before CHY-189 the only declaration was the one bundled with the code, so
+    running Cohereny against another gateway meant editing the source tree.
+    """
+
+    def test_empty_means_the_bundled_file(self):
+        from api.v1._routing import load_router_config
+
+        assert load_router_config("").privacy_rank("gemma3-4b") >= 0
+
+    def test_a_path_replaces_the_bundled_declaration(self, tmp_path):
+        from api.v1._routing import load_router_config
+        from router.config import RoutingConfigError
+
+        own = tmp_path / "models.yaml"
+        own.write_text("models:\n  qwen2.5:1.5b:\n    runs_on: local\n"
+                       "    max_privacy_level: critical\n", encoding="utf-8")
+        config = load_router_config(str(own))
+        assert config.privacy_rank("qwen2.5:1.5b") >= 0
+        # Replaced, not merged: the reference models are unknown here.
+        with pytest.raises(RoutingConfigError):
+            config.privacy_rank("gemma3-4b")
+
+    def test_a_missing_file_stops_rather_than_falling_back(self, tmp_path):
+        """Falling back would route against models this deployment cannot reach."""
+        from api.v1._routing import load_router_config
+
+        with pytest.raises(FileNotFoundError):
+            load_router_config(str(tmp_path / "absent.yaml"))
+
+
+def test_every_caller_that_routes_reads_the_same_declaration():
+    """/v1/route loaded its own declaration, always the bundled file (CHY-189).
+
+    With ROUTING_CONFIG pointing elsewhere it then disagreed with /v1/complete
+    and the workflow runner, and answered 500 for a model they served.
+    """
+    from api.v1 import _routing
+    from api.v1.route import get_router_config
+
+    assert get_router_config() is _routing.router_config

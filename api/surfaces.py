@@ -39,10 +39,16 @@ def require_surface(surface: Surface):
     accepted = accepted_audiences(surface.value)
 
     async def _check(actor: CurrentUser = Depends(require_auth)) -> CurrentUser:
-        # Dev mode has no token at all (api/deps.py returns a static admin), so
-        # there is no audience to check. Guarded against production by CHY-91.
+        # No audience is refused like a wrong one. Until CHY-192 it let the
+        # caller through, because DEV_MODE presented no token and so had no
+        # audience to check. require_auth always sets one now; a caller
+        # without it was built past the token check, and standing aside for it
+        # would make "no audience" mean "every surface".
         if actor.audience is None:
-            return actor
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No token audience; this is the '{expected}' surface.",
+            )
         if actor.audience not in accepted:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

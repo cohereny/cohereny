@@ -33,6 +33,7 @@ from contexts.repository.compose import (
 from core.db import get_pool
 from core.redis import get_redis
 from kernel.errors import ScopeNotFound
+from tests.conftest import as_caller
 from contexts.repository.schema import ComposedBlock, ComposedContext, ComposeRequest
 
 _stub_user = CurrentUser(sub="test-sub", username="tester")
@@ -371,7 +372,7 @@ def test_as_prompt_on_empty_context_is_empty():
 
 class TestEndpoint:
     def _client(self, pool, redis) -> TestClient:
-        app.dependency_overrides[require_auth] = lambda: _stub_user
+        app.dependency_overrides[require_auth] = as_caller(_stub_user)
         app.dependency_overrides[get_pool] = lambda: pool
         app.dependency_overrides[get_redis] = lambda: redis
         return TestClient(app)

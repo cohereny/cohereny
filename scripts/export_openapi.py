@@ -49,13 +49,13 @@ import yaml
 # missing DATABASE_URL would abort before the app object exists. Nothing is
 # connected here — only the schema is built — so a placeholder is honest.
 #
-# DEV_MODE used to be set here too, and it was never needed: it only decides
+# DEV_MODE used to be set here too, and it was never needed: it only decided
 # docs_url and openapi_url, neither of which appears in the generated schema —
 # verified by diffing the output with and without. It did two kinds of harm.
 # It leaked into os.environ for every test that imports this module, which is
 # how two settings tests failed only in the full suite and passed alone. And
-# with the CHY-91 guard in place it would refuse to construct Settings at all,
-# breaking the export.
+# with the CHY-91 guard in place it would have refused to construct Settings,
+# breaking the export. The switch itself is gone since CHY-192.
 os.environ.setdefault("DATABASE_URL", "postgresql://export:export@localhost/export")
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))

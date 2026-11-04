@@ -22,6 +22,7 @@ from api.deps import CurrentUser, require_auth
 from api.main import app
 from core.db import get_pool
 from kernel.schema import ANONYMIZED_DISPLAY_NAME, Actor, ActorOut
+from tests.conftest import as_caller
 
 _stub_user = CurrentUser(sub="admin-sub", username="admin")
 _NOW = datetime(2026, 8, 12, 9, 0, tzinfo=UTC)
@@ -68,7 +69,7 @@ def _make_pool(caller_row=_DEFAULT, target_row=None, remaining_admins=1) -> Magi
 
 
 def _make_client(pool) -> TestClient:
-    app.dependency_overrides[require_auth] = lambda: _stub_user
+    app.dependency_overrides[require_auth] = as_caller(_stub_user)
     app.dependency_overrides[get_pool] = lambda: pool
     return TestClient(app)
 

@@ -4,10 +4,13 @@ api/config.py
 Central configuration via Pydantic Settings — reads values from the .env file
 or environment variables. Instantiated on import and exported as the `settings` singleton.
 
-Three stages each use their own .env file (DEV_MODE, DB index, etc.):
-  .env.dev   → DEV_MODE=true, Redis DB 1
-  .env.test  → DEV_MODE=false, Redis DB 2
-  .env.prod  → DEV_MODE=false, Redis DB 0
+Three stages each use their own .env file (ENVIRONMENT, DB index, etc.):
+  .env.dev   → ENVIRONMENT=dev,  Redis DB 1
+  .env.test  → ENVIRONMENT=test, Redis DB 2
+  .env.prod  → ENVIRONMENT=prod, Redis DB 0
+
+Every stage authenticates. There is no switch that turns authentication off
+(CHY-192); local development and CI get their tokens from scripts/dev_issuer.py.
 
 Called by:
   - api.main, api.deps, core.db, core.redis (all import `settings`)
@@ -47,12 +50,14 @@ class Settings(BaseSettings):
     #
     # Until 21.08.2026 this named a single application, `cohereny`, that had
     # never been created — both schemes answered 404, and nobody noticed because
-    # DEV_MODE=true skips validation on dev (CHY-91). Three defects holding each
+    # DEV_MODE=true skipped validation on dev (CHY-91). Three defects holding each
     # other up.
     #
     # The default is a placeholder (example.com is reserved for documentation):
     # every deployment names its own identity provider, and one that forgot to
     # fails on the first token instead of trusting somebody else's issuer.
+    #
+    # Plain http is accepted on dev only (_refuse_plain_http_issuer_outside_dev).
     oidc_base_url: str = "https://auth.example.com/application/o"
 
     # Which stage this process believes it is. Defaults to the strictest value:
@@ -65,14 +70,28 @@ class Settings(BaseSettings):
     # authentication, so there was nothing to check it against.
     environment: Literal["dev", "test", "prod"] = "prod"
 
-    # True = skip JWT validation entirely and return a static admin
-    # (api/deps.py). Only legitimate in local development without Authentik.
+    # There used to be a `dev_mode` here: skip JWT validation and answer every
+    # request as a static admin. CHY-91 fenced it in with this `environment`
+    # and the database name; CHY-192 removed it. A switch that turns off
+    # authentication is one misplaced .env file away from production, however
+    # well it is guarded, and it hid three broken issuer configurations on dev
+    # for weeks (see oidc_base_url). Development now authenticates like every
+    # other stage, against scripts/dev_issuer.py where no Authentik is at hand.
+
+    # Serve /docs, /redoc and /openapi.json. Off by default: the published
+    # contracts in contracts/ are the documentation, and a deployment should not
+    # serve its schema to anyone who asks unless it decided to.
     #
-    # Guarded by _refuse_dev_mode_outside_dev below. Before CHY-91 the only
-    # thing standing between this and production was the right .env file being
-    # in the right place, plus a comment saying "never use in prod or test" —
-    # and the internal CRA assessment certified "Secure by Default" on the strength of it.
-    dev_mode: bool = False
+    # These three used to hang on dev_mode, so the only way to read the API docs
+    # on a running instance was to turn authentication off. This switch
+    # authenticates nothing and disables nothing (CHY-192).
+    api_docs: bool = False
+
+    # Emit a node_metrics event with token usage and latency per model call in
+    # pilot runs (banking pilot). Read by the UI's telemetry panel. Was
+    # dev_mode as well — a measurement switch that came bundled with turning
+    # authentication off (CHY-192).
+    pilot_node_metrics: bool = False
 
     # Authentik group → actors.role used to be mirrored here as two settings,
     # oidc_group_role_map and default_actor_role. Both were plain passthroughs
@@ -98,6 +117,18 @@ class Settings(BaseSettings):
     # LiteLLM API key (LITELLM_MASTER_KEY). Only needed when LiteLLM auth is enabled.
     # Set to empty string for local dev without an active LiteLLM instance.
     litellm_api_key: str = ""
+
+    # Path to the deployment's model declaration (routing-config.yaml): which
+    # models this installation can reach and the strictest data class each may
+    # see. Empty = the file bundled with the code, which declares the reference
+    # installation's models.
+    #
+    # A setting since CHY-189. Before, whoever ran Cohereny against their own
+    # gateway had to edit a file inside the source tree — or the image — to
+    # name their models, and the quickstart could not declare its one local
+    # model without rebuilding the API. Which model serves which task is not
+    # here: that is a reviewed routing rule in the context repository (ADR-037).
+    routing_config: str = ""
 
     # Directory where pilot input PDFs are stored (RAID mount, read-only in container).
     # Must match the volume mount in compose.yaml.
@@ -130,41 +161,30 @@ class Settings(BaseSettings):
 
 
     @model_validator(mode="after")
-    def _refuse_dev_mode_outside_dev(self) -> "Settings":
-        """Two independent conditions, because one of them is self-declaring.
+    def _refuse_plain_http_issuer_outside_dev(self) -> "Settings":
+        """An issuer over plain http is accepted on dev only.
 
-        `environment` alone would not help against the realistic accident:
-        copying .env.dev over .env.prod flips both values together. So the
-        database is asked as well — a name ending in _prod or _test is evidence
-        about the data at hand that the flag cannot fake.
+        The issuer is where the signing keys come from. Over http anyone on the
+        path can replace them, and then every token they sign is valid here.
 
-        Blocklist rather than allowlist on purpose. Requiring the name to end in
-        _dev would break a local checkout whose database is simply called
-        `cohereny`, and a guard that blocks legitimate work gets switched off.
+        The case this exists for is scripts/dev_issuer.py (CHY-192). It speaks
+        http and hands a token to whoever asks, so a deployment that trusts it
+        has no authentication — the same exposure DEV_MODE had, by another
+        route. CHY-91 kept DEV_MODE to ENVIRONMENT=dev; this keeps its
+        replacement there too, by the property it cannot hide: the scheme.
 
-        Raised at construction, so a misconfigured process does not start.
-        Running without authentication is worse than not running.
+        ENVIRONMENT defaults to prod, so a deployment that forgot to say which
+        stage it is gets the strict reading. Raised at construction, so a
+        misconfigured process does not start.
         """
-        if not self.dev_mode:
-            return self
-
-        if self.environment != "dev":
+        if self.environment != "dev" and self.oidc_base_url.lower().startswith("http://"):
             msg = (
-                f"DEV_MODE=true with ENVIRONMENT={self.environment!r}. "
-                f"Dev mode disables authentication entirely and returns a static "
-                f"admin for every request — it is only valid when ENVIRONMENT=dev."
+                f"OIDC_BASE_URL is plain http with ENVIRONMENT={self.environment!r}. "
+                f"The signing keys would travel unencrypted, and an http issuer is "
+                f"most likely scripts/dev_issuer.py, which issues a token to anyone. "
+                f"Use https, or ENVIRONMENT=dev for local development."
             )
             raise ValueError(msg)
-
-        db_name = self.database_url.rsplit("/", 1)[-1].split("?")[0]
-        if db_name.endswith(("_prod", "_test")):
-            msg = (
-                f"DEV_MODE=true against database {db_name!r}. Dev mode disables "
-                f"authentication; it must never point at production or staging "
-                f"data, whatever ENVIRONMENT claims."
-            )
-            raise ValueError(msg)
-
         return self
 
     model_small: str = "gemma3:4b"

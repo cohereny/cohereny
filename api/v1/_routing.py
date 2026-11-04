@@ -13,14 +13,29 @@ way `api/v1/workflows.py` builds the executor registry out of two contexts.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID
 
+from api.config import settings
 from contexts.repository import service as repository
 from kernel import scopes
 from kernel.errors import ScopeNotFound
 from router import rules
 from router.config import RouterConfig
 from router.errors import MalformedRoutingRule, RoutingRuleNotApprovable
+
+
+def load_router_config(path: str) -> RouterConfig:
+    """The model declaration at `path`, or the bundled one when it is empty.
+
+    `ROUTING_CONFIG` names the file since CHY-189. A path that does not exist
+    stops the start with the path in the message rather than falling back to
+    the bundled file: silently routing against the reference installation's
+    models would look like a working configuration and name models this
+    deployment cannot reach.
+    """
+    return RouterConfig(Path(path)) if path else RouterConfig()
+
 
 #: The deployment's model declaration, loaded once at import.
 #:
@@ -29,7 +44,7 @@ from router.errors import MalformedRoutingRule, RoutingRuleNotApprovable
 #: file are two chances to disagree after a hot edit. Loading at import is also
 #: the point: a declaration that cannot be read stops the process at start,
 #: not at the first request that needs it (router/config.py).
-router_config = RouterConfig()
+router_config = load_router_config(settings.routing_config)
 
 
 async def route_for(

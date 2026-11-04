@@ -15,7 +15,7 @@ from .nodes import (
     node_human_oversight, node_summarize,
     route_after_gateway,
     set_cancel_event, check_cancel, set_emit,
-    set_oversight_gate, set_oversight_prompt, set_dev_mode,
+    set_oversight_gate, set_oversight_prompt, set_node_metrics,
     WorkflowCancelledError,
 )
 
@@ -174,7 +174,7 @@ def stream_workflow(
     on_event: Callable[[dict], None],
     cancel_event: threading.Event | None = None,
     oversight_gate: tuple[threading.Event, list] | None = None,
-    dev_mode: bool = False,
+    node_metrics: bool = False,
     db_dsn: str | None = None,
     model_map: dict[str, str] | None = None,
 ) -> BankingState:
@@ -185,7 +185,8 @@ def stream_workflow(
     result_holder is a single-element list; the API writes "approved"/"rejected"
     into index 0 before setting the event.
 
-    dev_mode emits node_metrics events with token usage per LLM call when True.
+    node_metrics emits node_metrics events with token usage per LLM call when True.
+    It was called dev_mode until CHY-192.
 
     db_dsn overrides the module constant (CHY-96). POSTGRES_URI is read from
     the environment at import time, which is why the API used to write it into
@@ -196,7 +197,7 @@ def stream_workflow(
 
     set_cancel_event(cancel_event)
     set_emit(on_event)
-    set_dev_mode(dev_mode)
+    set_node_metrics(node_metrics)
     # Clear any interactive prompt left on this pooled thread by an earlier CLI
     # run — the API path must never take a decision from stdin.
     set_oversight_prompt(None)
@@ -245,6 +246,6 @@ def stream_workflow(
     finally:
         set_cancel_event(None)
         set_emit(None)
-        set_dev_mode(False)
+        set_node_metrics(False)
         set_oversight_gate(None, None)
         set_oversight_prompt(None)

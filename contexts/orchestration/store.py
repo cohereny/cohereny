@@ -322,6 +322,24 @@ async def executions(conn_or_pool, run_id: UUID) -> list:
     )
 
 
+async def execution_history(conn_or_pool, run_id: UUID) -> list:
+    """Every pass through every node, as somebody reading the run needs it (CHY-229).
+
+    `executions` above is the runner's view: node ids, consumed edges, output.
+    A reader — above all whoever decides at a `human_review` gate — needs to
+    know which node each pass belongs to and why one failed, so the node's
+    ref, type and name come along and the error does too.
+    """
+    return await conn_or_pool.fetch(
+        "SELECT n.node_ref, n.node_type, n.name, e.iteration, e.status, "
+        "       e.output_data, e.model_used, e.error_message, "
+        "       e.started_at, e.completed_at "
+        "FROM node_executions e JOIN workflow_nodes n ON n.id = e.node_id "
+        "WHERE e.run_id = $1 ORDER BY e.started_at, e.iteration",
+        run_id,
+    )
+
+
 async def traversals(conn_or_pool, run_id: UUID) -> list:
     return await conn_or_pool.fetch(
         "SELECT connection_id, traversals FROM loop_counters WHERE run_id = $1",

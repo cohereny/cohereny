@@ -9,12 +9,10 @@ are weighted towards the two things that decide whether that stays fixed: which
 role a caller ends up with, and whether a write happens when nothing changed.
 """
 import json
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
-from api.config import settings
 from kernel.audit import ACTION_ACTOR_PROVISIONED, ACTION_ACTOR_ROLE_CHANGED
 from kernel.roles import DEFAULT_ROLE
 from kernel.errors import AccessDenied, ActorStateInconsistent
@@ -252,18 +250,3 @@ class TestBlockWriteGates:
 
         assert domain_calls(pool) == []
 
-
-# ── Dev mode ──────────────────────────────────────────────────────────────────
-
-def test_dev_user_provisions_as_admin(monkeypatch):
-    """DEV_MODE is meant to be usable without Authentik. Before CHY-33 the stub
-    carried a group name that matched nothing, so the dev user would have been
-    a consumer and every admin endpoint would have refused it."""
-    monkeypatch.setattr(settings, "dev_mode", True)
-    pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "admin"})
-    pool.conn.fetchval = AsyncMock(return_value=uuid4())
-    with client_for(pool, user=None) as client:
-        # dev_mode short-circuits require_auth, but the override is what the
-        # TestClient uses — assert the mapping instead.
-        assert role_from_groups(["chy-admins"]) == "admin"
-        assert client is not None

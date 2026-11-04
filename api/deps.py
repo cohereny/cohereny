@@ -12,24 +12,26 @@ The flow:
      read before verification and constrained before it is used
   3. That issuer's JWKS are fetched from Authentik (cached 30 min, per issuer)
   4. RS256 signature is validated against the matching public key (kid matching)
-  5. Audience is verified against the surfaces' audiences (ADR-031); `verify_aud`
-     is off in the decode because python-jose takes a single string
+  5. In the same decode: the audience against the surfaces' audiences (ADR-031),
+     the issuer, expiry and not-before; exp, iss, aud and sub must be present
   6. On success: CurrentUser built from JWT claims
 
 JWKS caching: prevents an HTTP request to the identity provider on every API call.
 Double-checked locking (asyncio.Lock) prevents parallel fetches on the first
 request or after cache expiry.
 
-Dev mode: when DEV_MODE=true, require_auth is short-circuited and returns a
-static user — no token needed, no Authentik required. Only for .env.dev.
+There is no way past this without a token. Until CHY-192 a DEV_MODE switch
+short-circuited require_auth and answered every request as a static admin;
+development now gets real tokens from scripts/dev_issuer.py instead.
 
 Called by:
   - All route handlers in api/v1/*.py via Depends(require_auth)
 
 Dependencies:
-  - api.config    (settings.oidc_base_url, dev_mode)
+  - api.config    (settings.oidc_base_url)
   - kernel.surfaces (the four audiences and the four issuers)
-  - python-jose   (JWT decoding and signature verification)
+  - PyJWT         (JWT decoding and signature verification; replaced python-jose,
+                   CHY-202)
   - httpx         (async HTTP for JWKS fetch)
 """
 import asyncio
@@ -37,9 +39,10 @@ import time
 from dataclasses import dataclass
 
 import httpx
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+from jwt import PyJWK
 
 from api.config import settings
 from kernel.surfaces import ALL_AUDIENCES, issuers
@@ -52,7 +55,6 @@ class CurrentUser:
     """Authenticated API caller, extracted from JWT claims.
 
     Built by require_auth and injected into route handlers via dependency injection.
-    In dev mode a static dummy user is returned.
 
     sub:      OIDC Subject — unique, immutable actor ID (UUID from Authentik)
     username: preferred_username from JWT, falls back to sub if not present
@@ -72,9 +74,10 @@ class CurrentUser:
     sub: str
     username: str
     groups: list[str] | None = None
-    #: The `aud` claim this token carried, or None in dev mode where there is
-    #: no token. api/surfaces.py compares it against the surface being called
-    #: (ADR-031). None means "no token was presented", not "any audience".
+    #: The `aud` claim this token carried. api/surfaces.py compares it against
+    #: the surface being called (ADR-031) and refuses None: require_auth always
+    #: sets it, so a caller without one was built somewhere else, and "no
+    #: audience" must never read as "any audience" (CHY-192).
     audience: str | None = None
 
 
@@ -139,8 +142,8 @@ def _require_known_issuer(token: str) -> str:
     whose key it controls.
     """
     try:
-        issuer = jwt.get_unverified_claims(token).get("iss")
-    except JWTError as exc:
+        issuer = jwt.decode(token, options={"verify_signature": False}).get("iss")
+    except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token payload: {exc}",
@@ -156,46 +159,45 @@ def _require_known_issuer(token: str) -> str:
     return issuer
 
 
-def _require_known_audience(claims: dict) -> None:
-    """The token must name an audience this service issues.
+#: The audiences this service accepts: the four surfaces' UI clients and their
+#: machine clients (INFRA-122), and nothing else. There used to be a
+#: transitional entry for the old single audience `cohereny`; it was removed
+#: once INFRA-92 showed that no token had ever carried it — the application of
+#: that name never existed, so there was nothing to transition from.
+#:
+#: Checked in the decode itself. Until CHY-202 it was a separate step after it,
+#: with `verify_aud` switched off, because python-jose took a single audience
+#: and ADR-031 issues eight. The vocabulary comes from kernel/surfaces.py rather
+#: than api/surfaces.py so that this module does not import the one that
+#: imports it.
+_AUDIENCES = sorted(ALL_AUDIENCES)
 
-    Split out and called unconditionally because `verify_aud` is switched off
-    above: a claim that is not checked somewhere is a claim that is not checked.
-    tests/test_surfaces.py removes this call and expects the suite to fail.
-
-    `aud` may be a string or a list — the spec allows both, and Authentik has
-    used both across versions.
-
-    The vocabulary comes from kernel/surfaces.py rather than api/surfaces.py so
-    that this module does not import the one that imports it.
-    """
-    # The four surfaces' UI clients and their machine clients (INFRA-122), and
-    # nothing else. There used to be a transitional entry here for the old
-    # single audience `cohereny`; it was removed once INFRA-92 showed that no
-    # token had ever carried it — the application of that name never existed,
-    # so there was nothing to transition from.
-    known = ALL_AUDIENCES
-    aud = claims.get("aud")
-    presented = set(aud) if isinstance(aud, list) else {aud} if aud else set()
-
-    if not presented & known:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token audience {sorted(presented) or '(none)'} is not one of this service's.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+#: Claims a token must carry. Without `exp` a leaked token never expires;
+#: without `sub` there is no actor — require_auth failed on it with a 500 before
+#: CHY-202. `iss` and `aud` are checked anyway, but only when present unless
+#: listed here.
+_REQUIRED_CLAIMS = ["exp", "iss", "aud", "sub"]
 
 
 def _validate_token(token: str, jwks: dict, issuer: str) -> dict:
-    """Validate RS256 JWT against JWKS keys, matching by kid where possible."""
+    """Validate an RS256 JWT against the issuer's keys, matching by kid where possible.
+
+    Only a signature that does not match moves on to the next key. Every other
+    failure — expired, foreign audience, missing claim, an algorithm other than
+    RS256 — belongs to the token, not to the key, and another key would not
+    change it: the token is refused, not retried.
+
+    `aud` may be a string or a list; the spec allows both, Authentik has used
+    both, and a list passes when one of its entries is ours.
+    """
     try:
         header = jwt.get_unverified_header(token)
-    except JWTError as exc:
+    except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token header: {exc}",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from exc
 
     kid = header.get("kid")
     keys = jwks.get("keys", [])
@@ -203,29 +205,28 @@ def _validate_token(token: str, jwks: dict, issuer: str) -> dict:
     if not candidates:
         candidates = keys  # fallback: try all keys
 
-    last_exc: JWTError | None = None
+    last_exc: jwt.PyJWTError | None = None
     for key_data in candidates:
         try:
-            claims = jwt.decode(
+            key = PyJWK(key_data, algorithm="RS256").key
+            return jwt.decode(
                 token,
-                key_data,
+                key,
+                # Pinned, so the token's header cannot choose: no `none`, no
+                # HS256 signed with the public key (tests/test_deps_tokens.py).
                 algorithms=["RS256"],
-                # Verified below against the set of known audiences instead.
-                # python-jose takes a single string; ADR-031 issues four, one
-                # per surface, plus the transitional one that Authentik will
-                # stop using with INFRA-92.
-                options={"verify_aud": False},
+                audience=_AUDIENCES,
                 issuer=issuer,
+                options={"require": _REQUIRED_CLAIMS},
             )
-        except JWTError as exc:
-            last_exc = exc
-        else:
-            # In `else`, not in the `try`: this raises HTTPException, which is
-            # not a JWTError and so would not be caught either way — but inside
-            # the try it reads as if a failed audience check might fall through
-            # to the next key. It must not; a token is refused, not retried.
-            _require_known_audience(claims)
-            return claims
+        except (jwt.InvalidSignatureError, jwt.PyJWKError, jwt.InvalidKeyError) as exc:
+            last_exc = exc  # this key did not sign it, or is unusable; try the next
+        except jwt.InvalidTokenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Token validation failed: {exc}",
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -239,17 +240,9 @@ async def require_auth(
 ) -> CurrentUser:
     """FastAPI dependency: validates Bearer token and returns CurrentUser.
 
-    Used via Depends(require_auth) in route parameters.
-    In dev mode (DEV_MODE=true) authentication is bypassed and a static admin
-    user is returned — never use in prod or test.
+    Used via Depends(require_auth) in route parameters. Without a valid token
+    the answer is 401, on every stage (CHY-192).
     """
-    if settings.dev_mode:
-        # "chy-admins", not "admins": the group names are the ones the role
-        # mapping actually knows (api/config.py). The old value matched nothing,
-        # so the dev user would provision as a consumer and then fail every
-        # admin-only endpoint — with no hint as to why.
-        return CurrentUser(sub="dev-actor", username="dev", groups=["chy-admins"])
-
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.14-slim AS app
 
 WORKDIR /app
 
@@ -31,3 +31,19 @@ COPY core/ ./core/
 COPY migrations/ ./migrations/
 
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# --- The quickstart (CHY-189) ---------------------------------------------------
+#
+# deploy/quickstart/compose.yaml builds this stage. One image serves the API,
+# the migrations, the development issuer and the seed: the issuer and the seed
+# need kernel/ and the packages above, and a second image would be a second
+# list of what to copy. Nothing here is bind-mounted, because the CI runs the
+# quickstart against the host's Docker daemon, where a path in the job's
+# checkout does not exist.
+FROM app AS quickstart
+COPY scripts/dev_issuer.py ./scripts/dev_issuer.py
+COPY deploy/quickstart/ ./deploy/quickstart/
+
+# The production image. Last, so that a plain `docker build` — and every
+# deploy job — builds exactly the stage above the quickstart and nothing of it.
+FROM app
