@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from kernel.redaction import identifiers_from
 from kernel.schema import PG_INT_MAX
 
 NodeType = Literal[
@@ -67,10 +68,19 @@ ReviewTimeout = Literal["reject", "escalate"]
 # What the runner writes (ADR-028, tables in migration 018). The same words as
 # pilot_runs.status on purpose: one concept, one spelling — a second name for
 # "waiting for a human" would be the duplication CHY-95 spent a ticket removing.
+#
+# `cancelled` (038, CHY-200) is the one word pilot runs do not have: a person
+# stopped the run (Art. 14(4)(e)). A pilot run stopped the same way ends as
+# `failed` with a message saying so; the pilots are being replaced by this
+# runner (ADR-028), and their table is not widened for a state they will not
+# keep.
 RunStatus = Literal[
-    "pending", "running", "awaiting_oversight", "complete", "failed", "rejected"
+    "pending", "running", "awaiting_oversight", "complete", "failed", "rejected",
+    "cancelled",
 ]
-NodeExecutionStatus = Literal["pending", "running", "complete", "failed", "skipped"]
+NodeExecutionStatus = Literal[
+    "pending", "running", "complete", "failed", "skipped", "cancelled"
+]
 
 
 class ContextRequirements(BaseModel):
@@ -316,7 +326,28 @@ class ValidationOut(BaseModel):
 # ── runs (CHY-127) ────────────────────────────────────────────────────────────
 
 class WorkflowRunStart(BaseModel):
-    input_data: dict[str, Any] = {}
+    input_data: dict[str, Any] = Field(
+        default={},
+        description=(
+            "The run's input, reachable from every node as `run.<key>`. It is "
+            "stored with placeholders: every text in it is replaced by the "
+            "shipped patterns and the scope's redaction rules before the run "
+            "begins, and every step reads and writes placeholders (CHY-234). "
+            "The key `identifiers_to_redact` names further values that identify "
+            'someone, by category, e.g. {"PERSON": ["Erika Mustermann"]}. It is '
+            "not stored with the input: its values go into the run's encrypted "
+            "mapping and are searched for in every step, found in the input or not."
+        ),
+    )
+
+    @field_validator("input_data")
+    @classmethod
+    def _identifiers_are_usable(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # Checked when the run starts, not at its first model call (CHY-63): a
+        # run that would fail at its third node over a typo in the list should
+        # not be started at all.
+        identifiers_from(value.get("identifiers_to_redact"))
+        return value
 
 
 class WorkflowRunOut(BaseModel):
@@ -341,6 +372,12 @@ class WorkflowRunOut(BaseModel):
                     "(ADR-028).",
     )
     parent_node_id: UUID | None = None
+    content_purged_at: datetime | None = Field(
+        default=None,
+        description="When the retention purge cleared this run's input, result "
+                    "and node content (ADR-046). Null while the content is there; "
+                    "an empty input then means the input was empty.",
+    )
 
 
 class NodeExecutionOut(BaseModel):
@@ -381,10 +418,53 @@ class RunNodesOut(BaseModel):
     nodes: list[NodeExecutionOut]
 
 
+class RunResolveRequest(BaseModel):
+    """Which steps to have resolved; the run's input always comes with them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nodes: list[str] | None = Field(
+        default=None,
+        description="node_refs whose output is wanted with the values; null for "
+                    "every step. A ref the run has no step for is left out.",
+    )
+
+
+class RunResolvedOut(BaseModel):
+    """A run's input and its steps' outputs with the values in place of the
+    placeholders (CHY-234).
+
+    A run is stored with placeholders, and reading it shows them. Whoever has
+    to check that the right person is meant -- the starter, and from `reviewer`
+    up whoever sees the run (decided 06.11.2026, E4) -- asks for this instead,
+    and every request is audited as `workflow.run_content_resolved`: who, which
+    run, which steps, never a value. A run started before CHY-234 is returned
+    as it is stored; its values were never replaced.
+    """
+
+    run_id: UUID
+    status: RunStatus
+    input_data: dict[str, Any]
+    nodes: list[NodeExecutionOut]
+
+
 # `approved` and `rejected`, and nothing else. No timeout value here on
 # purpose: what happens when nobody decides is a property of the node
 # (`on_timeout`, never `approve`), not of a decision somebody made (ADR-004).
 OversightChoice = Literal["approved", "rejected"]
+
+
+class RunCancelRequest(BaseModel):
+    """Stopping a run (CHY-200). The reason is optional: who stopped it, and
+    when, is recorded either way."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(
+        default=None,
+        description="Why the run is stopped. Stored in the run's error_message "
+                    "with the run's placeholders, like a reason at the gate.",
+    )
 
 
 class OversightDecision(BaseModel):

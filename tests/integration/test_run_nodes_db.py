@@ -30,9 +30,15 @@ def _node(ref: str, node_type: str, task_type: str | None = None) -> NodeCreate:
     )
 
 
-async def test_a_run_at_the_gate_shows_the_draft(pool, workflow):
-    starter = await resolve_actor(pool, _caller("contributor"))
-    async with pool.acquire() as conn:
+async def test_a_run_at_the_gate_shows_the_draft(pool, system_pool, workflow):
+    """Set up the way the engine writes it, read the way the starter does.
+
+    Since CHY-92 only the starter, members of the workflow's scope chain and
+    admin see a run: reading it as a fresh consumer would be not found.
+    """
+    starter_caller = _caller("contributor")
+    starter = await resolve_actor(pool, starter_caller)
+    async with system_pool.acquire() as conn:
         draft = await store.insert_node(conn, workflow, _node("draft", "llm_call", "draft_reply"))
         gate = await store.insert_node(conn, workflow, _node("review", "human_review"))
         run = await store.insert_run(conn, store.NewRun(
@@ -49,7 +55,7 @@ async def test_a_run_at_the_gate_shows_the_draft(pool, workflow):
             run_id=run["id"], node_id=gate["id"], iteration=1, consumed=[], input_data={},
         ))
 
-    out = await service.run_nodes(pool, _caller("consumer"), run["id"])
+    out = await service.run_nodes(pool, starter_caller, run["id"])
 
     assert [(n.node_ref, n.node_type) for n in out.nodes] == [
         ("draft", "llm_call"), ("review", "human_review")]

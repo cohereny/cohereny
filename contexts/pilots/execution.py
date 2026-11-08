@@ -196,6 +196,8 @@ def run_in_thread(
         # oversight_outcome tells apart the two ways that happens: a human said
         # no, or nobody answered in time. Both are terminal, but only the first
         # is a decision — the audit trail must not conflate them (CHY-83).
+        # A cancellation carries no outcome, at the gate as anywhere else, and
+        # ends below as `failed` with its message (CHY-153).
         outcome = getattr(exc, "oversight_outcome", None)
         if outcome is None and "rejected by human oversight" in str(exc).lower():
             outcome = "rejected"

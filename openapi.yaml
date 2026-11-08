@@ -309,6 +309,7 @@ components:
           - example_io
           - calibration_anchor
           - routing_rule
+          - redaction_rule
           title: Block Type
           type: string
         content:
@@ -482,6 +483,7 @@ components:
             - example_io
             - calibration_anchor
             - routing_rule
+            - redaction_rule
             type: string
           - type: 'null'
           title: Block Type
@@ -663,6 +665,17 @@ components:
             type: string
           - type: 'null'
           title: Context Id
+        identifiers_to_redact:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          description: 'Values that identify someone, by category, e.g. {"PERSON": ["Erika Mustermann"]}.
+            Replaced with placeholders before the model sees prompt or context and put back in the answer.
+            E-mail addresses, phone numbers, IBANs, German tax ids, health insurance numbers and labelled
+            dates of birth are found without being named; names are not.'
+          title: Identifiers To Redact
+          type: object
         max_tokens:
           anyOf:
           - minimum: 1.0
@@ -715,11 +728,23 @@ components:
           - type: integer
           - type: 'null'
           title: Output Tokens
+        redactions:
+          additionalProperties:
+            type: integer
+          description: Identifiers replaced before the model call, per category. Counts, never values.
+          title: Redactions
+          type: object
         trace_id:
           anyOf:
           - type: string
           - type: 'null'
           title: Trace Id
+        unresolved_placeholders:
+          default: 0
+          description: Placeholders in the answer that could not be put back because the model changed
+            them. They are left as written.
+          title: Unresolved Placeholders
+          type: integer
       required:
       - content
       - model_used
@@ -1018,6 +1043,24 @@ components:
       - detail
       title: ErrorDetail
       type: object
+    ExternalStoreOut:
+      description: Data Cohereny writes outside its own tables, and who keeps it how long.
+      properties:
+        handled_by:
+          title: Handled By
+          type: string
+        name:
+          title: Name
+          type: string
+        retention_class:
+          title: Retention Class
+          type: string
+      required:
+      - name
+      - retention_class
+      - handled_by
+      title: ExternalStoreOut
+      type: object
     FieldError:
       description: One entry of FastAPI's request-validation 422.
       properties:
@@ -1078,6 +1121,51 @@ components:
       - version
       - timestamp
       title: HealthOut
+      type: object
+    MeOut:
+      description: 'Who the caller is to Cohereny (CHY-92).
+
+
+        `actor_id` is what an admin needs to add someone to a scope, and the API
+
+        named it nowhere before: the identity provider knows a person by their
+
+        subject, Cohereny by this id.'
+      properties:
+        actor_id:
+          format: uuid
+          title: Actor Id
+          type: string
+        is_service_account:
+          title: Is Service Account
+          type: boolean
+        memberships:
+          items:
+            $ref: '#/components/schemas/MembershipOut'
+          title: Memberships
+          type: array
+        role:
+          $ref: '#/components/schemas/Role'
+      required:
+      - actor_id
+      - role
+      - is_service_account
+      - memberships
+      title: MeOut
+      type: object
+    MembershipOut:
+      description: One scope the caller belongs to, and the role recorded there.
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+        scope_id:
+          format: uuid
+          title: Scope Id
+          type: string
+      required:
+      - scope_id
+      - role
+      title: MembershipOut
       type: object
     NodeCreate:
       properties:
@@ -1249,6 +1337,7 @@ components:
           - complete
           - failed
           - skipped
+          - cancelled
           title: Status
           type: string
       required:
@@ -1312,6 +1401,14 @@ components:
             type: string
           - type: 'null'
           title: Completed At
+        content_purged_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          description: When the retention purge cleared this run's content (ADR-046). Null while the content
+            is there.
+          title: Content Purged At
         created_at:
           format: date-time
           title: Created At
@@ -1436,6 +1533,184 @@ components:
       - difficulty
       title: QuestionOut
       type: object
+    RetentionClassOut:
+      description: One retention class as an operator or a supervisor reads it.
+      properties:
+        action:
+          enum:
+          - clear
+          - delete
+          - none
+          title: Action
+          type: string
+        configurable:
+          title: Configurable
+          type: boolean
+        description:
+          title: Description
+          type: string
+        effective_from_scope:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Effective From Scope
+        effective_keep_days:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Effective Keep Days
+        policies:
+          items:
+            $ref: '#/components/schemas/RetentionPolicy'
+          title: Policies
+          type: array
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        retention_class:
+          title: Retention Class
+          type: string
+        tables:
+          items:
+            $ref: '#/components/schemas/RetentionTable'
+          title: Tables
+          type: array
+      required:
+      - retention_class
+      - description
+      - action
+      - configurable
+      - reason
+      - tables
+      - policies
+      title: RetentionClassOut
+      type: object
+    RetentionOverview:
+      description: Every retention class, every table in it, every period that is set.
+      properties:
+        classes:
+          items:
+            $ref: '#/components/schemas/RetentionClassOut'
+          title: Classes
+          type: array
+        external_stores:
+          items:
+            $ref: '#/components/schemas/ExternalStoreOut'
+          title: External Stores
+          type: array
+        last_purge_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          title: Last Purge At
+        last_purge_counts:
+          anyOf:
+          - additionalProperties:
+              type: integer
+            type: object
+          - type: 'null'
+          title: Last Purge Counts
+        scope_id:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Scope Id
+      required:
+      - scope_id
+      - classes
+      - external_stores
+      title: RetentionOverview
+      type: object
+    RetentionPolicy:
+      description: One stored period. `scope_id` null is the installation-wide one.
+      properties:
+        keep_days:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Keep Days
+        retention_class:
+          enum:
+          - run_content
+          - run_trace
+          title: Retention Class
+          type: string
+        scope_id:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Scope Id
+        set_at:
+          format: date-time
+          title: Set At
+          type: string
+        set_by:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Set By
+      required:
+      - retention_class
+      - scope_id
+      - keep_days
+      - set_by
+      - set_at
+      title: RetentionPolicy
+      type: object
+    RetentionPolicySet:
+      description: 'Set how long a retention class is kept — installation-wide or for one scope.
+
+
+        `keep_days` is required and may be null: null keeps without limit, which a
+
+        credit file can need. Leaving it out is a malformed request, not a way to
+
+        say "unlimited" by accident.'
+      properties:
+        keep_days:
+          anyOf:
+          - maximum: 36500.0
+            minimum: 1.0
+            type: integer
+          - type: 'null'
+          title: Keep Days
+        scope_id:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Scope Id
+      required:
+      - keep_days
+      title: RetentionPolicySet
+      type: object
+    RetentionTable:
+      description: A table of a retention class, and the columns that are its content.
+      properties:
+        content_columns:
+          items:
+            type: string
+          title: Content Columns
+          type: array
+        owner:
+          title: Owner
+          type: string
+        table:
+          title: Table
+          type: string
+      required:
+      - table
+      - owner
+      - content_columns
+      title: RetentionTable
+      type: object
     Role:
       description: The five roles, least privileged first. Order is meaning.
       enum:
@@ -1487,6 +1762,21 @@ components:
       - litellm_base_url
       title: RouteResponse
       type: object
+    RunCancelRequest:
+      additionalProperties: false
+      description: 'Stopping a run (CHY-200). The reason is optional: who stopped it, and
+
+        when, is recorded either way.'
+      properties:
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Why the run is stopped. Stored in the run's error_message with the run's placeholders,
+            like a reason at the gate.
+          title: Reason
+      title: RunCancelRequest
+      type: object
     RunNodesOut:
       description: 'What each node of a run produced, in the order it ran (CHY-229).
 
@@ -1522,6 +1812,7 @@ components:
           - complete
           - failed
           - rejected
+          - cancelled
           title: Status
           type: string
       required:
@@ -1529,6 +1820,70 @@ components:
       - status
       - nodes
       title: RunNodesOut
+      type: object
+    RunResolveRequest:
+      additionalProperties: false
+      description: Which steps to have resolved; the run's input always comes with them.
+      properties:
+        nodes:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          description: node_refs whose output is wanted with the values; null for every step. A ref the
+            run has no step for is left out.
+          title: Nodes
+      title: RunResolveRequest
+      type: object
+    RunResolvedOut:
+      description: 'A run''s input and its steps'' outputs with the values in place of the
+
+        placeholders (CHY-234).
+
+
+        A run is stored with placeholders, and reading it shows them. Whoever has
+
+        to check that the right person is meant -- the starter, and from `reviewer`
+
+        up whoever sees the run (decided 06.11.2026, E4) -- asks for this instead,
+
+        and every request is audited as `workflow.run_content_resolved`: who, which
+
+        run, which steps, never a value. A run started before CHY-234 is returned
+
+        as it is stored; its values were never replaced.'
+      properties:
+        input_data:
+          additionalProperties: true
+          title: Input Data
+          type: object
+        nodes:
+          items:
+            $ref: '#/components/schemas/NodeExecutionOut'
+          title: Nodes
+          type: array
+        run_id:
+          format: uuid
+          title: Run Id
+          type: string
+        status:
+          enum:
+          - pending
+          - running
+          - awaiting_oversight
+          - complete
+          - failed
+          - rejected
+          - cancelled
+          title: Status
+          type: string
+      required:
+      - run_id
+      - status
+      - input_data
+      - nodes
+      title: RunResolvedOut
       type: object
     RunStatus:
       description: The state of a pilot run.
@@ -1601,13 +1956,15 @@ components:
 
         The role vocabulary is the one from domain/roles.py, and the CHECK on
 
-        scope_memberships.role lists the same five values (INFRA-92). Whether a
+        scope_memberships.role lists the same five values (INFRA-92). Since CHY-92 a
 
-        membership *grants* anything is a separate and still open question —
+        membership grants something: the runs of the scope''s workflows and of every
 
-        CHY-92. Today it records an intent; it does not yet widen or narrow what
+        scope below it become visible to the member (migration 035). The role
 
-        anyone may read.'
+        inside the scope is recorded; what a person may *do* still follows their
+
+        global role.'
       properties:
         actor_id:
           format: uuid
@@ -2160,6 +2517,14 @@ components:
             type: string
           - type: 'null'
           title: Completed At
+        content_purged_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          description: When the retention purge cleared this run's input, result and node content (ADR-046).
+            Null while the content is there; an empty input then means the input was empty.
+          title: Content Purged At
         created_at:
           format: date-time
           title: Created At
@@ -2212,6 +2577,7 @@ components:
           - complete
           - failed
           - rejected
+          - cancelled
           title: Status
           type: string
         workflow_id:
@@ -2236,6 +2602,12 @@ components:
         input_data:
           additionalProperties: true
           default: {}
+          description: 'The run''s input, reachable from every node as `run.<key>`. It is stored with
+            placeholders: every text in it is replaced by the shipped patterns and the scope''s redaction
+            rules before the run begins, and every step reads and writes placeholders (CHY-234). The key
+            `identifiers_to_redact` names further values that identify someone, by category, e.g. {"PERSON":
+            ["Erika Mustermann"]}. It is not stored with the input: its values go into the run''s encrypted
+            mapping and are searched for in every step, found in the input or not.'
           title: Input Data
           type: object
       title: WorkflowRunStart
@@ -2318,6 +2690,165 @@ paths:
       security:
       - HTTPBearer: []
       summary: Anonymize Actor
+      tags:
+      - admin
+  /v1/admin/retention:
+    get:
+      description: 'How long the installation keeps what (CHY-17, ADR-046).
+
+
+        Every retention class with its tables, the columns that are content, and
+
+        the periods that are set. With `scope_id`, also the period that applies in
+
+        that scope and where it was declared. Readable from `reviewer` up: a
+
+        supervisor needs to know the rule, not only whoever changes it.'
+      operationId: get_retention_v1_admin_retention_get
+      parameters:
+      - in: query
+        name: scope_id
+        required: false
+        schema:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Scope Id
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionOverview'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      security:
+      - HTTPBearer: []
+      summary: Get Retention
+      tags:
+      - admin
+  /v1/admin/retention/{retention_class}:
+    delete:
+      description: 'Remove a scope''s own period, so the inherited one applies again. `admin`, audited.
+
+
+        The installation-wide period can be changed, not removed.'
+      operationId: remove_retention_override_v1_admin_retention__retention_class__delete
+      parameters:
+      - in: path
+        name: retention_class
+        required: true
+        schema:
+          enum:
+          - run_content
+          - run_trace
+          title: Retention Class
+          type: string
+      - in: query
+        name: scope_id
+        required: true
+        schema:
+          format: uuid
+          title: Scope Id
+          type: string
+      responses:
+        '204':
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      security:
+      - HTTPBearer: []
+      summary: Remove Retention Override
+      tags:
+      - admin
+    put:
+      description: 'Set a period, installation-wide (no `scope_id`) or for one scope. `admin`, audited.
+
+
+        `keep_days: null` keeps without limit. Only `run_content` and `run_trace`
+
+        take a period; the other classes say in GET why they do not.'
+      operationId: set_retention_v1_admin_retention__retention_class__put
+      parameters:
+      - in: path
+        name: retention_class
+        required: true
+        schema:
+          enum:
+          - run_content
+          - run_trace
+          title: Retention Class
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionPolicySet'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicy'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            refused it (detail is a sentence) — for example a max_tokens above what the routing rule allows,
+            or a routing rule that could never be used submitted for approval.'
+      security:
+      - HTTPBearer: []
+      summary: Set Retention
       tags:
       - admin
   /v1/audit-log:
@@ -2599,6 +3130,7 @@ paths:
             - example_io
             - calibration_anchor
             - routing_rule
+            - redaction_rule
             type: string
           - type: 'null'
           title: Block Type
@@ -2647,7 +3179,12 @@ paths:
       tags:
       - blocks
     post:
-      description: Create a block — a draft in a strict scope, active in a direct one (ADR-042).
+      description: 'Create a block — a draft in a strict scope, active in a direct one (ADR-042).
+
+
+        A block that decides where data may go waits for a second person even in a
+
+        direct scope: it comes back `pending_review` (ADR-045).'
       operationId: create_block_v1_blocks_post
       requestBody:
         content:
@@ -2780,7 +3317,11 @@ paths:
       description: 'Edit a block. 200 if the draft was changed, 201 if a version was published.
 
 
-        In a direct scope the result is active at once, either way (ADR-042).'
+        In a direct scope the result is active at once, either way (ADR-042) —
+
+        except a block that decides where data may go, which waits for a second
+
+        person (ADR-045).'
       operationId: patch_block_v1_blocks__block_id__patch
       parameters:
       - in: path
@@ -2856,7 +3397,14 @@ paths:
 
         inside the transition, on the locked row — not before it, where it would
 
-        cost a second read and judge a row that might not be the one approved.'
+        cost a second read and judge a row that might not be the one approved.
+
+
+        A block that decides where data may go needs a second person (ADR-045). A
+
+        single operator may approve their own, and the response says so in the
+
+        `Cohereny-Notice` header.'
       operationId: approve_block_v1_blocks__block_id__approve_post
       parameters:
       - in: path
@@ -2878,13 +3426,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BlockOut'
-          description: Successful Response
+          description: The block is active.
+          headers:
+            Cohereny-Notice:
+              description: 'Present when a single operator approved a data-flow block they wrote: nobody
+                second checked whether data may leave the installation (ADR-045). Absent otherwise.'
+              schema:
+                type: string
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorDetail'
-          description: The actor's role does not permit this.
+          description: 'The actor''s role does not permit this — or four eyes refuses it: the block decides
+            where data may go, and the approver wrote this version while somebody else could approve it,
+            or is a technical account (ADR-045).'
         '404':
           content:
             application/json:
@@ -3426,8 +3982,30 @@ paths:
       - feedback
       x-cohereny-status: planned
       x-cohereny-ticket: CHY-40
+  /v1/me:
+    get:
+      description: 'Your actor id, your role and the scopes you belong to.
+
+
+        An admin adds you to a scope with this id (`POST /v1/scopes/{id}/members`);
+
+        a member sees the runs of that scope and of every scope below it.'
+      operationId: me_v1_me_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeOut'
+          description: Successful Response
+      security:
+      - HTTPBearer: []
+      summary: Me
+      tags:
+      - scopes
   /v1/pilots/configs:
     get:
+      deprecated: true
       description: 'Every pilot''s stored configuration.
 
 
@@ -3451,6 +4029,7 @@ paths:
       - pilots
   /v1/pilots/configs/{pilot_name}:
     get:
+      deprecated: true
       operationId: get_pilot_config_v1_pilots_configs__pilot_name__get
       parameters:
       - in: path
@@ -3484,6 +4063,7 @@ paths:
       tags:
       - pilots
     put:
+      deprecated: true
       description: 'Replace the named sections. Omitted sections are left as they are.
 
 
@@ -3547,6 +4127,7 @@ paths:
       - pilots
   /v1/pilots/files:
     get:
+      deprecated: true
       description: Available PDF filenames, optionally filtered to one pilot's prefix.
       operationId: list_files_v1_pilots_files_get
       parameters:
@@ -3581,6 +4162,7 @@ paths:
       - pilots
   /v1/pilots/runs:
     get:
+      deprecated: true
       operationId: list_runs_v1_pilots_runs_get
       responses:
         '200':
@@ -3598,6 +4180,7 @@ paths:
       tags:
       - pilots
     post:
+      deprecated: true
       operationId: start_run_v1_pilots_runs_post
       requestBody:
         content:
@@ -3631,6 +4214,7 @@ paths:
       - pilots
   /v1/pilots/runs/{run_id}:
     delete:
+      deprecated: true
       description: 'Cancel a running run or delete a terminal one — audited, and only your own.
 
 
@@ -3683,6 +4267,7 @@ paths:
       tags:
       - pilots
     get:
+      deprecated: true
       operationId: get_run_v1_pilots_runs__run_id__get
       parameters:
       - in: path
@@ -3718,6 +4303,7 @@ paths:
       - pilots
   /v1/pilots/runs/{run_id}/coverage:
     get:
+      deprecated: true
       description: 'question_bank coverage for a completed study run.
 
 
@@ -3759,6 +4345,7 @@ paths:
       - pilots
   /v1/pilots/runs/{run_id}/oversight:
     post:
+      deprecated: true
       description: 'Submit a human oversight decision for a banking run (EU AI Act Art. 14).
 
 
@@ -3814,6 +4401,7 @@ paths:
       - pilots
   /v1/pilots/runs/{run_id}/stream:
     get:
+      deprecated: true
       description: 'SSE stream for a pilot run.
 
 
@@ -3855,6 +4443,7 @@ paths:
       - pilots
   /v1/questions:
     get:
+      deprecated: true
       description: Questions from the bank, newest first, optionally filtered by topic.
       operationId: list_questions_v1_questions_get
       parameters:
@@ -3909,6 +4498,7 @@ paths:
       - questions
   /v1/questions/{question_id}:
     get:
+      deprecated: true
       operationId: get_question_v1_questions__question_id__get
       parameters:
       - in: path
@@ -4240,6 +4830,74 @@ paths:
       summary: Get Run
       tags:
       - workflows
+  /v1/workflows/runs/{run_id}/cancel:
+    post:
+      description: 'Stop a run that has not finished (EU AI Act Art. 14(4)(e)).
+
+
+        For whoever started the run, and from `reviewer` up for whoever sees it.
+
+        The run and the node it stopped at — the gate it waits at, or the node in
+
+        flight — end as **`cancelled`**: neither a failure nor a rejection, and
+
+        nothing is recorded as a decision at the gate. A node that is still working
+
+        finishes, and its result is dropped.
+
+
+        The reason is optional and stored with the run''s placeholders. Who stopped
+
+        the run, and when, is audited as `workflow.run_cancelled` either way.'
+      operationId: cancel_run_v1_workflows_runs__run_id__cancel_post
+      parameters:
+      - in: path
+        name: run_id
+        required: true
+        schema:
+          format: uuid
+          title: Run Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/RunCancelRequest'
+              - type: 'null'
+              title: Body
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRunOut'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '409':
+          description: The run is already over — complete, failed, rejected or cancelled. See CHY-200.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      security:
+      - HTTPBearer: []
+      summary: Cancel Run
+      tags:
+      - workflows
   /v1/workflows/runs/{run_id}/nodes:
     get:
       description: 'What each node of the run produced, in the order it ran (CHY-229).
@@ -4356,6 +5014,72 @@ paths:
       summary: Decide Oversight
       tags:
       - workflows
+  /v1/workflows/runs/{run_id}/resolve:
+    post:
+      description: 'The run''s input and its steps'' outputs with the values, not the placeholders.
+
+
+        A run is stored with placeholders (CHY-234). Whoever started it, and from
+
+        `reviewer` up whoever sees it, may have the values put back — to check at a
+
+        gate that the right person is meant. Every call is audited as
+
+        `workflow.run_content_resolved`: who, which run, which steps, never a value.
+
+        A POST because it is a deliberate act with a record, not a view a link or a
+
+        prefetch may trigger.'
+      operationId: resolve_run_v1_workflows_runs__run_id__resolve_post
+      parameters:
+      - in: path
+        name: run_id
+        required: true
+        schema:
+          format: uuid
+          title: Run Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/RunResolveRequest'
+              - type: 'null'
+              title: Body
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResolvedOut'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '410':
+          description: The run's content was cleared at the end of its period (CHY-17); there is nothing
+            left to resolve.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      security:
+      - HTTPBearer: []
+      summary: Resolve Run
+      tags:
+      - workflows
   /v1/workflows/{workflow_id}:
     get:
       description: 'The definition without its graph — see `/graph` for nodes and edges.
@@ -4408,7 +5132,12 @@ paths:
 
         the first: fixing a graph one round trip at a time is how a validator
 
-        becomes something people route around.'
+        becomes something people route around.
+
+
+        Back to `draft` only from `draft`: a released or retired workflow answers
+
+        **409**, because in draft its graph could change underneath its runs.'
       operationId: set_workflow_status_v1_workflows__workflow_id__put
       parameters:
       - in: path

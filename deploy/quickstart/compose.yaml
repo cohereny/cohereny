@@ -18,12 +18,17 @@ name: cohereny-quickstart
 # builds it: four services building the same tag in parallel race each other,
 # and the loser fails with "image already exists" — on the second start, not
 # the first, which is how it slipped through.
+#
+# Three database roles, as in any installation (CHY-85): the superuser only
+# creates the other two (`db-roles`), the migration role owns the tables
+# (`migrate`), and everything else runs as the runtime role, which the API
+# checks at start — it refuses to run as more.
 x-cohereny: &cohereny
   image: cohereny-quickstart:local
   pull_policy: never
   restart: "no"
   environment: &cohereny-env
-    DATABASE_URL: postgresql://cohereny:${POSTGRES_PASSWORD:-cohereny}@postgres:5432/cohereny
+    DATABASE_URL: postgresql://cohereny_runtime:${COHERENY_RUNTIME_PASSWORD:-cohereny_runtime}@postgres:5432/cohereny
     REDIS_URL: redis://redis:6379/0
     # Plain http to the development issuer, accepted only on dev (api/config.py).
     ENVIRONMENT: dev
@@ -31,6 +36,10 @@ x-cohereny: &cohereny
     # Any OpenAI-compatible endpoint. Ollama serves one at /v1.
     LITELLM_BASE_URL: ${MODEL_GATEWAY_URL:-http://ollama:11434/v1}
     LITELLM_API_KEY: ${MODEL_GATEWAY_KEY:-}
+    # Seals each run's placeholder mapping (CHY-234); the API does not start
+    # without one. The default is 32 zero bytes: it works and protects nothing,
+    # like the default passwords. See .env.example for a real one.
+    PII_MAPPING_KEYS: ${PII_MAPPING_KEYS:-quickstart:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
     ROUTING_CONFIG: /app/deploy/quickstart/routing-config.yaml
     API_DOCS: "true"
     LANGFUSE_ENABLED: "false"
@@ -58,13 +67,29 @@ services:
       interval: 2s
       retries: 30
 
-  # Applies migrations/ once, then exits. The API waits for it.
-  migrate:
+  # Creates the migration and runtime roles as the superuser, then exits.
+  # Idempotent: a second start only sets the passwords again.
+  db-roles:
     <<: *cohereny
-    command: ["python", "-m", "migrations.runner"]
+    command: ["python", "-m", "migrations.roles", "--database", "cohereny"]
+    environment:
+      DB_SUPERUSER_URL: postgresql://cohereny:${POSTGRES_PASSWORD:-cohereny}@postgres:5432/cohereny
+      COHERENY_MIGRATOR_PASSWORD: ${COHERENY_MIGRATOR_PASSWORD:-cohereny_migrator}
+      COHERENY_RUNTIME_PASSWORD: ${COHERENY_RUNTIME_PASSWORD:-cohereny_runtime}
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Applies migrations/ once as the migration role, then exits. The API waits for it.
+  migrate:
+    <<: *cohereny
+    command: ["python", "-m", "migrations.runner"]
+    environment:
+      <<: *cohereny-env
+      DATABASE_URL: postgresql://cohereny_migrator:${COHERENY_MIGRATOR_PASSWORD:-cohereny_migrator}@postgres:5432/cohereny
+    depends_on:
+      db-roles:
+        condition: service_completed_successfully
 
   # The development identity provider: JWKS for the eight applications and a
   # client_credentials token endpoint. Passwords are not checked.
@@ -128,7 +153,8 @@ services:
         condition: service_healthy
 
   # Writes the example — scopes, blocks, routing rules, a workflow — through the
-  # API, once. A second start finds it and leaves everything as it is.
+  # API, once. A second start finds it and leaves it as it is; it only adds the
+  # reviewer's membership, which a quickstart seeded before 2026-11-08 lacks.
   seed:
     <<: *cohereny
     command: ["python", "deploy/quickstart/seed.py"]

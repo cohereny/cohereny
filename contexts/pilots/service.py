@@ -49,10 +49,12 @@ from contexts.pilots.schema import (
     QuestionOut,
     RunEnvironment,
     RunStatus,
+    TERMINAL_STATES,
     WorkflowConfigListOut,
     WorkflowConfigOut,
     WorkflowConfigPut,
 )
+from kernel import acting
 from kernel.audit import (
     ACTION_PILOT_OVERSIGHT_DECIDED,
     ACTION_PILOT_RUN_CANCELLED,
@@ -63,6 +65,7 @@ from kernel.audit import (
 )
 from kernel.access import require
 from kernel.identity import Caller, resolve_actor
+from kernel.retention import Periods, RetentionClass
 
 
 # ── reading ───────────────────────────────────────────────────────────────────
@@ -82,26 +85,38 @@ def _run_out(row) -> PilotRunOut:
     return PilotRunOut(**d)
 
 
-async def list_runs(pool) -> list[PilotRunOut]:
-    return [_run_out(r) for r in await store.recent_runs(pool)]
+async def list_runs(pool, caller: Caller) -> list[PilotRunOut]:
+    """The recent runs the caller may see: their own, or all of them for admin (CHY-92)."""
+    reader = await resolve_actor(pool, caller)
+    async with acting.acting_as(pool, reader.id) as conn:
+        return [_run_out(r) for r in await store.recent_runs(conn)]
 
 
-async def get_run(pool, run_id: UUID) -> PilotRunOut:
-    row = await store.full_run(pool, run_id)
+async def get_run(pool, caller: Caller, run_id: UUID) -> PilotRunOut:
+    """One run, if the caller may see it; otherwise as if it did not exist (CHY-92)."""
+    reader = await resolve_actor(pool, caller)
+    async with acting.acting_as(pool, reader.id) as conn:
+        row = await store.full_run(conn, run_id)
     if row is None:
         raise RunNotFound
     return _run_out(row)
 
 
-async def get_coverage(pool, run_id: UUID) -> CoverageOut:
+async def get_coverage(pool, caller: Caller, run_id: UUID) -> CoverageOut:
     """Coverage of a completed study run against the question bank.
 
     Two distinct absences, kept distinct: no such run, and a run with nothing
     to report (a banking run, or no questions ingested yet). Both ended as the
     same 404 before; they still do, but the reason now survives to the caller.
+    A run the caller may not see counts as no such run (CHY-92).
     """
-    if not await store.run_exists(pool, run_id):
+    reader = await resolve_actor(pool, caller)
+    async with acting.acting_as(pool, reader.id) as conn:
+        visible = await store.run_exists(conn, run_id)
+    if not visible:
         raise RunNotFound
+    # run_coverage holds no content and has no row security; it is read only
+    # once the run itself was found in the caller's context.
     rows = await store.coverage_rows(pool, run_id)
     if not rows:
         raise NoCoverageData(run_id)
@@ -309,7 +324,9 @@ async def start_run(
     # transparency record should read as a set of models, not as a tier list.
     model_used = ", ".join(sorted(set(model_map.values())))
 
-    async with pool.acquire() as conn, conn.transaction():
+    # As the starter: row-level security admits the row because it is theirs
+    # (CHY-92). The background thread then works in the system context.
+    async with acting.acting_as(pool, starter.id) as conn, conn.transaction():
         row = await store.insert_run(
             conn, thread_id=thread_id, pilot_name=body.pilot_name,
             input_file=body.input_file, actor_id=starter.id,
@@ -366,7 +383,10 @@ async def cancel_or_delete(
     """
     deleter = await resolve_actor(pool, caller)
 
-    row = await store.run_status_and_owner(pool, run_id)
+    # In the deleter's own context throughout: a run they may not see is not
+    # found, before ownership is even asked (CHY-92).
+    async with acting.acting_as(pool, deleter.id) as conn:
+        row = await store.run_status_and_owner(conn, run_id)
     if row is None:
         raise RunNotFound
 
@@ -380,7 +400,7 @@ async def cancel_or_delete(
 
     if disposition is Disposition.DELETE:
         try:
-            async with pool.acquire() as conn, conn.transaction():
+            async with acting.acting_as(pool, deleter.id) as conn, conn.transaction():
                 # Audit before the delete, in the same transaction: afterwards
                 # there is no row left to describe, and the two must stand or
                 # fall together.
@@ -398,13 +418,16 @@ async def cancel_or_delete(
         return "deleted"
 
     if disposition is Disposition.RELEASE_GATE:
-        # The gate only understands "approved" or "rejected", so releasing it
-        # means sending "rejected". That is a mechanism, not a decision: this is
-        # a *cancellation* and it is recorded as one. Writing it into
-        # oversight_decision would manufacture an Article 14 record for a
-        # decision nobody made — the opposite of what CHY-88 built.
-        released = registry.decide_oversight(run_id, "rejected")
-        async with pool.acquire() as conn, conn.transaction():
+        # Released with "cancelled", the gate's third value, never with a
+        # decision (CHY-153). Until 07.11.2026 this sent "rejected": the thread
+        # then booked the run as an Art. 14 rejection, the trigger from 014
+        # refused a decision without a decider, and the run stayed `running`
+        # with no result. Writing a cancellation into oversight_decision would
+        # manufacture a record for a decision nobody made — the opposite of
+        # what CHY-88 built. The run ends through the cancel path, as `failed`
+        # with a message saying it was cancelled.
+        released = registry.decide_oversight(run_id, "cancelled")
+        async with acting.acting_as(pool, deleter.id) as conn, conn.transaction():
             await store.clear_oversight_gate(conn, run_id)
             await write_audit(
                 conn,
@@ -417,7 +440,7 @@ async def cancel_or_delete(
 
     if disposition is Disposition.CANCEL_IN_FLIGHT:
         registry.cancel_signal(run_id).set()
-        async with pool.acquire() as conn:
+        async with acting.acting_as(pool, deleter.id) as conn:
             await write_audit(
                 conn,
                 action=ACTION_PILOT_RUN_CANCELLED,
@@ -429,7 +452,7 @@ async def cancel_or_delete(
 
     # Disposition.MARK_FAILED — the database says running, this process has
     # never heard of the run. It restarted; nothing will ever finish it.
-    async with pool.acquire() as conn, conn.transaction():
+    async with acting.acting_as(pool, deleter.id) as conn, conn.transaction():
         await store.mark_failed(conn, run_id, "Cancelled by user (run not in flight)")
         await write_audit(
             conn,
@@ -462,7 +485,10 @@ async def submit_oversight(
     decider = await resolve_actor(pool, caller)
     require(decider, "reviewer")
 
-    row = await store.run_status_and_owner(pool, run_id)
+    # Only someone who may see the run decides it — for a pilot run, which has
+    # no scope, that is its starter or an admin (CHY-92).
+    async with acting.acting_as(pool, decider.id) as conn:
+        row = await store.run_status_and_owner(conn, run_id)
     if row is None:
         raise RunNotFound
     rules.check_awaiting_oversight(row["status"])
@@ -475,7 +501,7 @@ async def submit_oversight(
     if not registry.has_oversight_gate(run_id):
         raise OversightGateGone
 
-    async with pool.acquire() as conn, conn.transaction():
+    async with acting.acting_as(pool, decider.id) as conn, conn.transaction():
         await store.record_oversight(
             conn, run_id, decision=decision, decided_by=decider.id
         )
@@ -502,7 +528,7 @@ async def submit_oversight(
 # ── streaming ─────────────────────────────────────────────────────────────────
 
 async def stream_events(
-    pool, run_id: UUID, *,
+    pool, caller: Caller, run_id: UUID, *,
     registry: RunRegistry = _process_registry,
     idle_timeout: float = 30.0,
 ) -> AsyncIterator[dict | None]:
@@ -517,7 +543,9 @@ async def stream_events(
     events_json. The second case is a restart, or simply a client arriving after
     the run finished — the common case, not the exception.
     """
-    row = await store.run_stream_state(pool, run_id)
+    reader = await resolve_actor(pool, caller)
+    async with acting.acting_as(pool, reader.id) as conn:
+        row = await store.run_stream_state(conn, run_id)
     if row is None:
         raise RunNotFound
 
@@ -584,3 +612,23 @@ def _replay(row) -> list[dict]:
     if status == RunStatus.FAILED:
         return [{"type": events.ERROR, "message": "Run failed — reload for details"}]
     return [{"type": events.STATUS, "status": status}]
+
+
+# ── retention (CHY-17, ADR-046) ───────────────────────────────────────────────
+
+async def purge_runs(conn, periods: Periods) -> dict[str, int]:
+    """Apply the retention periods to finished pilot runs, in the caller's transaction.
+
+    Pilot runs belong to no scope, so the installation-wide periods apply. The
+    LangGraph checkpoints of a run stay: they are tables of the library, not of
+    this context, and they go with the pilots (CHY-179).
+    """
+    finished = sorted(state.value for state in TERMINAL_STATES)
+    counts = {"pilot_runs_cleared": 0, "pilot_runs_deleted": 0}
+    content_days = periods.installation_days(RetentionClass.RUN_CONTENT)
+    if content_days is not None:
+        counts["pilot_runs_cleared"] = await store.clear_run_content(conn, content_days, finished)
+    trace_days = periods.installation_days(RetentionClass.RUN_TRACE)
+    if trace_days is not None:
+        counts["pilot_runs_deleted"] = await store.delete_runs(conn, trace_days, finished)
+    return counts

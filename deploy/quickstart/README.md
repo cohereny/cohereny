@@ -59,6 +59,12 @@ Two users matter here: `admin` writes, `reviewer` approves. Nothing in the
 organisation and the team went live on the say of its author alone — the seed had
 `reviewer` approve every block, as you will do below.
 
+`reviewer` is also a member of *Example Corp*. A run is visible only to whoever
+started it, to the members of its scope and of the scopes above, and to `admin`;
+without the membership `reviewer` would not find the run you start in step 4.
+`GET /v1/me` shows a user's id and memberships — the id is what an admin passes
+to `POST /v1/scopes/{id}/members`.
+
 **1. Find the example.** Note the id of the project *Order inquiries* and of its
 workflow.
 
@@ -144,6 +150,18 @@ token for the surface of the request you want to try.
 | [Workflows](guides/workflows.md) | build a workflow and run it with a human review |
 | [Your own model](guides/your-own-model.md) | use Ollama on your machine, or any OpenAI-compatible gateway |
 
+## Update
+
+```bash
+git pull
+docker compose up
+```
+
+Every start builds the image from the source you have, so after `git pull` the new
+version runs. The database keeps its data, and the migrations bring it up to date. Your
+`.env` stays as it is: a new setting has a default, and [.env.example](.env.example)
+shows it. What changed is in [CHANGELOG.md](../../CHANGELOG.md).
+
 ## Stop and clean up
 
 ```bash
@@ -159,6 +177,6 @@ docker compose down -v       # stop and delete the database and the downloaded m
 |---|---|---|
 | `502` from `/v1/complete` or a failed run | the model is not downloaded yet, or Docker ran out of memory | `docker compose logs model-pull`; give Docker at least 4 GB |
 | `401` | the token expired after ten minutes, or it is for another surface (then `403`) | fetch a new one with `token` |
-| `409 no route for task` | no approved routing rule for that task type in the scope or above | [Routing rules](guides/routing-rules.md) |
+| `409 no routing rule for task type …` | no approved routing rule for that task type in the scope or above | [Routing rules](guides/routing-rules.md) |
 | a port is already in use | another service on 8000 or 9010 | set `API_PORT` / `ISSUER_PORT` in `.env` |
 | slow answers | Docker on a Mac cannot use the GPU | [Your own model](guides/your-own-model.md): Ollama on the host |

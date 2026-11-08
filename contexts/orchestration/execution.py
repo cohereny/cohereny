@@ -93,6 +93,10 @@ class NodeContext:
     #: than as the service — an LLM call recorded against nobody is a gap in
     #: exactly the trail Art. 14 asks about.
     actor_id: UUID | None = None
+    #: The run's placeholder mapping as it stood when this pass was claimed
+    #: (CHY-234), opened by the service — an executor never holds a key. `None`
+    #: for a run started before CHY-234, whose content keeps its values (E6).
+    run_mapping: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,10 @@ class NodeResult:
 
     output: Mapping[str, Any] = field(default_factory=dict)
     model_used: str | None = None
+    #: The mapping as this pass leaves it: what it was handed plus whatever the
+    #: model's answer added (CHY-234). The service merges it into the stored
+    #: one under a row lock. `None` when the node replaced nothing.
+    run_mapping: Mapping[str, str] | None = None
 
 
 class NodeExecutor(Protocol):

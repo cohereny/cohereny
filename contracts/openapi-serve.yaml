@@ -20,6 +20,17 @@ components:
             type: string
           - type: 'null'
           title: Context Id
+        identifiers_to_redact:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          description: 'Values that identify someone, by category, e.g. {"PERSON": ["Erika Mustermann"]}.
+            Replaced with placeholders before the model sees prompt or context and put back in the answer.
+            E-mail addresses, phone numbers, IBANs, German tax ids, health insurance numbers and labelled
+            dates of birth are found without being named; names are not.'
+          title: Identifiers To Redact
+          type: object
         max_tokens:
           anyOf:
           - minimum: 1.0
@@ -72,11 +83,23 @@ components:
           - type: integer
           - type: 'null'
           title: Output Tokens
+        redactions:
+          additionalProperties:
+            type: integer
+          description: Identifiers replaced before the model call, per category. Counts, never values.
+          title: Redactions
+          type: object
         trace_id:
           anyOf:
           - type: string
           - type: 'null'
           title: Trace Id
+        unresolved_placeholders:
+          default: 0
+          description: Placeholders in the answer that could not be put back because the model changed
+            them. They are left as written.
+          title: Unresolved Placeholders
+          type: integer
       required:
       - content
       - model_used

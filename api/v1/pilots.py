@@ -50,7 +50,10 @@ from contexts.pilots.schema import (
 from core.db import get_pool
 from core.redis import get_redis
 
-router = APIRouter()
+# Deprecated since 2026-11-08: the LangGraph pilots call the model with the
+# values and store them, unlike a workflow run. They are rebuilt as workflows
+# on the runner (CHY-172); until then the contract says so on every operation.
+router = APIRouter(deprecated=True)
 
 
 @router.get("/runs", response_model=list[PilotRunOut])
@@ -58,7 +61,7 @@ async def list_runs(
     actor: CurrentUser = Depends(require_auth),
     pool=Depends(get_pool),
 ) -> list[PilotRunOut]:
-    return await service.list_runs(pool)
+    return await service.list_runs(pool, actor)
 
 
 @router.post(
@@ -123,7 +126,7 @@ async def stream_run(
     the beginning, live from memory or from events_json for a run this process
     no longer holds.
     """
-    stream = service.stream_events(pool, run_id)
+    stream = service.stream_events(pool, actor, run_id)
 
     # Pull the first item here, before the response exists. An async generator
     # does not run until it is iterated, so a RunNotFound raised on the first
@@ -171,7 +174,7 @@ async def get_run(
     actor: CurrentUser = Depends(require_auth),
     pool=Depends(get_pool),
 ) -> PilotRunOut:
-    return await service.get_run(pool, run_id)
+    return await service.get_run(pool, actor, run_id)
 
 
 @router.get(
@@ -187,7 +190,7 @@ async def get_run_coverage(
     404 both when the run does not exist and when it has no coverage data
     (a banking run, or no questions ingested yet).
     """
-    return await service.get_coverage(pool, run_id)
+    return await service.get_coverage(pool, actor, run_id)
 
 
 @router.delete(

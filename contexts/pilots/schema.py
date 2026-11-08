@@ -91,6 +91,11 @@ class PilotRunOut(BaseModel):
     created_at: datetime
     oversight_pending: bool = False
     oversight_decision: str | None = None
+    content_purged_at: datetime | None = Field(
+        default=None,
+        description="When the retention purge cleared this run's content "
+                    "(ADR-046). Null while the content is there.",
+    )
     run_config: dict[str, Any] = Field(
         default_factory=dict, description="What the caller asked to override."
     )

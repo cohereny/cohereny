@@ -20,6 +20,7 @@ Endpoint overview:
   /v1/health                    → liveness check (no auth)
   /v1/route                     → resolve task_type to model + LiteLLM URL
   /v1/scopes                    → scope hierarchy management
+  /v1/me                        → the caller's actor id, role and memberships
   /v1/blocks                    → context block CRUD
   /v1/workflows                 → workflow definitions
   /v1/compose                   → context composition for workflow nodes
@@ -41,6 +42,7 @@ from api.v1 import (
     compose,
     feedback,
     health,
+    me,
     pilots,
     questions,
     route,
@@ -69,6 +71,7 @@ _ASSIGNMENT: list[tuple[APIRouter, str, str, Surface | None]] = [
     (health.router, "", "health", None),
     (route.router, "", "routing", Surface.SERVE),
     (scopes.router, "/scopes", "scopes", Surface.AUTHOR),
+    (me.router, "", "scopes", Surface.AUTHOR),
     (blocks.router, "/blocks", "blocks", Surface.AUTHOR),
     (workflows.router, "/workflows", "workflows", Surface.AUTHOR),
     (compose.router, "", "runtime", Surface.SERVE),

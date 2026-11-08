@@ -8,6 +8,29 @@ Cohereny ist ein Pre-Release. Ein Schnappschuss ist ein veröffentlichter Stand 
 Entwicklungs-Repositorys, keine versionierte Ausgabe; jeder hat auf GitHub ein Pre-Release, das
 nach seinem Datum heißt.
 
+## 2026-11-08
+
+### Neu
+- Workflow-Läufe werden mit Platzhaltern gespeichert. Bezeichner in der Eingabe eines Laufs, in Ein- und Ausgabe jedes Schritts und in den Begründungen am Gate werden ersetzt, bevor sie gespeichert werden; die Zuordnung zu den Werten ist je Lauf verschlüsselt, mit einem Schlüssel, den die Datenbank nie sieht. Wer den Lauf gestartet hat, und ab `reviewer` jeder, der ihn sieht, kann sich die Werte mit `POST /v1/workflows/runs/{run_id}/resolve` zurückholen, jedes Mal protokolliert. Die API braucht `PII_MAPPING_KEYS` und startet ohne nicht ([CRYPTOGRAPHY.md](CRYPTOGRAPHY.md)). Läufe, die vor diesem Update gestartet wurden, behalten ihre Werte, bis ihre Inhaltsfrist abläuft ([DATA-PROTECTION.md](DATA-PROTECTION.md)).
+- Bezeichner werden vor jedem Modellaufruf von `/v1/complete` und in Workflows ersetzt: E-Mail-Adressen, Telefonnummern, IBANs, Steuer-IDs und Krankenversichertennummern, gekennzeichnete Geburtsdaten, die Werte, die ein Aufrufer in `identifiers_to_redact` nennt, und die eigenen Regeln eines Bereichs als geprüfte `redaction_rule`-Blöcke. Modell, Gateway und Trace sehen Platzhalter; `/v1/complete` liefert die Antwort mit den Werten. Einen Namen, den niemand nennt, erkennt Cohereny noch nicht.
+- `POST /v1/workflows/runs/{run_id}/cancel` hält einen Lauf an, der noch nicht beendet ist (KI-Verordnung Art. 14(4)(e)) — für die Person, die ihn gestartet hat, und ab `reviewer` für alle, die ihn sehen. Der Lauf endet als `cancelled`, nicht als Ablehnung am Gate.
+- Aufbewahrungsfristen für die ganze Installation oder je Bereich: `GET /v1/admin/retention`, `PUT /v1/admin/retention/{retention_class}`. `cc retention purge` leert die Inhalte eines Laufs, wenn ihre Frist abläuft (Vorgabe 30 Tage), und löscht seine Spur später (Vorgabe 183 Tage). Regelmäßig ausführen, sonst wird nichts gelöscht.
+- Vier Augen, wo Daten den Ort wechseln: Eine Routing-Regel, die ein Modell unterhalb von `critical` nennt, und ein Block, der eine Datenschutzregel lockert, gibt jemand frei, der an dieser Version nichts geschrieben hat. Konten in der Gruppe `chy-service-accounts` des Identity Providers geben sie nie frei ([SECURITY.md](SECURITY.md)).
+- Für Betreiber: [DATA-PROTECTION.md](DATA-PROTECTION.md), was Cohereny zu einer Datenschutz-Folgenabschätzung beiträgt, jede Maßnahme mit dem Test, der fällt, wenn man sie entfernt; ein ausgefülltes Beispiel für eine Klinik ([DATA-PROTECTION-EXAMPLE.de.md](DATA-PROTECTION-EXAMPLE.de.md), englisch: [DATA-PROTECTION-EXAMPLE.md](DATA-PROTECTION-EXAMPLE.md)); und das Kryptokonzept ([CRYPTOGRAPHY.md](CRYPTOGRAPHY.md)).
+
+### Geändert
+- Migrationen gehen nur vorwärts. Es gibt keine Rückwärtsmigrationen; der Weg zurück aus einem Update ist das Backup davor ([DEPENDENCIES.md](DEPENDENCIES.md)).
+- Die beiden LangGraph-Piloten, `/v1/pilots` und `/v1/questions`, sind abgekündigt. Anders als ein Workflow rufen sie das Modell mit den Werten auf und speichern sie; der API-Vertrag kennzeichnet jede ihrer Operationen als `deprecated`. Sie werden als Workflows auf den Runner umgestellt. Bis dahin gehören Personendaten in Workflows oder `/v1/complete` ([DATA-PROTECTION.md](DATA-PROTECTION.md)).
+- Einen Schnellstart aktualisieren `git pull` und `docker compose up`: Jeder Start baut das Image aus dem Quellcode, die Datenbank behält ihre Daten und wird migriert. Bei einem Schnellstart vom 2026-11-04 trägt der Seed `reviewer` als Mitglied von Example Corp ein; ohne das sähe `reviewer` die Läufe nicht mehr (siehe Sicherheit) ([deploy/quickstart](deploy/quickstart/README.md#update)).
+
+### Behoben
+- Ein freigegebener Workflow ließ sich auf `draft` zurücksetzen, und sein Graph war dann änderbar, unter den Läufen, die ihn benutzt hatten. Das wird jetzt mit `409` abgewiesen; ein freigegebener Workflow ändert sich über eine neue Version.
+- Ein Pilotlauf, der am Gate wartete und abgebrochen wurde, wurde als Ablehnung verbucht und blieb ohne Ergebnis auf `running`. Er endet jetzt als `failed`, mit dem Abbruch als Meldung.
+
+### Sicherheit
+- Läufe lesen nur, wer sie gestartet hat, die Mitglieder des Workflow-Bereichs und der Bereiche darüber und `admin`; Row-Level Security setzt das in der Datenbank durch. Bisher las jede angemeldete Person jeden Lauf. Wer Läufe prüft, muss Mitglied der Bereiche sein, in denen sie entstehen (`POST /v1/scopes/{scope_id}/members`), sonst bleiben sie verborgen.
+- Die API läuft mit einer eigenen Datenbankrolle, `<database>_runtime`; `<database>_migrator` besitzt die Tabellen und führt die Migrationen aus, und als Superuser oder Eigentümerin startet die API nicht. Bisher konnte sie die Trigger abschalten, die das Audit-Log nur anfügbar halten. Bestehende Installationen legen beide Rollen einmal mit `python -m migrations.roles` an und richten `DATABASE_URL` der API auf die Laufzeitrolle ([DEPENDENCIES.md](DEPENDENCIES.md)).
+
 ## 2026-11-04
 
 ### Neu

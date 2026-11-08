@@ -9,6 +9,7 @@ Subcommands:
   cc pilot run <pdf> --pilot <name>  → start a pilot workflow for a PDF
   cc pilot list [--pilot <name>]     → list available PDFs in the examples directory
   cc actor set-role <idp_sub> <role> → grant a role directly in the database
+  cc retention purge [--dry-run]     → clear and delete run data past its period
 
 Environment:
   PILOT_DATA_DIR    holds examples/ (input PDFs) and outputs/ (results);
@@ -37,6 +38,7 @@ Dependencies:
   - typer     (CLI framework)
   - docker    (must be installed on the executing system)
 """
+import asyncio
 import os
 import re
 import subprocess
@@ -51,6 +53,8 @@ app.add_typer(pilot_app, name="pilot")
 
 actor_app = typer.Typer(help="Actor and role administration", no_args_is_help=True)
 app.add_typer(actor_app, name="actor")
+retention_app = typer.Typer(help="Retention: apply the configured periods", no_args_is_help=True)
+app.add_typer(retention_app, name="retention")
 
 # Both locations used to be hard-coded paths of one host. They are read per
 # call rather than at import, so a changed environment (or a test) takes effect
@@ -238,8 +242,6 @@ def actor_set_role(
     because this is a CLI — argument parsing, the DSN, exit codes and the
     message a human reads.
     """
-    import asyncio
-
     # The same source as the API: the environment first, then .env in the
     # working directory, so README "Getting started" needs nothing extra.
     # Imported here for the start-up reason below.
@@ -263,3 +265,31 @@ def actor_set_role(
 
     what = "created" if created else "updated"
     typer.echo(f"{what}: actor {actor_id} ({idp_sub}) → {role}")
+
+
+@retention_app.command("purge")
+def retention_purge(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Count what would go, change nothing, write no audit entry"
+    ),
+    database_url: str | None = typer.Option(
+        None, "--database-url", help="Overrides DATABASE_URL from the environment"
+    ),
+) -> None:
+    """Clear run content and delete run traces whose period has passed (ADR-046).
+
+    Started by the operator's timer, not by the API. Each real run writes a
+    `retention.purged` entry into the audit log, also when nothing expired —
+    GET /v1/admin/retention reports the newest, and its age is what monitoring
+    should watch. Periods are set through PUT /v1/admin/retention.
+    """
+    # Same sources and the same late imports as `actor set-role`.
+    from api.config import settings
+    from cli import retention
+
+    counts = asyncio.run(retention.purge(database_url or settings.database_url,
+                                         dry_run=dry_run))
+    label = "would clear or delete" if dry_run else "cleared or deleted"
+    typer.echo(f"retention purge — {label}:")
+    for name, count in counts.items():
+        typer.echo(f"  {name:28} {count}")

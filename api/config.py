@@ -33,8 +33,9 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # PostgreSQL connection string including DB name (dev/test/prod use separate DBs)
-    database_url: str = "postgresql://cohereny:cohereny@localhost:5432/cohereny"
+    # PostgreSQL connection string including DB name (dev/test/prod use separate DBs).
+    # The runtime role, never the superuser or the owner: core.db refuses both (CHY-85).
+    database_url: str = "postgresql://cohereny_runtime:cohereny_runtime@localhost:5432/cohereny"
 
     # Redis URL with DB index: DB0=prod, DB1=dev, DB2=test — prevents cross-stage collisions
     redis_url: str = "redis://localhost:6379/0"
@@ -118,6 +119,14 @@ class Settings(BaseSettings):
     # Set to empty string for local dev without an active LiteLLM instance.
     litellm_api_key: str = ""
 
+    # Keys that seal each workflow run's placeholder mapping (CHY-234,
+    # kernel/mapping_cipher.py): `<id>:<32 bytes base64url>`, comma separated.
+    # The first one seals, every one listed opens — to rotate, put a new key in
+    # front and drop the old one once the runs it sealed are past their content
+    # period. Required: the API does not start without one (E5, 06.11.2026).
+    # A lost key takes the values of its runs with it; the placeholders stay.
+    pii_mapping_keys: str = ""
+
     # Path to the deployment's model declaration (routing-config.yaml): which
     # models this installation can reach and the strictest data class each may
     # see. Empty = the file bundled with the code, which declares the reference
@@ -130,8 +139,8 @@ class Settings(BaseSettings):
     # here: that is a reviewed routing rule in the context repository (ADR-037).
     routing_config: str = ""
 
-    # Directory where pilot input PDFs are stored (RAID mount, read-only in container).
-    # Must match the volume mount in compose.yaml.
+    # Directory where pilot input PDFs are stored (read-only in the container).
+    # Must match the volume mount of the API container.
     pilot_input_dir: str = "/data/examples"
 
     # LLM model identifiers — used in EU AI Act Art. 50 transparency disclosure.

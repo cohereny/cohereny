@@ -1,6 +1,6 @@
 # Cohereny — Coding-Konventionen
 
-> **Stand:** 04.09.2026 · Gilt für `cohereny` und `cohereny-ui`
+> **Stand:** 07.11.2026 · Gilt für `cohereny` und `cohereny-ui`
 > Architektur: [`cohereny-arc42.md`](https://github.com/cohereny/cohereny/blob/main/docs/cohereny-arc42.md) §5.7, ADR-030, ADR-031
 > CI-Jobs wie `quality` und `integration` laufen in der Pipeline des selbst betriebenen GitLab;
 > der öffentliche Spiegel hat nur die Veröffentlichungs-Pipeline.
@@ -128,6 +128,22 @@ Ordnung; selbst erfundene Kürzel nicht.
 *Prüfstelle:* **Review**. Automatisierbar ist das nicht, aber die beiden Fälle oben haben je
 einen halben Tag gekostet.
 
+**Bezeichner sagen, was sie enthalten, nicht wie sie entstanden sind.** `writer_ids` statt
+`found`, `last_approved_version` statt `since`, `role_from_token` statt `derived`, `entry`
+statt `e` — auch in einer Comprehension. Ein Wahrheitswert ist eine Frage
+(`is_service_account`), eine Menge steht im Plural und nennt ihren Inhalt, eine Zahl nennt,
+was gezählt wird (`people_who_may_approve`). Stehen zwei Quellen für denselben Wert
+nebeneinander, nennt der Name die Herkunft.
+
+**Umbenannt wird beim Anfassen, nicht in einem Rutsch.** Wer eine Datei ändert, benennt
+unklare Namen in den berührten Funktionen mit um und hält das am Ticket der Änderung fest:
+vorher, nachher, Grund. Eine eigene Umbenennungsrunde über den Bestand brächte viel Diff
+ohne fachlichen Gewinn.
+
+*Anlass:* 05.11.2026, CHY-163 — `wrote`, `since`, `found` und `e` in
+`contexts/repository/four_eyes.py`, im Review bemerkt; der Kommentar an CHY-163 zeigt die
+Tabelle vorher/nachher/Grund. *Prüfstelle:* **Review**.
+
 ---
 
 ## 3 — Ein Vokabular, eine Definition
@@ -163,7 +179,16 @@ vollständig aussieht. Die Regel lautet nicht „so vollständig wie möglich", 
 wie die Behauptung trägt"**. Gilt für Transparenz-Datensätze, Audit-Einträge und
 Abdeckungsberichte gleichermaßen.
 
-*Prüfstelle:* **Test** (`tests/test_role_vocabulary.py`, `tests/test_status_vocabularies.py`)
+**Eine neue Tabelle bringt ihre Rechte mit** (CHY-85). Die Anwendung läuft als Rolle, der keine
+Tabelle gehört; sie darf, was `INVENTORY[...].access` in `kernel/retention.py` nennt, und
+nichts sonst. Die Migration, die eine Tabelle anlegt, vergibt in derselben Datei
+`GRANT … TO cohereny_app`, und der Eintrag in der Tabellenliste kommt im selben Commit. Ohne
+Eintrag fällt der Test, ohne GRANT antwortet die erste Anfrage mit `permission denied`. Wer
+für einen Test die Eigentümerin braucht (`owner_pool`), prüft entweder einen Trigger oder
+hat ein fehlendes Recht gefunden.
+
+*Prüfstelle:* **Test** (`tests/test_role_vocabulary.py`, `tests/test_status_vocabularies.py`,
+`tests/test_app_privileges.py`, `tests/integration/test_app_role_db.py`)
 
 > Die Konsolidierung des Rollen-Vokabulars übersah am 14.08. zwei von vier Kopien.
 > Gefunden hat das nicht der Autor, sondern der Wächtertest zwei Tage später.
@@ -252,9 +277,20 @@ prüfen  →  sperren  →  ändern  →  protokollieren  →  committen  →  i
   waren Strings, und die CHECKs aus 022/023 griffen auf dem API-Weg nicht (CHY-164). Mit dem
   expliziten Cast parst Postgres den Text, auf jeder Verbindung
 
+- **Migrationen gehen nur vorwärts** (CHY-113). Eine Migration, die gemergt ist, wird nicht mehr
+  geändert: Installationen, die sie schon ausgeführt haben, sähen die Änderung nie, und neue
+  bekämen aus derselben Version ein anderes Schema. Ein Fehler wird durch eine neue Migration
+  berichtigt — so berichtigt 037 die falsche Begründung aus 014 (CHY-152). Rückwärts-Migrationen
+  gibt es nicht: Von 13 Dateien hatte im August keine einen Rückweg, und ein nie geprobter
+  Rückweg wäre eine Behauptung. Der Rückweg einer Installation ist das Backup vor dem Update;
+  Arbeitsregel 12 ist damit Produkteigenschaft statt Warnung (arc42 §8.11). Jede neue Migration
+  hängt ihre Zeile an `migrations/CHECKSUMS` an. **Eine geänderte Zeile dort heißt: eine Migration
+  wurde umgeschrieben** — der MR muss sagen, warum
+
 *Prüfstelle:* **Review** · Begründung in arc42 §8.10 · **`tests/test_jsonb_parameters.py`**
 (kein `$n::jsonb` in den Schreibern) · **`tests/integration/test_jsonb_lands_as_objects.py`**
-(`jsonb_typeof` nach jedem Schreibweg)
+(`jsonb_typeof` nach jedem Schreibweg) · **`tests/test_migrations_forward_only.py`** (jede
+Migration gegen ihre Zeile in `migrations/CHECKSUMS`)
 
 ---
 
@@ -271,8 +307,14 @@ prüfen  →  sperren  →  ändern  →  protokollieren  →  committen  →  i
 - **Protocol an Kontextgrenzen, konkret innerhalb.** Bei einer Implementierung kauft ein
   Protocol nur Dokumentation — an der Grenze verhindert es, dass ein Kontext in den Store
   eines anderen greift
+- **Wer für eine Person liest, liest in `acting_as`** (CHY-92). Die Lauf-Tabellen stehen
+  unter Row-Level Security: Eine Abfrage, die nicht sagt, für wen, sieht nichts. Den
+  System-Pool nimmt nur der Runner, und erst nachdem die Person in ihrem eigenen Kontext
+  geprüft wurde. Wer ihn in einer Route braucht, um einen Lauf zu lesen, hebt die
+  Isolation für diese Route auf
 
-*Prüfstelle:* **CHY-103** (Wächter) für die ersten beiden · **Ratchet** für SQL-Streuung
+*Prüfstelle:* **CHY-103** (Wächter) für die ersten beiden · **Ratchet** für SQL-Streuung ·
+**Test** `tests/test_run_isolation.py` für den Systemkontext
 
 ---
 
@@ -494,6 +536,20 @@ Damit niemand sie neu verhandelt:
 ---
 
 ## Änderungen an diesem Dokument
+
+**07.11.2026** — §6 *Migrationen gehen nur vorwärts* (CHY-113; Anlass: Von 13 Migrationen hatte
+keine einen Rückweg, und Arbeitsregel 12 stand nur als Warnung da; die falsche Begründung in 014
+war vorwärts zu berichtigen, CHY-152).
+
+**06.11.2026** — §7 *Wer für eine Person liest, liest in `acting_as`* (CHY-92; Anlass: Jeder
+Angemeldete las jeden Lauf, und die Pilot-Lesepfade kannten den Aufrufer nicht einmal).
+
+**06.11.2026** — §3 *Eine neue Tabelle bringt ihre Rechte mit* (CHY-85; Anlass: die Anwendung
+lief als Superuser und Eigentümerin, die Trigger gegen das Umschreiben der Historie hielten
+deshalb nur gegen Programmfehler).
+
+**05.11.2026** — §2 *Bezeichner sagen, was sie enthalten* und *Umbenannt wird beim Anfassen*
+(CHY-110; Anlass: unklare Namen im ersten Wurf von CHY-163).
 
 **25.09.2026** — §5 *an jeder Stelle, die schreibt* (CHY-165: zwei 500er, die !132 übersehen
 hatte); §9: Schemathesis läuft im Job `integration` jetzt scharf (`--strict`, CHY-124).

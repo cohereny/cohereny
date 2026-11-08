@@ -27,6 +27,8 @@ Called by:
 Dependencies:
   - api.deps · contexts.orchestration.service · core.db
 """
+import functools
+from collections.abc import Mapping
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -38,6 +40,7 @@ from api.config import settings
 from contexts.orchestration import service
 from contexts.orchestration.errors import NodeExecutionFailed, NodeTypeNotExecutable
 from contexts.orchestration.service import (
+    RUN_INPUT,
     ExecutorRegistry,
     NodeContext,
     NodeResult,
@@ -47,7 +50,10 @@ from contexts.orchestration.schema import (
     ConnectionCreate,
     OversightDecision,
     NodeCreate,
+    RunCancelRequest,
     RunNodesOut,
+    RunResolvedOut,
+    RunResolveRequest,
     ValidationOut,
     WorkflowConnection,
     WorkflowCreate,
@@ -60,11 +66,13 @@ from contexts.orchestration.schema import (
 )
 from contexts.repository import service as repository
 from contexts.repository.schema import ComposeRequest
-from core.db import get_pool
+from core.db import get_pool, get_system_pool
 from core.redis import get_redis
+from api.v1._redaction import mapping_keys, policy_or_shipped, redaction_policy_for
 from api.v1._routing import route_for, router_config
 from kernel.audit import ACTION_ROUTING_FELL_BACK, target_ref, write_audit
-from kernel.errors import ScopeNotFound
+from kernel.errors import InvalidIdentifiers, MalformedRedactionRule, ScopeNotFound
+from kernel.redaction import Rule, identifiers_from, identifiers_in, merged
 from router.config import RoutingConfigError
 from router.errors import RoutingError
 
@@ -135,6 +143,9 @@ async def set_workflow_status(
     Activating an invalid graph answers **409** with every violation, not just
     the first: fixing a graph one round trip at a time is how a validator
     becomes something people route around.
+
+    Back to `draft` only from `draft`: a released or retired workflow answers
+    **409**, because in draft its graph could change underneath its runs.
     """
     return await service.set_workflow_status(pool, actor, workflow_id, body)
 
@@ -302,6 +313,53 @@ def _compose_for(pool, redis):
     return _compose
 
 
+def _identifiers_for(ctx: NodeContext) -> dict[str, tuple[str, ...]]:
+    """What the run asks to be searched for at this model call.
+
+    Since CHY-234 every value of the run's mapping: listed by the caller at the
+    start or found since, each is looked for as itself (kernel.redaction.
+    identifiers_in). The list is no longer in the stored input.
+
+    A run started before migration 036 has no mapping and still carries its
+    list in its input (CHY-63), so it is read from there. From the run input,
+    not from the node's mapping: a name the caller listed once has to be
+    replaced at every model call of the run, not only at the nodes whose
+    `input_mapping` someone remembered to extend.
+
+    Checked again although `WorkflowRunStart` checks it: this is the last point
+    before the data leaves, and a run will not always enter through the API --
+    a sub-workflow's run gets its input from a node. A malformed list fails the
+    node rather than letting the data out unredacted.
+    """
+    if ctx.run_mapping is not None:
+        return identifiers_in(ctx.run_mapping)
+    run_input = ctx.input_data.get(RUN_INPUT)
+    named = run_input.get("identifiers_to_redact") if isinstance(run_input, Mapping) else None
+    try:
+        return identifiers_from(named)
+    except InvalidIdentifiers as exc:
+        raise NodeExecutionFailed(
+            ctx.node_ref, f"identifiers_to_redact in the run input: {exc}"
+        ) from exc
+
+
+async def _with_scope_rules(
+    pool, ctx: NodeContext, named: dict[str, tuple[str, ...]]
+) -> tuple[tuple[Rule, ...], dict[str, tuple[str, ...]]]:
+    """The scope's redaction rules, and the run's list merged with its texts.
+
+    The same reading `/v1/complete` makes (CHY-63 part 2). A rule that cannot
+    be read fails the node: the call is not made without it.
+    """
+    try:
+        policy = await redaction_policy_for(pool, ctx.scope_id)
+    except (MalformedRedactionRule, ScopeNotFound) as exc:
+        raise NodeExecutionFailed(
+            ctx.node_ref, f"redaction rules of scope {ctx.scope_id}: {exc}"
+        ) from exc
+    return policy.rules, merged(policy.identifiers, named)
+
+
 def _call_model_for(pool):
     """Build the `llm_call` executor for this request.
 
@@ -363,6 +421,7 @@ def _call_model_for(pool):
                 f"nothing connects the two."
             )
             raise NodeTypeNotExecutable(ctx.node_type, ctx.node_ref, reason=reason)
+        identifiers = _identifiers_for(ctx)
 
         try:
             rule = await route_for(pool, router_config, ctx.scope_id, ctx.task_type)
@@ -373,6 +432,7 @@ def _call_model_for(pool):
                 f"{ctx.scope_id}: {exc}",
             ) from exc
         candidates = rule.candidates
+        redaction_rules, identifiers = await _with_scope_rules(pool, ctx, identifiers)
 
         try:
             result = await completion.complete_with_fallback(
@@ -386,6 +446,12 @@ def _call_model_for(pool):
                     # A node has no field of its own for this: the rule's limit
                     # is the one a run gets (CHY-166).
                     max_tokens=rule.max_tokens,
+                    identifiers_to_redact=identifiers,
+                    redaction_rules=redaction_rules,
+                    # Set for a run that keeps its placeholders (CHY-234): the
+                    # answer comes back with them, checked, and the mapping
+                    # with whatever the answer added.
+                    run_mapping=ctx.run_mapping,
                 ),
                 candidates,
                 base_url=settings.litellm_base_url,
@@ -422,9 +488,18 @@ def _call_model_for(pool):
                 },
             )
 
+        # The counts go into node_executions with the answer: which step had
+        # identifiers replaced, and whether the model gave every placeholder
+        # back, is answerable per node and pass (CHY-63). Counts, never values.
         return NodeResult(
-            output={"content": result.content, "trace_id": result.trace_id},
+            output={
+                "content": result.content,
+                "trace_id": result.trace_id,
+                "redactions": dict(result.redactions),
+                "unresolved_placeholders": result.unresolved_placeholders,
+            },
             model_used=result.model_used,
+            run_mapping=result.run_mapping,
         )
 
     return _call_model
@@ -452,6 +527,26 @@ def get_executors(
     })
 
 
+def get_engine(
+    executors: ExecutorRegistry = Depends(get_executors),
+    system_pool=Depends(get_system_pool),
+    pool=Depends(get_pool),
+) -> service.Engine:
+    """The executors and the system pool the engine advances runs in (CHY-92).
+
+    Only the two routes that start or decide a run take it, and only after the
+    service has checked, in the caller's own context, that they may.
+
+    With them the placeholders (CHY-234): the scope's redaction rules, read
+    where the repository may be read, and the keys that seal each run's mapping.
+    """
+    return service.Engine(
+        registry=executors, pool=system_pool,
+        placeholders=service.Placeholders(
+            policy_for=functools.partial(policy_or_shipped, pool), keys=mapping_keys()),
+    )
+
+
 @router.post(
     "/{workflow_id}/runs",
     response_model=WorkflowRunOut,
@@ -463,7 +558,7 @@ async def start_run(
     body: WorkflowRunStart,
     actor: CurrentUser = Depends(require_auth),
     pool=Depends(get_pool),
-    executors: ExecutorRegistry = Depends(get_executors),
+    engine: service.Engine = Depends(get_engine),
 ) -> WorkflowRunOut:
     """Start a run and push it as far as it goes in one call.
 
@@ -476,9 +571,7 @@ async def start_run(
     validator, and the validator is what guarantees the mandatory nodes and a
     limit on every back edge (ADR-004, CHY-82).
     """
-    advance = await service.start_workflow_run(
-        pool, actor, workflow_id, body, registry=executors
-    )
+    advance = await service.start_workflow_run(pool, actor, workflow_id, body, engine=engine)
     return advance.run
 
 
@@ -506,6 +599,69 @@ async def get_run_nodes(
     return await service.run_nodes(pool, actor, run_id)
 
 
+_PURGED = {
+    410: {"description": "The run's content was cleared at the end of its period "
+                         "(CHY-17); there is nothing left to resolve."}
+}
+
+
+@router.post(
+    "/runs/{run_id}/resolve",
+    response_model=RunResolvedOut,
+    responses={**FORBIDDEN, **NOT_FOUND, **_PURGED},
+)
+async def resolve_run(
+    run_id: UUID,
+    body: RunResolveRequest | None = None,
+    actor: CurrentUser = Depends(require_auth),
+    pool=Depends(get_pool),
+) -> RunResolvedOut:
+    """The run's input and its steps' outputs with the values, not the placeholders.
+
+    A run is stored with placeholders (CHY-234). Whoever started it, and from
+    `reviewer` up whoever sees it, may have the values put back — to check at a
+    gate that the right person is meant. Every call is audited as
+    `workflow.run_content_resolved`: who, which run, which steps, never a value.
+    A POST because it is a deliberate act with a record, not a view a link or a
+    prefetch may trigger.
+    """
+    return await service.resolve_run(
+        pool, actor, run_id, body or RunResolveRequest(), keys=mapping_keys())
+
+
+_FINISHED = {
+    409: {"description": "The run is already over — complete, failed, rejected "
+                         "or cancelled. See CHY-200."}
+}
+
+
+@router.post(
+    "/runs/{run_id}/cancel",
+    response_model=WorkflowRunOut,
+    responses={**FORBIDDEN, **NOT_FOUND, **_FINISHED},
+)
+async def cancel_run(
+    run_id: UUID,
+    body: RunCancelRequest | None = None,
+    actor: CurrentUser = Depends(require_auth),
+    pool=Depends(get_pool),
+    engine: service.Engine = Depends(get_engine),
+) -> WorkflowRunOut:
+    """Stop a run that has not finished (EU AI Act Art. 14(4)(e)).
+
+    For whoever started the run, and from `reviewer` up for whoever sees it.
+    The run and the node it stopped at — the gate it waits at, or the node in
+    flight — end as **`cancelled`**: neither a failure nor a rejection, and
+    nothing is recorded as a decision at the gate. A node that is still working
+    finishes, and its result is dropped.
+
+    The reason is optional and stored with the run's placeholders. Who stopped
+    the run, and when, is audited as `workflow.run_cancelled` either way.
+    """
+    return await service.cancel_run(
+        pool, actor, run_id, body or RunCancelRequest(), engine=engine)
+
+
 @router.post(
     "/runs/{run_id}/oversight",
     response_model=WorkflowRunOut,
@@ -516,7 +672,7 @@ async def decide_oversight(
     body: OversightDecision,
     actor: CurrentUser = Depends(require_auth),
     pool=Depends(get_pool),
-    executors: ExecutorRegistry = Depends(get_executors),
+    engine: service.Engine = Depends(get_engine),
 ) -> WorkflowRunOut:
     """A human decides at the gate, and the run continues — or stops for good.
 
@@ -533,7 +689,5 @@ async def decide_oversight(
     gate (ADR-004). What happens when nobody decides is configured on the node
     as `reject` or `escalate`.
     """
-    advance = await service.record_oversight(
-        pool, actor, run_id, body, registry=executors
-    )
+    advance = await service.record_oversight(pool, actor, run_id, body, engine=engine)
     return advance.run

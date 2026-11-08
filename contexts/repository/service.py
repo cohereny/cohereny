@@ -18,11 +18,14 @@ mechanisms would be two truths about what is approved.
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 from contexts.repository import block as rules
+from contexts.repository import four_eyes
 from contexts.repository import ratchet
 from contexts.repository import store
 from contexts.repository.block import DeletePlan, PatchPlan
@@ -44,10 +47,37 @@ from contexts.repository.schema import (
 )
 from kernel import scopes
 from kernel.scopes import ReviewMode
-from kernel.access import require
+from kernel.access import ResolvedActor, require
 from kernel.errors import ScopeNotFound
-from kernel.audit import ACTION_BLOCK_DEPRECATED, ACTION_BLOCK_PROMOTED, target_ref, write_audit
-from kernel.identity import Caller, resolve_actor
+from kernel.audit import (
+    ACTION_BLOCK_CREATED,
+    ACTION_BLOCK_DEPRECATED,
+    ACTION_BLOCK_EDITED,
+    ACTION_BLOCK_PROMOTED,
+    entries_for,
+    target_ref,
+    write_audit,
+)
+from kernel.identity import Caller, count_people_who_may_approve, resolve_actor
+
+logger = logging.getLogger(__name__)
+
+#: Published so the composition root can type what it hands in (CHY-163).
+RoutesBelowCritical = four_eyes.RoutesBelowCritical
+Verdict = four_eyes.Verdict
+
+
+@dataclass(frozen=True)
+class Approval:
+    """An approved block, and how four eyes was satisfied (ADR-045).
+
+    `four_eyes` is None for a block that does not decide where data may go —
+    the overwhelming majority. The transport layer turns a self-approval into
+    a notice the client can show; the context only says that it happened.
+    """
+
+    block: BlockOut
+    four_eyes: Verdict | None
 
 
 def _out(row) -> BlockOut:
@@ -204,14 +234,46 @@ async def _check_ratchet(conn, row) -> None:
 BeforeActivation = Callable[[Any, Any], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class ActivationHooks:
+    """What the composition root knows about activating a block (ADR-030).
+
+    `before_activation` raises to refuse a row about to become `active`: a
+    routing rule held against the models' ceilings (CHY-160), an anchor
+    against its validators (ADR-043). `routes_below_critical` says whether a
+    block sends data to a model below `critical`, which makes it a data-flow
+    block that needs a second person (ADR-045). Both answers belong to the
+    router or the learning context, which this context may not import.
+
+    One object, because every path that activates needs both and the
+    composition root always hands in both — two loose parameters on every
+    function in between were two chances to pass one and forget the other.
+    """
+
+    before_activation: BeforeActivation | None = None
+    routes_below_critical: RoutesBelowCritical | None = None
+
+
+#: For callers without a composition root — tests, scripts. Only a loosening
+#: privacy claim then counts as a data-flow block.
+NO_HOOKS = ActivationHooks()
+
+
 async def create_block(pool, redis, caller: Caller, body: BlockCreate, *,
-                       before_activation: BeforeActivation | None = None) -> BlockOut:
+                       hooks: ActivationHooks = NO_HOOKS) -> BlockOut:
     """Create version 1 of a new block.
 
     A draft in a strict scope; active at once in a direct one (ADR-011,
     ADR-042) — in the same transaction as the insert, so a block the ratchet
     or `before_activation` refuses is not left behind as a draft nobody asked
     for. The caller asked for a live block and gets the refusal instead.
+
+    A data-flow block in a direct scope is the exception (ADR-045): checked as
+    for activation, then handed to review, where a second person approves it.
+
+    Audited as `block.created` since CHY-171. The action was defined from the
+    start and written by nothing, so a block had no record of who wrote it
+    until somebody approved it — and four eyes asks exactly that.
     """
     author = await resolve_actor(pool, caller)
     require(author, "contributor")
@@ -221,18 +283,23 @@ async def create_block(pool, redis, caller: Caller, body: BlockCreate, *,
 
     async with pool.acquire() as conn, conn.transaction():
         row = await store.insert_block(conn, body, author.id)
+        await write_audit(
+            conn, action=ACTION_BLOCK_CREATED, actor_id=author.id,
+            target=target_ref("block", row["block_id"]),
+            payload={"version": row["version"], "block_type": row["block_type"],
+                     "scope_id": str(row["scope_id"])},
+        )
         # After the insert: it has just proven the scope exists, so a missing
         # scope stays the 404 it was (CHY-165) rather than a strict default.
         if await scopes.review_mode_of(conn, row["scope_id"]) is ReviewMode.DIRECT:
-            row = await _activate_directly(conn, row, author.id, before_activation)
+            row = await _publish_directly(conn, row, author, hooks)
 
     await _invalidate_if_composed(redis, BlockStatus.DRAFT, row["status"], row["scope_id"])
     return _out(row)
 
 
 async def patch_block(pool, redis, caller: Caller, block_id: UUID, body: BlockPatch, *,
-                      before_activation: BeforeActivation | None = None,
-                      ) -> tuple[BlockOut, bool]:
+                      hooks: ActivationHooks = NO_HOOKS) -> tuple[BlockOut, bool]:
     """Change a block. Returns the result and whether a new version was created.
 
     Two things depending on the state of the current version (CHY-30): a draft
@@ -304,9 +371,17 @@ async def patch_block(pool, redis, caller: Caller, block_id: UUID, body: BlockPa
                 # PATCH is not a request to publish.
                 return _out(current), False
             row = await store.edit_draft(conn, block_id, updates)
+            # A draft edit left no trace until CHY-163. Who wrote a version is
+            # what four eyes asks; the field names say what changed without
+            # copying content into a table that keeps everything (ADR-045).
+            await write_audit(
+                conn, action=ACTION_BLOCK_EDITED, actor_id=editor.id,
+                target=target_ref("block", block_id),
+                payload={"version": row["version"], "fields": sorted(updates)},
+            )
 
         if direct:
-            row = await _activate_directly(conn, row, editor.id, before_activation)
+            row = await _publish_directly(conn, row, editor, hooks)
 
     await _invalidate_if_composed(redis, BlockStatus.DRAFT, row["status"], row["scope_id"])
     return _out(row), supersedes
@@ -314,7 +389,7 @@ async def patch_block(pool, redis, caller: Caller, block_id: UUID, body: BlockPa
 
 async def transition(pool, redis, caller: Caller, block_id: UUID, name: str, *,
                      expected_version: int, reason: str | None = None,
-                     before_activation: BeforeActivation | None = None) -> BlockOut:
+                     hooks: ActivationHooks = NO_HOOKS) -> BlockOut:
     """Move a block through the review workflow, audited, in one transaction.
 
     `name` is a key of block.TRANSITIONS: submit, withdraw, approve, reject.
@@ -326,14 +401,44 @@ async def transition(pool, redis, caller: Caller, block_id: UUID, name: str, *,
     wrong pre-state, and write the audit entry on the same connection so the
     change and the record of it stand or fall together.
 
-    `before_activation` is the seam for checks this context may not make
+    `hooks.before_activation` is the seam for checks this context may not make
     itself. A routing rule has to be held against the models' ceilings, and
     those belong to the router, which a context may not import (ADR-030) — so
     the composition root passes the check in, the way it builds the executor
     registry for the runner (CHY-160). Run inside the transaction, after the
     ratchet: a check made before it would judge a row that may no longer be
     the one being approved.
+
+    `hooks.routes_below_critical` is the same kind of seam for four eyes
+    (ADR-045): whether a routing rule names a model below `critical` is the
+    router's to say. Without it only a loosening privacy claim counts as a
+    data-flow block.
     """
+    approval = await _transition(
+        pool, redis, caller, block_id, name, expected_version=expected_version,
+        reason=reason, hooks=hooks,
+    )
+    return approval.block
+
+
+async def approve(pool, redis, caller: Caller, block_id: UUID, *, expected_version: int,
+                  hooks: ActivationHooks = NO_HOOKS) -> Approval:
+    """Approve a block, and say how four eyes was satisfied (ADR-045).
+
+    The approve transition with its verdict kept: a single operator who
+    approves their own data-flow block is allowed to, and must be told what
+    that means. The transport layer decides how to tell them; this says that
+    it happened.
+    """
+    return await _transition(
+        pool, redis, caller, block_id, "approve", expected_version=expected_version,
+        reason=None, hooks=hooks,
+    )
+
+
+async def _transition(pool, redis, caller: Caller, block_id: UUID, name: str, *,
+                      expected_version: int, reason: str | None,
+                      hooks: ActivationHooks) -> Approval:
     move = rules.TRANSITIONS[name]
     performer = await resolve_actor(pool, caller)
     require(performer, move.role)
@@ -345,50 +450,110 @@ async def transition(pool, redis, caller: Caller, block_id: UUID, name: str, *,
         if row is None:
             raise BlockNotFound
         rules.check_version(current=row["version"], expected=expected_version)
-        updated = await _move(conn, row, move, performer_id=performer.id, extra=extra,
-                              before_activation=before_activation)
+        updated, verdict = await _move(
+            conn, row, move, performer=performer, extra=extra, hooks=hooks,
+        )
 
     await _invalidate_if_composed(redis, row["status"], move.to, row["scope_id"])
-    return _out(updated)
+    return Approval(block=_out(updated), four_eyes=verdict)
 
 
-async def _move(conn, row, move: rules.Transition, *, performer_id: UUID, extra: dict,
-                before_activation: BeforeActivation | None = None):
+async def _check_activation(conn, row, hooks: ActivationHooks) -> None:
+    """What must hold before a row becomes `active`, on the locked row.
+
+    The real gate. Checked at activation rather than only at compose time
+    because this is where a human is standing and the fix is cheap — a scope
+    that only discovers the conflict when a workflow tries to compose learns
+    about it at runtime, far from the cause (CHY-62). Also run before a
+    data-flow block in a direct scope is handed to review, so a rule that could
+    never be approved is refused to its writer, not to the second person.
+    """
+    await _check_ratchet(conn, row)
+    if hooks.before_activation is not None:
+        await hooks.before_activation(conn, row)
+
+
+async def _judge_four_eyes(conn, row, performer: ResolvedActor) -> Verdict:
+    """Four eyes on a data-flow block, from the facts of this transaction (ADR-045).
+
+    Who wrote the version comes from the audit log, the only place that has it
+    — the table keeps the line's author, not the editors of each round. A
+    self-approval by a single operator is allowed, logged as a warning and
+    marked in the approval's audit entry: nobody second checked whether the
+    data may leave the installation.
+    """
+    entries = await entries_for(conn, target_ref("block", row["block_id"]),
+                                four_eyes.ACTIONS_READ_FOR_FOUR_EYES)
+    verdict = four_eyes.judge_approval(
+        approver_id=performer.id,
+        approver_is_service_account=performer.is_service_account,
+        writer_ids=four_eyes.writers_since_last_approval(
+            entries, line_author_id=row["author_id"]),
+        people_who_may_approve=await count_people_who_may_approve(conn),
+    )
+    if verdict is Verdict.SELF_APPROVED:
+        logger.warning(
+            "Block %s version %s was approved by the person who wrote it. It decides "
+            "where data may go, and this installation has a single person who may "
+            "approve, so no second person checked whether the data may leave it "
+            "(ADR-045). Add a second reviewer to end this.",
+            row["block_id"], row["version"],
+        )
+    return verdict
+
+
+async def _move(conn, row, move: rules.Transition, *, performer: ResolvedActor, extra: dict,
+                hooks: ActivationHooks = NO_HOOKS):
     """One step of the lifecycle on a row the caller holds, audited.
 
     The single place a block changes status (ADR-042): the explicit transition
     above and the direct activation below both come through here, so there is
-    no second path on which the ratchet or the audit entry could be missing.
+    no second path on which the ratchet, four eyes or the audit entry could be
+    missing. Returns the updated row and, for an approved data-flow block, how
+    four eyes was satisfied.
     """
     rules.check_transition(current_status=row["status"], transition=move)
+    verdict = None
     if move.to == BlockStatus.ACTIVE:
-        # The real gate. Checked here rather than only at compose time
-        # because this is where a human is standing and the fix is cheap —
-        # a scope that only discovers the conflict when a workflow tries to
-        # compose learns about it at runtime, far from the cause (CHY-62).
-        await _check_ratchet(conn, row)
-        if before_activation is not None:
-            await before_activation(conn, row)
+        await _check_activation(conn, row, hooks)
+        if four_eyes.is_data_flow(row, hooks.routes_below_critical):
+            verdict = await _judge_four_eyes(conn, row, performer)
+            extra = {**extra, "four_eyes": verdict.value}
         # Author and approver both recorded, from the row being approved.
-        # Four eyes is not enforced here (CHY-163): a hard rule would make
-        # approval impossible in a single-operator deployment, and a direct
-        # scope is self-approval by design. Recording both makes it visible.
         author = row["author_id"]
         extra = {**extra, "author_id": str(author) if author else None,
-                 "approved_by": str(performer_id)}
+                 "approved_by": str(performer.id)}
 
     updated = await store.set_status(conn, row["id"], move.to)
     await write_audit(
-        conn, action=move.action, actor_id=performer_id,
+        conn, action=move.action, actor_id=performer.id,
         target=target_ref("block", row["block_id"]),
         payload={"from_status": row["status"], "to_status": move.to,
                  "version": row["version"], **extra},
     )
-    return updated
+    return updated, verdict
 
 
-async def _activate_directly(conn, row, performer_id: UUID,
-                             before_activation: BeforeActivation | None):
+async def _publish_directly(conn, row, performer: ResolvedActor, hooks: ActivationHooks):
+    """A write in a direct scope: active at once — unless it is a data-flow block.
+
+    ADR-042 point 2 gives direct scopes their freedom for prompt material. A
+    block that decides where data may go is not prompt material (ADR-045): it
+    is checked as for activation, then submitted, and waits for a second person
+    like anything written in a strict scope. Submitted rather than left a
+    draft, because the writer asked to publish — a draft in a direct scope is
+    something nobody expects to have to submit, and it would sit in no queue.
+    """
+    direct = {"mode": ReviewMode.DIRECT.value}
+    if four_eyes.is_data_flow(row, hooks.routes_below_critical):
+        await _check_activation(conn, row, hooks)
+        submitted, _ = await _move(conn, row, rules.TRANSITIONS["submit"], performer=performer,
+                                   extra={**direct, "four_eyes": "required"})
+        return submitted
+    return await _activate_directly(conn, row, performer, hooks)
+
+
+async def _activate_directly(conn, row, performer: ResolvedActor, hooks: ActivationHooks):
     """Submit and approve in the caller's transaction — a direct scope's write.
 
     Two steps rather than one, because migration 013 refuses draft → active
@@ -396,13 +561,17 @@ async def _activate_directly(conn, row, performer_id: UUID,
     `mode: direct`, and the approval names the writer as approver next to the
     line's author: the same record a strict approval leaves, so a direct
     activation is told apart by its mode, not by a missing entry.
+
+    Never reached by a data-flow block (`_publish_directly` hands those to
+    review). The hooks are passed on whole anyway, so if one ever did, four
+    eyes would refuse it here rather than let it through.
     """
     direct = {"mode": ReviewMode.DIRECT.value}
-    submitted = await _move(conn, row, rules.TRANSITIONS["submit"],
-                            performer_id=performer_id, extra=direct)
-    return await _move(conn, submitted, rules.TRANSITIONS["approve"],
-                       performer_id=performer_id, extra=direct,
-                       before_activation=before_activation)
+    submitted, _ = await _move(conn, row, rules.TRANSITIONS["submit"],
+                               performer=performer, extra=direct)
+    activated, _ = await _move(conn, submitted, rules.TRANSITIONS["approve"],
+                               performer=performer, extra=direct, hooks=hooks)
+    return activated
 
 
 async def promote_block(pool, caller: Caller, block_id: UUID, body: BlockPromote) -> BlockOut:
@@ -514,3 +683,12 @@ async def routing_rules_for(pool, scope_ids: list[UUID]) -> list:
     to the kernel.
     """
     return await store.active_routing_rules(pool, scope_ids)
+
+
+async def redaction_rules_for(pool, scope_ids: list[UUID]) -> list:
+    """Approved redaction rules visible from a scope chain (CHY-63).
+
+    Rows, like `routing_rules_for`: what a redaction rule means is read in
+    `kernel.redaction`; this context owns the table and hands over its rows.
+    """
+    return await store.active_redaction_rules(pool, scope_ids)

@@ -5,7 +5,9 @@ Nobody calling Cohereny names a model. A request names a **task type** — `summ
 model serves it, in which order to fall back, and how long an answer may be.
 
 A routing rule is a block, so it is reviewed like one: in a strict scope it takes
-effect only after a second person approved it, and the audit log records who decided.
+effect only after a reviewer approved it, and the audit log records who decided. A rule
+that names a model below `critical` needs a second person in every scope: whoever wrote
+it cannot approve it ([Scopes and blocks](scopes-and-blocks.md)).
 Which model may see which data is a decision with data-protection consequences; it is
 not a setting a deployment flips.
 

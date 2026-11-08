@@ -272,6 +272,14 @@ class RunNotFound(OrchestrationError):
         super().__init__("Workflow run not found")
 
 
+class RunContentPurged(OrchestrationError):
+    """The run's content and its mapping were cleared when its period ended
+    (CHY-17, CHY-234): there is nothing left to put back."""
+
+    def __init__(self) -> None:
+        super().__init__("The content of this run was cleared at the end of its period")
+
+
 class RunDidNotSettle(OrchestrationError):
     """An advance kept finding work after an implausible number of rounds.
 
@@ -316,6 +324,21 @@ class RunNotAwaitingOversight(OrchestrationError):
         super().__init__(
             f"The run is {status}, not awaiting a decision. A decision for a "
             f"run that already moved on would be recorded against nothing."
+        )
+
+
+class RunAlreadyFinished(OrchestrationError):
+    """A run that is over cannot be stopped (CHY-200).
+
+    Refused rather than accepted as a no-op: a cancellation recorded for a run
+    that had already completed would say a person stopped something that
+    finished on its own, and the audit trail would contradict the run.
+    """
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+        super().__init__(
+            f"The run is already {status}; there is nothing left to stop."
         )
 
 

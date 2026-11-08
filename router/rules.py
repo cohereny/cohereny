@@ -153,6 +153,21 @@ def check_ceiling(
         raise RouteExceedsScopeClass(scope_id, level, too_open)
 
 
+def names_model_below_critical(rule: RoutingRule, config: RouterConfig) -> bool:
+    """Whether a candidate may not see `critical` data — so data may leave (CHY-163).
+
+    By the declaration in routing-config.yaml, a local model is `critical` and
+    a hosted one sits below. A rule naming one below is a data-flow block, and
+    its approval needs a second person (ADR-045). A model the deployment does
+    not declare is left to `check_chain`, which refuses the rule outright.
+    """
+    strictest = len(PRIVACY_LEVELS) - 1
+    return any(
+        config.knows(model) and config.privacy_rank(model) < strictest
+        for model in rule.candidates
+    )
+
+
 def resolve(
     rows: list, scope_order: list[UUID], task_type: str, config: RouterConfig
 ) -> RoutingRule:

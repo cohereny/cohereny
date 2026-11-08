@@ -14,18 +14,18 @@
   "coverage_percent": 70.6,
   "planned_operations": 9,
   "ruff": {
-    "ARG": 32,
+    "ARG": 28,
     "ASYNC": 0,
     "B": 0,
     "C90": 4,
     "EM": 18,
     "N": 0,
-    "PL": 83,
+    "PL": 88,
     "RUF": 45,
     "S": 14,
     "SIM": 2,
     "TRY": 19,
     "UP": 14
   },
-  "unused_actor": 21
+  "unused_actor": 17
 }

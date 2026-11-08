@@ -48,13 +48,16 @@ class TestAuditLogIsAppendOnly:
         "DELETE FROM audit_log",
         "TRUNCATE audit_log",
     ], ids=["update", "delete", "truncate"])
-    async def test_rewriting_the_log_is_refused(self, pool, statement):
+    async def test_rewriting_the_log_is_refused(self, pool, owner_pool, statement):
         """TRUNCATE is the case the DO INSTEAD NOTHING rules of 001 never
-        covered — and they failed silently for the other two (CHY-31)."""
+        covered — and they failed silently for the other two (CHY-31).
+
+        Tried as the owner: the trigger refuses even the role that owns the
+        table. The application role may not even try (test_app_role_db.py)."""
         await self._entry(pool)
         with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError,
                            match="append-only"):
-            await pool.execute(statement)
+            await owner_pool.execute(statement)
 
     async def test_writing_an_entry_still_works(self, pool):
         """Counter-probe: an append-only log that refuses appends is a log
@@ -79,11 +82,12 @@ class TestBlocksAreAppendOnly:
         ))
         return out.block_id
 
-    async def test_a_block_cannot_be_deleted(self, pool, scope):
+    async def test_a_block_cannot_be_deleted(self, pool, owner_pool, scope):
+        """As the owner, like the audit log above: the application has no DELETE."""
         block_id = await self._block(pool, scope)
         with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError,
                            match="append-only"):
-            await pool.execute("DELETE FROM context_blocks WHERE block_id = $1", block_id)
+            await owner_pool.execute("DELETE FROM context_blocks WHERE block_id = $1", block_id)
 
     async def test_identity_columns_are_immutable(self, pool, scope):
         """A block that could change its type after approval could turn from
@@ -115,7 +119,7 @@ class TestBlocksAreAppendOnly:
         )
 
 
-# ── 014: an Art. 14 decision names who decided ────────────────────────────────
+# ── 014, 037: an oversight decision names who decided and when (Art. 12) ──────
 
 class TestOversightNeedsAnAuthor:
     async def _run(self, pool):
@@ -124,43 +128,60 @@ class TestOversightNeedsAnAuthor:
             f"it-{uuid4().hex}",
         )
 
-    async def test_a_decision_without_a_person_is_refused(self, pool):
-        run_id = await self._run(pool)
+    async def test_a_decision_without_a_person_is_refused(self, system_pool):
+        run_id = await self._run(system_pool)
         with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError,
                            match="requires oversight_by and oversight_at"):
-            await pool.execute(
+            await system_pool.execute(
                 "UPDATE pilot_runs SET oversight_decision = 'approved' WHERE id = $1", run_id,
             )
 
-    async def test_a_decision_with_a_person_and_a_time_is_recorded(self, pool):
-        run_id = await self._run(pool)
-        reviewer = await resolve_actor(pool, _caller("reviewer"))
-        await pool.execute(
+    async def test_the_refusal_and_the_columns_cite_the_record_keeping_article(self, system_pool):
+        """Art. 12 asks for the record, Art. 14 for the oversight (CHY-152).
+        014 cited Art. 14 for the record and Art. 12(3), which concerns
+        biometrics only; 037 corrects both without touching 014."""
+        run_id = await self._run(system_pool)
+        with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError) as refused:
+            await system_pool.execute(
+                "UPDATE pilot_runs SET oversight_decision = 'approved' WHERE id = $1", run_id,
+            )
+        assert refused.value.hint.startswith("EU AI Act Art. 12:")
+        comments = await system_pool.fetch(
+            "SELECT a.attname, col_description(a.attrelid, a.attnum) AS comment "
+            "FROM pg_attribute a WHERE a.attrelid = 'pilot_runs'::regclass "
+            "AND a.attname IN ('oversight_by', 'oversight_at')")
+        for row in comments:
+            assert "Art. 12" in row["comment"] and "Art. 12(3)" not in row["comment"], row
+
+    async def test_a_decision_with_a_person_and_a_time_is_recorded(self, system_pool):
+        run_id = await self._run(system_pool)
+        reviewer = await resolve_actor(system_pool, _caller("reviewer"))
+        await system_pool.execute(
             "UPDATE pilot_runs SET oversight_decision = 'approved', oversight_by = $2, "
             "oversight_at = $3 WHERE id = $1",
             run_id, reviewer.id, datetime.now(UTC),
         )
-        assert await pool.fetchval(
+        assert await system_pool.fetchval(
             "SELECT oversight_by FROM pilot_runs WHERE id = $1", run_id
         ) == reviewer.id
 
 
 # ── 015: an Art. 50 record outlives its run ───────────────────────────────────
 
-async def test_a_run_with_a_transparency_record_cannot_be_deleted(pool):
+async def test_a_run_with_a_transparency_record_cannot_be_deleted(system_pool):
     """Until 015 the foreign key cascaded: deleting a run silently took the
     record that users had been told about with it."""
-    run_id = await pool.fetchval(
+    run_id = await system_pool.fetchval(
         "INSERT INTO pilot_runs (thread_id, input_file) VALUES ($1, 'it.pdf') RETURNING id",
         f"it-{uuid4().hex}",
     )
-    await pool.execute(
+    await system_pool.execute(
         "INSERT INTO transparency_records (pilot_run_id, model_used, model_disclosure) "
         "VALUES ($1, 'gemma3-4b', 'KI-generiert')",
         run_id,
     )
     with pytest.raises(asyncpg.exceptions.ForeignKeyViolationError):
-        await pool.execute("DELETE FROM pilot_runs WHERE id = $1", run_id)
+        await system_pool.execute("DELETE FROM pilot_runs WHERE id = $1", run_id)
 
 
 # ── 010 + kernel: Art. 17, end to end ─────────────────────────────────────────

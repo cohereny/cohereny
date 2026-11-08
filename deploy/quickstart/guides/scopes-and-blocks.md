@@ -10,8 +10,14 @@ The examples use the README's `token` function and variables.
 
 | Type | Review | Typical use |
 |---|---|---|
-| `org`, `team`, `workspace` | **strict**: a block goes live only after a second person approved it | rules and knowledge many people rely on |
+| `org`, `team`, `workspace` | **strict**: a block goes live only after a reviewer approved it | rules and knowledge many people rely on |
 | `project`, `sub_project`, `personal` | **direct**: a block is live as soon as it is written | work in progress, one case, your own drafts |
+
+One kind of block waits for a second person in every scope: a routing rule that names a
+model below `critical`, and a block that loosens a privacy rule. Those decide where data
+may go, and whoever wrote them cannot approve them — unless the installation has only one
+person who may approve ([SECURITY.md](../../../SECURITY.md)). In a direct scope such a
+block comes back `pending_review` instead of live.
 
 Creating a scope needs the `architect` role. The parent decides where it hangs; the
 path is derived, never given.
@@ -54,7 +60,8 @@ curl -s $API/v1/blocks/$BLOCK/approve -H "Authorization: Bearer $REVIEW" \
 
 Instead of approving, a reviewer can reject with a reason:
 `/reject` with `{"version": 1, "reason": "Contradicts the returns policy."}`. The
-author can then edit the draft and submit again.
+block is then `rejected`. Its author can submit it again as it is, or change it: the
+change becomes version 2, a draft, submitted with `{"version": 2}`.
 
 `version` names the version you mean. If someone changed the block in between, the
 request is refused with `409` rather than approving something you have not seen.
@@ -86,8 +93,8 @@ organisation first. That is exactly what `/v1/complete` and a workflow's
 ## Rules that cannot be loosened below
 
 Some blocks state a governance rule — whether prompts may go to a cloud model
-(`cloud_routing`), whether personal data must be removed first (`pii_redaction`). Such a
-block declares the rule when it is created:
+(`cloud_routing`), whether a shipped redaction rule may be switched off
+(`pii_redaction`, see below). Such a block declares the rule when it is created:
 
 ```json
 {"governance_key": "cloud_routing", "privacy_impact": "restrictive", "locked": true}
@@ -99,3 +106,28 @@ such a block. Write a `cloud_routing` block into *Customer Support* and submit i
 draft is accepted, but approving it is refused with `409` — *"Governance key
 'cloud_routing' is locked by block … in scope …"* — whether it loosens the rule or
 tightens it. The rule is changed where it was made, or not at all.
+
+## What the model never sees
+
+Before every model call of `/v1/complete` and of a workflow Cohereny replaces identifiers
+with placeholders: e-mail addresses, phone numbers, IBANs, German tax ids and health insurance numbers, labelled
+dates of birth, and every name a caller lists in `identifiers_to_redact`. `/v1/complete`
+puts the values back into its answer; a workflow run keeps the placeholders
+([workflows](workflows.md)). A scope adds its own as a `redaction_rule` block — reviewed like
+any block, inherited by every scope below, never composed into a prompt:
+
+```json
+{"scope_id": "<id of Example Corp>", "block_type": "redaction_rule",
+ "content": "Our staff's names stay in the house.",
+ "metadata": {"category": "STAFF", "texts": ["Dr. Schmidt", "Dr. Weber"]}}
+```
+
+`"metadata": {"category": "CASE_NUMBER", "pattern": "\\b\\d+ C \\d+/\\d{2}\\b"}` replaces
+a pattern instead. A pattern runs over every prompt, so one that could backtrack without
+end — a repeated group that varies inside, `(a+)+` — is refused at approval.
+
+Rules add up down the tree; no scope removes one that a scope above added. Switching a
+shipped rule off is the one exception: `"metadata": {"disable": ["PHONE"]}`, only in a
+scope without a parent, declared as `"governance_key": "pii_redaction", "privacy_impact":
+"permissive"`, and approved by someone who did not write it. A `restrictive` claim on
+`pii_redaction` in that scope forbids it.

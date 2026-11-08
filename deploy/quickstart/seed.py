@@ -23,10 +23,15 @@ Why through the API and not as SQL: the example should be made the way a user
 would make it, so it shows what the API asks for — and so the audit log of a
 fresh quickstart already tells the story. Two people are involved on purpose:
 `admin` writes and submits, `reviewer` approves. In the strict scopes nothing
-goes live on the say of its author alone.
+goes live on the say of its author alone. The reviewer is a member of Example
+Corp: a run is visible only to whoever started it, to the members of its scope
+and the scopes above, and to admin (CHY-92) — without the membership the
+reviewer would not find the run they are to decide.
 
-A second run finds "Example Corp" and changes nothing. QUICKSTART_SEED=false
-skips it altogether.
+A second run finds "Example Corp" and leaves the example as it is. It only adds
+the reviewer's membership if it is missing: a quickstart seeded before
+2026-11-08 has none, and after an update its reviewer would see no run
+(CHY-249). QUICKSTART_SEED=false skips it altogether.
 
 Environment:
     API_URL           where the API is reached (Compose: http://api:8000)
@@ -154,6 +159,22 @@ def scope(c: httpx.Client, name: str, node_type: str, parent: str | None = None,
     return sid
 
 
+def member(admin: httpx.Client, person: httpx.Client, scope_id: str, label: str) -> bool:
+    """Add `person` to a scope unless they are in it already (CHY-92, CHY-249).
+
+    By the actor id they read from /v1/me, which lists their memberships, too.
+    True if they were added.
+    """
+    me = expect(person.get("/v1/me"), 200, f"reading the {label}'s actor id")
+    if any(m["scope_id"] == scope_id for m in me["memberships"]):
+        return False
+    expect(admin.post(f"/v1/scopes/{scope_id}/members",
+                      json={"actor_id": me["actor_id"], "role": "reviewer"}),
+           201, f"adding the {label} to the scope")
+    print(f"  member     {label:29} sees the runs of {ORG!r} and below")
+    return True
+
+
 def reviewed_block(author: httpx.Client, reviewer: httpx.Client, label: str, **body) -> str:
     """A block in a strict scope: written and submitted by one person, approved by another."""
     created = expect(author.post("/v1/blocks", json=body), 201, f"creating {label}")
@@ -215,9 +236,11 @@ def workflow(author: httpx.Client, reviewer: httpx.Client, scope_id: str) -> str
     return wf
 
 
-def already_seeded(c: httpx.Client) -> bool:
+def seeded_org(c: httpx.Client) -> str | None:
+    """The id of Example Corp if an earlier run wrote the example, else None."""
     scopes = expect(c.get("/v1/scopes"), 200, "listing scopes")
-    return any(s["name"] == ORG and s["node_type"] == "org" for s in scopes)
+    return next((s["id"] for s in scopes if s["name"] == ORG and s["node_type"] == "org"),
+                None)
 
 
 def main() -> int:
@@ -227,14 +250,21 @@ def main() -> int:
 
     wait_for_api()
     admin, reviewer = client("admin"), client("reviewer")
-    if already_seeded(admin):
-        print(f"seed: {ORG!r} exists — the example is already there, nothing changed")
+    org = seeded_org(admin)
+    if org:
+        # The CI checks a second start by "nothing changed" (.gitlab-ci.yml).
+        if member(admin, reviewer, org, "reviewer"):
+            print(f"seed: {ORG!r} exists — the example is already there; "
+                  "the reviewer's membership was missing and is added")
+        else:
+            print(f"seed: {ORG!r} exists — the example is already there, nothing changed")
         return 0
 
     print(f"seed: writing the example (model {MODEL})")
     org = scope(admin, ORG, "org", privacy_level="confidential")
     team = scope(admin, TEAM, "team", org)
     project = scope(admin, PROJECT, "project", team)
+    member(admin, reviewer, org, "reviewer")
 
     reviewed_block(admin, reviewer, "tone of voice",
                    scope_id=org, block_type="system_prompt", content=TONE)

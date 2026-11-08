@@ -78,6 +78,24 @@ async def route_for(
     return rule
 
 
+def rule_routes_below_critical(row) -> bool:
+    """Whether this block is a routing rule naming a model below `critical`.
+
+    The router's half of four eyes (CHY-163, ADR-045), handed to the
+    repository like `check_rule_before_approval`. Synchronous and without a
+    read: the answer is in the row and the deployment's declaration. A rule
+    that does not parse answers False — `check_rule_before_approval` refuses it
+    with the reason, which is more use to its writer than a review queue.
+    """
+    if row["block_type"] != "routing_rule":
+        return False
+    try:
+        rule = rules.parse(row)
+    except MalformedRoutingRule:
+        return False
+    return rules.names_model_below_critical(rule, router_config)
+
+
 async def check_rule_before_approval(conn, row) -> None:
     """Refuse to approve a routing rule its own scope could never use.
 

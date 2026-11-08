@@ -68,7 +68,7 @@ class TestRoleFromGroups:
 class TestProvisioning:
     @pytest.mark.asyncio
     async def test_unknown_caller_gets_a_row(self):
-        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "admin"})
+        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "admin", "is_service_account": False})
         actor = await resolve_actor(pool, stub_user(groups=["chy-admins"]))
         assert actor.id == _ACTOR_ID
         assert actor.role == "admin"
@@ -76,7 +76,7 @@ class TestProvisioning:
     @pytest.mark.asyncio
     async def test_insert_uses_on_conflict(self):
         """Two parallel first requests race on the unique index on idp_sub."""
-        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer"})
+        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer", "is_service_account": False})
         await resolve_actor(pool, stub_user())
         sql = pool.conn.fetchrow.call_args.args[0]
         assert "INSERT INTO actors" in sql
@@ -84,13 +84,13 @@ class TestProvisioning:
 
     @pytest.mark.asyncio
     async def test_insert_cannot_touch_an_anonymized_row(self):
-        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer"})
+        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer", "is_service_account": False})
         await resolve_actor(pool, stub_user())
         assert "actors.is_anonymized = FALSE" in pool.conn.fetchrow.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_display_name_comes_from_the_token(self):
-        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer"})
+        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer", "is_service_account": False})
         await resolve_actor(pool, stub_user(sub="s1", username="alice"))
         args = pool.conn.fetchrow.call_args.args
         assert args[1] == "s1"      # idp_sub
@@ -99,13 +99,13 @@ class TestProvisioning:
     @pytest.mark.asyncio
     async def test_no_groups_claim_provisions_at_the_default_role(self):
         """First sight with nothing to go on must not guess upwards."""
-        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer"})
+        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer", "is_service_account": False})
         await resolve_actor(pool, stub_user(groups=None))
         assert pool.conn.fetchrow.call_args.args[3] == "consumer"
 
     @pytest.mark.asyncio
     async def test_provisioning_is_audited(self):
-        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "admin"})
+        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "admin", "is_service_account": False})
         await resolve_actor(pool, stub_user(groups=["chy-admins"]))
         audits = [
             c for c in pool.conn.fetchval.call_args_list
@@ -145,7 +145,7 @@ class TestRoleRefresh:
 
     @pytest.mark.asyncio
     async def test_promotion_is_applied(self):
-        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), conn_fetchrow={"role": "consumer"})
+        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), conn_fetchrow={"role": "consumer", "is_service_account": False})
         actor = await resolve_actor(pool, stub_user(groups=["chy-admins"]))
         assert actor.role == "admin"
         assert "UPDATE actors SET role" in pool.conn.execute.call_args.args[0]
@@ -153,7 +153,7 @@ class TestRoleRefresh:
     @pytest.mark.asyncio
     async def test_removal_from_every_group_demotes(self):
         """Offboarding: groups present but empty must take effect."""
-        pool = make_pool(actor=actor_row(_ACTOR_ID, "admin"), conn_fetchrow={"role": "admin"})
+        pool = make_pool(actor=actor_row(_ACTOR_ID, "admin"), conn_fetchrow={"role": "admin", "is_service_account": False})
         actor = await resolve_actor(pool, stub_user(groups=[]))
         assert actor.role == "consumer"
 
@@ -161,21 +161,21 @@ class TestRoleRefresh:
     async def test_refresh_locks_the_row(self):
         """Parallel requests after a group change would otherwise each write an
         identical, unremovable audit entry."""
-        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), conn_fetchrow={"role": "consumer"})
+        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), conn_fetchrow={"role": "consumer", "is_service_account": False})
         await resolve_actor(pool, stub_user(groups=["chy-admins"]))
         assert "FOR UPDATE" in pool.conn.fetchrow.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_a_race_that_already_applied_the_change_writes_nothing(self):
         """Second comparison inside the lock: another request got there first."""
-        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), conn_fetchrow={"role": "admin"})
+        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), conn_fetchrow={"role": "admin", "is_service_account": False})
         actor = await resolve_actor(pool, stub_user(groups=["chy-admins"]))
         assert actor.role == "admin"
         pool.conn.execute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_role_change_is_audited(self):
-        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), conn_fetchrow={"role": "consumer"})
+        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), conn_fetchrow={"role": "consumer", "is_service_account": False})
         await resolve_actor(pool, stub_user(groups=["chy-reviewers"]))
         audits = [c for c in pool.conn.fetchval.call_args_list if "audit_log" in c.args[0]]
         assert audits and audits[0].args[2] == ACTION_ACTOR_ROLE_CHANGED
@@ -187,7 +187,7 @@ class TestRoleRefresh:
 class TestRequireRole:
     @pytest.mark.asyncio
     async def test_provisioned_consumer_cannot_act_as_admin(self):
-        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer"})
+        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "consumer", "is_service_account": False})
         with pytest.raises(AccessDenied) as exc:
             require(await resolve_actor(pool, stub_user()), "admin")
         assert exc.value.required == "admin"
@@ -195,7 +195,7 @@ class TestRequireRole:
 
     @pytest.mark.asyncio
     async def test_provisioned_admin_passes(self):
-        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "admin"})
+        pool = make_pool(actor=None, conn_fetchrow={"id": _ACTOR_ID, "role": "admin", "is_service_account": False})
         assert (require(await resolve_actor(pool, stub_user(groups=["chy-admins"])), "admin")).role == "admin"
 
     def test_an_unknown_stored_role_ranks_below_everything(self):

@@ -635,6 +635,7 @@ paths:
       x-cohereny-ticket: CHY-64
   /v1/questions:
     get:
+      deprecated: true
       description: Questions from the bank, newest first, optionally filtered by topic.
       operationId: list_questions_v1_questions_get
       parameters:
@@ -689,6 +690,7 @@ paths:
       - questions
   /v1/questions/{question_id}:
     get:
+      deprecated: true
       operationId: get_question_v1_questions__question_id__get
       parameters:
       - in: path

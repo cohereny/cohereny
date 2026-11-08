@@ -13,6 +13,7 @@ its *other* callers, which is the half that did not exist before.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -348,3 +349,244 @@ class TestTheFallbackChain:
             await complete_with_fallback(
                 CompletionRequest(prompt="p", model="x"), (), base_url="http://gw"
             )
+
+
+# ── identifiers out, values back (CHY-63) ─────────────────────────────────────
+
+class TestRedactionAtTheBoundary:
+    """What leaves through the gateway and the trace carries placeholders only.
+
+    Driven through `complete()` with the HTTP client mocked, because the claim
+    is about what leaves this function, not about what `redact()` returns: a
+    call site that built the body from the original request would pass every
+    test of `kernel.redaction` and leak anyway.
+    """
+
+    _REQUEST = CompletionRequest(
+        prompt="Antwort an Erika Mustermann, erika@example.de",
+        system="Patientin Erika Mustermann, geb. 01.02.1960",
+        model="m",
+        identifiers_to_redact={"PERSON": ["Erika Mustermann"]},
+    )
+    _SECRETS = ("Erika Mustermann", "erika@example.de", "01.02.1960")
+
+    @staticmethod
+    def _answering(content: str) -> MagicMock:
+        return _http({**_ANSWER, "choices": [{"message": {"content": content}}]})
+
+    async def test_the_gateway_sees_placeholders_only(self):
+        client = self._answering("ok")
+        with patch("core.completion.httpx.AsyncClient", return_value=client):
+            await complete(self._REQUEST, base_url="https://x/v1")
+        sent = json.dumps(client.post.call_args.kwargs["json"], ensure_ascii=False)
+        for value in self._SECRETS:
+            assert value not in sent
+        for placeholder in ("{{PERSON_1}}", "{{EMAIL_1}}", "{{DATE_OF_BIRTH_1}}"):
+            assert placeholder in sent
+
+    async def test_the_trace_records_placeholders_and_counts_never_values(self):
+        recorder = MagicMock()
+        client = self._answering("Liebe {{PERSON_1}}")
+        with (
+            patch("core.completion.httpx.AsyncClient", return_value=client),
+            patch("core.completion.completion_trace") as trace,
+        ):
+            trace.return_value.__enter__ = MagicMock(return_value=recorder)
+            trace.return_value.__exit__ = MagicMock(return_value=False)
+            await complete(self._REQUEST, base_url="https://x/v1")
+        opened = trace.call_args.kwargs
+        assert opened["prompt"] == "Antwort an {{PERSON_1}}, {{EMAIL_1}}"
+        assert opened["redactions"] == {"PERSON": 2, "EMAIL": 1, "DATE_OF_BIRTH": 1}
+        # The answer is recorded with its placeholders, before the values return.
+        assert recorder.record_output.call_args.kwargs["content"] == "Liebe {{PERSON_1}}"
+
+    async def test_what_the_model_wrote_on_its_own_reaches_the_trace_as_a_placeholder(self):
+        """An address no request contained. Recorded as written, it would leave
+        for Langfuse in plain text -- the trace sees placeholders, the docs say
+        so, and until CHY-244 it was true only of the request."""
+        recorder = MagicMock()
+        client = self._answering("Liebe {{PERSON_1}}, Rückfragen an praxis@example.org")
+        with (
+            patch("core.completion.httpx.AsyncClient", return_value=client),
+            patch("core.completion.completion_trace") as trace,
+        ):
+            trace.return_value.__enter__ = MagicMock(return_value=recorder)
+            trace.return_value.__exit__ = MagicMock(return_value=False)
+            result = await complete(self._REQUEST, base_url="https://x/v1")
+        recorded = recorder.record_output.call_args.kwargs["content"]
+        assert recorded == "Liebe {{PERSON_1}}, Rückfragen an {{EMAIL_2}}"
+        # The caller is not the one being protected from their own answer.
+        assert result.content == "Liebe Erika Mustermann, Rückfragen an praxis@example.org"
+
+    async def test_a_name_the_caller_listed_is_replaced_in_the_trace_even_if_the_model_wrote_it(self):
+        """The model may spell out a name it was only given as a placeholder --
+        from the system message of another tool, from its own guess."""
+        recorder = MagicMock()
+        client = self._answering("Für Erika Mustermann")
+        with (
+            patch("core.completion.httpx.AsyncClient", return_value=client),
+            patch("core.completion.completion_trace") as trace,
+        ):
+            trace.return_value.__enter__ = MagicMock(return_value=recorder)
+            trace.return_value.__exit__ = MagicMock(return_value=False)
+            await complete(self._REQUEST, base_url="https://x/v1")
+        assert recorder.record_output.call_args.kwargs["content"] == "Für {{PERSON_1}}"
+
+    async def test_the_caller_gets_the_values_back(self):
+        client = self._answering("Liebe {{PERSON_1}}, Kopie an {{EMAIL_1}}.")
+        with patch("core.completion.httpx.AsyncClient", return_value=client):
+            result = await complete(self._REQUEST, base_url="https://x/v1")
+        assert result.content == "Liebe Erika Mustermann, Kopie an erika@example.de."
+        assert result.redactions == {"PERSON": 2, "EMAIL": 1, "DATE_OF_BIRTH": 1}
+        assert result.unresolved_placeholders == 0
+
+    async def test_a_placeholder_the_model_changed_is_counted_not_guessed(self):
+        client = self._answering("Liebe PERSON_1")
+        with patch("core.completion.httpx.AsyncClient", return_value=client):
+            result = await complete(self._REQUEST, base_url="https://x/v1")
+        assert result.content == "Liebe PERSON_1"
+        assert result.unresolved_placeholders == 1
+
+    async def test_the_shipped_rules_apply_when_nothing_is_named(self):
+        client = self._answering("ok")
+        request = CompletionRequest(prompt="Schreib an a@example.de", model="m")
+        with patch("core.completion.httpx.AsyncClient", return_value=client):
+            result = await complete(request, base_url="https://x/v1")
+        sent = client.post.call_args.kwargs["json"]["messages"][-1]["content"]
+        assert sent == "Schreib an {{EMAIL_1}}"
+        assert result.redactions == {"EMAIL": 1}
+
+    async def test_an_error_the_gateway_echoes_carries_placeholders(self):
+        """A refusal often quotes the request; that text reaches the audit log
+        and the node's error message, both of which outlive the call."""
+
+        async def echo(url, headers, json):
+            msg = "refused"
+            raise httpx.HTTPStatusError(
+                msg, request=MagicMock(),
+                response=MagicMock(status_code=400, text=str(json)),
+            )
+
+        client = _http(_ANSWER)
+        client.post = AsyncMock(side_effect=echo)
+        with (
+            patch("core.completion.httpx.AsyncClient", return_value=client),
+            pytest.raises(ModelRefused) as refused,
+        ):
+            await complete(self._REQUEST, base_url="https://x/v1")
+        for value in self._SECRETS:
+            assert value not in str(refused.value)
+
+    async def test_every_attempt_of_a_fallback_chain_is_redacted(self):
+        client = self._answering("ok")
+        failing = httpx.HTTPStatusError(
+            "e", request=MagicMock(), response=MagicMock(status_code=502, text="down")
+        )
+        answer = client.post.return_value
+        client.post = AsyncMock(side_effect=[failing, answer])
+        chain = ("local", "hosted")
+        with patch("core.completion.httpx.AsyncClient", return_value=client):
+            result = await complete_with_fallback(self._REQUEST, chain, base_url="https://x/v1")
+        assert result.model_used == "gemma4-e4b"
+        bodies = [json.dumps(c.kwargs["json"], ensure_ascii=False)
+                  for c in client.post.call_args_list]
+        assert len(bodies) == len(chain)
+        for body in bodies:
+            for value in self._SECRETS:
+                assert value not in body
+
+
+class TestRedactionInARun:
+    """A call for a run (CHY-234): the answer is stored, so it keeps its
+    placeholders and is redacted itself before anyone records it.
+
+    The counterpart of each test is in `TestRedactionAtTheBoundary`: outside a
+    run the same answer comes back with the values.
+    """
+
+    _MAPPING = {"PERSON_1": "Erika Mustermann"}
+    _REQUEST = CompletionRequest(
+        prompt="Antwort an {{PERSON_1}}, Kopie an erika@example.de",
+        model="m",
+        run_mapping=_MAPPING,
+    )
+
+    @staticmethod
+    def _answering(content: str) -> MagicMock:
+        return _http({**_ANSWER, "choices": [{"message": {"content": content}}]})
+
+    async def _complete(self, answer: str, request: CompletionRequest | None = None):
+        client = self._answering(answer)
+        with patch("core.completion.httpx.AsyncClient", return_value=client):
+            result = await complete(request or self._REQUEST, base_url="https://x/v1")
+        return result, client
+
+    async def test_the_gateway_sees_the_runs_placeholders(self):
+        _, client = await self._complete("ok")
+        sent = client.post.call_args.kwargs["json"]["messages"][-1]["content"]
+        assert sent == "Antwort an {{PERSON_1}}, Kopie an {{EMAIL_1}}"
+
+    async def test_the_answer_keeps_its_placeholders(self):
+        """Restored, it would carry the name into node_executions.output_data --
+        the column this ticket exists to keep free of it."""
+        result, _ = await self._complete("Liebe {{PERSON_1}}")
+        assert result.content == "Liebe {{PERSON_1}}"
+        assert result.unresolved_placeholders == 0
+
+    async def test_what_the_model_wrote_on_its_own_is_replaced(self):
+        """An address no input contained (E3)."""
+        result, _ = await self._complete("Rückfragen an praxis@example.org")
+        assert result.content == "Rückfragen an {{EMAIL_2}}"
+        assert result.run_mapping["EMAIL_2"] == "praxis@example.org"
+
+    async def test_the_mapping_comes_back_old_and_new(self):
+        result, _ = await self._complete("ok")
+        assert result.run_mapping == {**self._MAPPING, "EMAIL_1": "erika@example.de"}
+        assert result.redactions == {"EMAIL": 1}
+
+    async def test_the_trace_records_the_answer_after_its_redaction(self):
+        recorder = MagicMock()
+        client = self._answering("Rückfragen an praxis@example.org")
+        with (
+            patch("core.completion.httpx.AsyncClient", return_value=client),
+            patch("core.completion.completion_trace") as trace,
+        ):
+            trace.return_value.__enter__ = MagicMock(return_value=recorder)
+            trace.return_value.__exit__ = MagicMock(return_value=False)
+            await complete(self._REQUEST, base_url="https://x/v1")
+        assert recorder.record_output.call_args.kwargs["content"] == "Rückfragen an {{EMAIL_2}}"
+
+    async def test_an_unknown_placeholder_is_counted(self):
+        result, _ = await self._complete("Liebe {{PERSON_7}}")
+        assert result.content == "Liebe {{PERSON_7}}"
+        assert result.unresolved_placeholders == 1
+
+    async def test_an_empty_mapping_is_still_a_run(self):
+        """`{}` is a run that has named nobody yet, not the absence of a run:
+        the answer must not be restored."""
+        request = CompletionRequest(prompt="an a@example.de", model="m", run_mapping={})
+        result, _ = await self._complete("Kopie an {{EMAIL_1}}", request)
+        assert result.content == "Kopie an {{EMAIL_1}}"
+        assert result.run_mapping == {"EMAIL_1": "a@example.de"}
+
+    async def test_outside_a_run_there_is_no_mapping(self):
+        request = CompletionRequest(prompt="an a@example.de", model="m")
+        result, _ = await self._complete("Kopie an {{EMAIL_1}}", request)
+        assert result.content == "Kopie an a@example.de"
+        assert result.run_mapping is None
+
+    async def test_every_attempt_of_a_fallback_chain_continues_the_run(self):
+        client = self._answering("ok")
+        failing = httpx.HTTPStatusError(
+            "e", request=MagicMock(), response=MagicMock(status_code=502, text="down")
+        )
+        answer = client.post.return_value
+        client.post = AsyncMock(side_effect=[failing, answer])
+        with patch("core.completion.httpx.AsyncClient", return_value=client):
+            result = await complete_with_fallback(
+                self._REQUEST, ("local", "hosted"), base_url="https://x/v1")
+        for call in client.post.call_args_list:
+            body = json.dumps(call.kwargs["json"], ensure_ascii=False)
+            assert "erika@example.de" not in body
+            assert "{{PERSON_1}}" in body
+        assert result.run_mapping == {**self._MAPPING, "EMAIL_1": "erika@example.de"}

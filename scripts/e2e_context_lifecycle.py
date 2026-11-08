@@ -339,8 +339,11 @@ def _check_a_direct_scope(c: httpx.Client, parent_id: str) -> None:
     entries = c.get("/v1/audit-log", params={"target": f"block:{bid}"}).json()
     # Newest first from the API; read as it happened.
     steps = [(e["action"], e["payload"].get("mode")) for e in reversed(entries)]
-    check("the audit shows both steps, marked direct",
-          steps == [("block.submitted", "direct"), ("block.approved", "direct")], str(steps))
+    # block.created first since CHY-171: who wrote a version is what four eyes
+    # asks (ADR-045), and until then nothing recorded it.
+    check("the audit shows who wrote it, then both steps, marked direct",
+          steps == [("block.created", None), ("block.submitted", "direct"),
+                    ("block.approved", "direct")], str(steps))
 
     # Acceptance criterion 3: up into the run's scope, as a draft; the original
     # stays active. The run's own scope is an org — strict — unless --scope-id

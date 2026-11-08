@@ -73,3 +73,16 @@ GROUP_ROLE_MAP: dict[str, str] = {
 #: whose token carries no groups claim. Least privilege by construction: a
 #: misconfigured mapping must not hand out access.
 DEFAULT_ROLE: str = Role.CONSUMER.value
+
+#: Authentik group that marks a technical account — CI, automation (CHY-163).
+#: Not a role: a CI account needs a role to do its work and is still not a
+#: person. It never counts towards the people who may approve, and never
+#: approves a block that lets data leave the installation (ADR-045).
+SERVICE_ACCOUNT_GROUP: str = f"{GROUP_PREFIX}service-accounts"
+
+#: The roles that may approve a block — the minimum of the `approve`
+#: transition and everything above it. Derived from the order, so a role added
+#: above reviewer is counted without anyone remembering to list it.
+APPROVING_ROLES: tuple[str, ...] = tuple(
+    role.value for role in Role if ROLE_ORDER[role.value] >= ROLE_ORDER[Role.REVIEWER.value]
+)

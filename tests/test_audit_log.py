@@ -152,7 +152,7 @@ class TestRequireRole:
         they may then *do* is still decided by the role check.
         """
         pool = _make_pool(role=None)
-        pool.conn.fetchrow = AsyncMock(return_value={"id": _ACTOR_ID, "role": "consumer"})
+        pool.conn.fetchrow = AsyncMock(return_value={"id": _ACTOR_ID, "role": "consumer", "is_service_account": False})
 
         with pytest.raises(AccessDenied) as exc:
             require(await resolve_actor(pool, _stub_user), "reviewer")

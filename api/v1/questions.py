@@ -25,7 +25,8 @@ from contexts.pilots.schema import QuestionOut
 from core.db import get_pool
 from kernel.schema import PG_INT_MAX
 
-router = APIRouter()
+# Deprecated with the study pilot it serves (2026-11-08, see api/v1/pilots.py).
+router = APIRouter(deprecated=True)
 
 
 @router.get("", response_model=list[QuestionOut])

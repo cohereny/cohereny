@@ -58,11 +58,13 @@ from uuid import UUID
 
 import asyncpg
 
+from kernel import least_privilege
 from kernel.access import ResolvedActor, require
 from kernel.audit import (
     ACTION_ACTOR_ANONYMIZED,
     ACTION_ACTOR_PROVISIONED,
     ACTION_ACTOR_ROLE_CHANGED,
+    ACTION_ACTOR_SERVICE_ACCOUNT_CHANGED,
     target_ref,
     write_audit,
 )
@@ -75,7 +77,14 @@ from kernel.errors import (
     UnknownRole,
 )
 from kernel.schema import ANONYMIZED_DISPLAY_NAME, AnonymizeResult
-from kernel.roles import DEFAULT_ROLE, GROUP_ROLE_MAP, ROLE_NAMES, ROLE_ORDER
+from kernel.roles import (
+    APPROVING_ROLES,
+    DEFAULT_ROLE,
+    GROUP_ROLE_MAP,
+    ROLE_NAMES,
+    ROLE_ORDER,
+    SERVICE_ACCOUNT_GROUP,
+)
 
 
 @runtime_checkable
@@ -117,13 +126,25 @@ def role_from_groups(groups: list[str] | None) -> str | None:
     return max(matched, key=lambda r: ROLE_ORDER.get(r, -1))
 
 
+def service_account_from_groups(groups: list[str] | None) -> bool | None:
+    """Whether the groups mark a technical account (CHY-163). None when silent.
+
+    The same reading of a missing claim as role_from_groups: no groups claim
+    means the IdP said nothing, and the stored flag stands. An empty list is an
+    answer — not a technical account.
+    """
+    if groups is None:
+        return None
+    return SERVICE_ACCOUNT_GROUP in groups
+
+
 async def resolve_actor(pool: asyncpg.Pool, caller: Caller) -> ResolvedActor:
     """Map the token subject to an actor row, creating or updating it as needed.
 
     Three paths, in order of how often they run:
 
       known caller, nothing to change   one SELECT, no write
-      known caller, groups moved        role refreshed, audited
+      known caller, groups moved        role and service flag refreshed, audited
       first sight                       row provisioned, audited
 
     The read stays a plain pooled SELECT so the common case costs one query.
@@ -133,22 +154,43 @@ async def resolve_actor(pool: asyncpg.Pool, caller: Caller) -> ResolvedActor:
     failure its own docstring warns about.
     """
     row = await pool.fetchrow(
-        "SELECT id, role FROM actors WHERE idp_sub = $1 AND is_anonymized = FALSE",
+        "SELECT id, role, is_service_account FROM actors "
+        "WHERE idp_sub = $1 AND is_anonymized = FALSE",
         caller.sub,
     )
-    derived = role_from_groups(caller.groups)
+    role_from_token = role_from_groups(caller.groups)
+    service_account_from_token = service_account_from_groups(caller.groups)
 
     if row is None:
-        return await _provision(pool, caller, derived or DEFAULT_ROLE)
+        return await _provision(pool, caller, role_from_token or DEFAULT_ROLE,
+                                bool(service_account_from_token))
 
-    if derived is not None and derived != row["role"]:
-        return await _refresh_role(pool, row["id"], derived)
+    role = role_from_token if role_from_token is not None else row["role"]
+    is_service_account = (service_account_from_token if service_account_from_token is not None
+                          else row["is_service_account"])
+    if (role, is_service_account) != (row["role"], row["is_service_account"]):
+        return await _refresh(pool, row["id"], role, is_service_account)
 
-    return ResolvedActor(row["id"], row["role"])
+    return ResolvedActor(row["id"], row["role"], row["is_service_account"])
+
+
+async def count_people_who_may_approve(conn) -> int:
+    """How many people may approve a block in this installation (CHY-163).
+
+    Active actors with an approving role, technical accounts left out. One
+    means a single operator, who may approve their own block that lets data
+    leave the installation, visibly marked as such (ADR-045). On the caller's
+    connection, so the count belongs to the transaction that acts on it.
+    """
+    return await conn.fetchval(
+        "SELECT count(*) FROM actors "
+        "WHERE role = ANY($1::text[]) AND is_anonymized = FALSE AND is_service_account = FALSE",
+        list(APPROVING_ROLES),
+    )
 
 
 async def _provision(
-    pool: asyncpg.Pool, caller: Caller, role: str
+    pool: asyncpg.Pool, caller: Caller, role: str, is_service_account: bool = False
 ) -> ResolvedActor:
     """Create the actor row for a caller seen for the first time.
 
@@ -163,15 +205,17 @@ async def _provision(
     """
     async with pool.acquire() as conn, conn.transaction():
         row = await conn.fetchrow(
-            "INSERT INTO actors (idp_sub, display_name, role) VALUES ($1, $2, $3) "
+            "INSERT INTO actors (idp_sub, display_name, role, is_service_account) "
+            "VALUES ($1, $2, $3, $4) "
             "ON CONFLICT (idp_sub) DO UPDATE SET display_name = EXCLUDED.display_name "
             "WHERE actors.is_anonymized = FALSE "
-            "RETURNING id, role",
+            "RETURNING id, role, is_service_account",
             caller.sub,
             # username is preferred_username, falling back to sub in
             # deps.py — never empty, which display_name NOT NULL requires.
             caller.username,
             role,
+            is_service_account,
         )
         if row is None:
             # The conflict target existed but the WHERE excluded it. Only
@@ -183,41 +227,58 @@ async def _provision(
             action=ACTION_ACTOR_PROVISIONED,
             actor_id=row["id"],
             target=target_ref("actor", row["id"]),
-            payload={"role": row["role"], "source": "oidc"},
+            payload={"role": row["role"], "is_service_account": row["is_service_account"],
+                     "source": "oidc"},
         )
-    return ResolvedActor(row["id"], row["role"])
+    return ResolvedActor(row["id"], row["role"], row["is_service_account"])
 
 
-async def _refresh_role(
-    pool: asyncpg.Pool, actor_id: UUID, derived: str
+async def _refresh(
+    pool: asyncpg.Pool, actor_id: UUID, role: str, is_service_account: bool
 ) -> ResolvedActor:
-    """Bring the stored role in line with the caller's current groups.
+    """Bring the stored role and service flag in line with the caller's groups.
 
     FOR UPDATE, and a second comparison inside the lock: a client firing
     several requests in parallel right after a group change would otherwise
-    write one identical `actor.role_changed` entry per request, into a table
-    that has been append-only since migration 011.
+    write one identical entry per request, into a table that has been
+    append-only since migration 011.
+
+    One entry per fact that changed, under its own action. A role change and a
+    change of the service flag answer different questions — what may this
+    account do, and is it a person (CHY-163) — and a reader filtering for one
+    should not have to unpack the other.
     """
     async with pool.acquire() as conn, conn.transaction():
         current = await conn.fetchrow(
-            "SELECT role FROM actors WHERE id = $1 FOR UPDATE", actor_id
+            "SELECT role, is_service_account FROM actors WHERE id = $1 FOR UPDATE", actor_id
         )
         if current is None:
             raise ActorGone
-        if current["role"] == derived:
-            return ResolvedActor(actor_id, derived)
+        if (current["role"], current["is_service_account"]) == (role, is_service_account):
+            return ResolvedActor(actor_id, role, is_service_account)
 
         await conn.execute(
-            "UPDATE actors SET role = $1 WHERE id = $2", derived, actor_id
+            "UPDATE actors SET role = $1, is_service_account = $2 WHERE id = $3",
+            role, is_service_account, actor_id,
         )
-        await write_audit(
-            conn,
-            action=ACTION_ACTOR_ROLE_CHANGED,
-            actor_id=actor_id,
-            target=target_ref("actor", actor_id),
-            payload={"from": current["role"], "to": derived, "source": "oidc_groups"},
-        )
-    return ResolvedActor(actor_id, derived)
+        if current["role"] != role:
+            await write_audit(
+                conn,
+                action=ACTION_ACTOR_ROLE_CHANGED,
+                actor_id=actor_id,
+                target=target_ref("actor", actor_id),
+                payload={"from": current["role"], "to": role, "source": "oidc_groups"},
+            )
+        if current["is_service_account"] != is_service_account:
+            await write_audit(
+                conn,
+                action=ACTION_ACTOR_SERVICE_ACCOUNT_CHANGED,
+                actor_id=actor_id,
+                target=target_ref("actor", actor_id),
+                payload={"from": current["is_service_account"], "to": is_service_account,
+                         "source": "oidc_groups"},
+            )
+    return ResolvedActor(actor_id, role, is_service_account)
 
 
 # ── erasure (GDPR Art. 17) ────────────────────────────────────────────────────
@@ -318,6 +379,9 @@ async def set_role(dsn: str, idp_sub: str, role: str) -> tuple[UUID, bool]:
 
     conn = await asyncpg.connect(dsn)
     try:
+        # The same role as the API, and no more (CHY-85): the first admin is
+        # written through the triggers like everyone after them.
+        await least_privilege.check(conn)
         async with conn.transaction():
             row = await conn.fetchrow(
                 "INSERT INTO actors (idp_sub, display_name, role) VALUES ($1, $1, $2) "

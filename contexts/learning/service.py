@@ -31,6 +31,7 @@ from contexts.learning.schema import (
 )
 from kernel.access import require
 from kernel.identity import Caller, resolve_actor
+from kernel.retention import Periods, RetentionClass
 
 #: Reading benchmark evidence, like reading a block's audit trail (CHY-90).
 _READ_ROLE = "reviewer"
@@ -85,3 +86,30 @@ def _measurement(row: Any) -> BenchmarkMeasurementOut:
     if isinstance(m["scores"], str):
         m["scores"] = json.loads(m["scores"])
     return BenchmarkMeasurementOut(**m)
+
+
+# ── retention (CHY-17, ADR-046) ───────────────────────────────────────────────
+
+def _per_workflow(periods: Periods, retention_class: RetentionClass,
+                  workflow_scopes: dict[UUID, UUID]) -> tuple[list[UUID], list[int]]:
+    """The period of each workflow's scope, as parallel arrays; unlimited left out."""
+    pairs = [(workflow_id, periods.by_scope.get(scope_id, {}).get(retention_class.value))
+             for workflow_id, scope_id in workflow_scopes.items()]
+    finite = [(workflow_id, days) for workflow_id, days in pairs if days is not None]
+    return [p[0] for p in finite], [p[1] for p in finite]
+
+
+async def purge_feedback(conn, periods: Periods,
+                         workflow_scopes: dict[UUID, UUID]) -> dict[str, int]:
+    """Apply the retention periods to feedback, in the caller's transaction.
+
+    `workflow_scopes` comes from the orchestration context, which owns the
+    workflows (CHY-231); this context only knows which workflow a row is about.
+    """
+    ids, days = _per_workflow(periods, RetentionClass.RUN_CONTENT, workflow_scopes)
+    cleared = await store.clear_feedback(
+        conn, ids, days, periods.installation_days(RetentionClass.RUN_CONTENT))
+    ids, days = _per_workflow(periods, RetentionClass.RUN_TRACE, workflow_scopes)
+    deleted = await store.delete_feedback(
+        conn, ids, days, periods.installation_days(RetentionClass.RUN_TRACE))
+    return {"feedback_events_cleared": cleared, "feedback_events_deleted": deleted}

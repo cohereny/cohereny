@@ -25,6 +25,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from api.v1._redaction import mapping_keys
 from api.v1.router import router as v1_router
 from api.config import settings
 from core.db import create_pool, close_pool
@@ -58,6 +59,8 @@ from contexts.orchestration.errors import (
     MalformedCondition,
     OversightGateMissing,
     ReviewerAlreadyDecided,
+    RunAlreadyFinished,
+    RunContentPurged,
     RunDidNotSettle,
     RunNotAwaitingOversight,
     RunNotFound as WorkflowRunNotFound,
@@ -96,6 +99,8 @@ from contexts.repository.errors import (
     UnknownGovernanceKey,
     BlockNotStorable,
     RepositoryError,
+    SecondPersonRequired,
+    ServiceAccountMayNotApprove,
     UnknownStatus,
     VersionConflict,
 )
@@ -106,6 +111,10 @@ from kernel.errors import (
     ActorNotFound,
     MembershipExists,
     ParentScopeNotFound,
+    RetentionOverrideNotFound,
+    InvalidIdentifiers,
+    MalformedRedactionRule,
+    RedactionRuleNotApprovable,
     ScopeLoosensPrivacy,
     ActorStateInconsistent,
     KernelError,
@@ -117,6 +126,9 @@ from kernel.errors import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # First: without a key no run can be stored, so the API does not start
+    # rather than refusing every run later (CHY-234, E5).
+    mapping_keys()
     await create_pool()
     await create_redis()
     # After the pool: a failing auth_check must not hide a failing database.
@@ -190,6 +202,10 @@ _KERNEL_STATUS: dict[type[KernelError], int] = {
     # transport that does not exist yet, and the handler's default is 500.
     UnknownRole: 400,
     ActorAnonymized: 409,
+    RetentionOverrideNotFound: 404,
+    InvalidIdentifiers: 422,
+    RedactionRuleNotApprovable: 422,
+    MalformedRedactionRule: 500,
 }
 
 
@@ -266,6 +282,11 @@ _REPOSITORY_STATUS: dict[type[RepositoryError], int] = {
     # (CHY-196). 422, not 403: the request contradicts itself — it names one
     # scope for the model and context from another.
     BlockOutsideScope: 422,
+    # Four eyes where data changes place (CHY-163, ADR-045). 403 rather than
+    # 409: nothing about the block is in conflict — this actor may not make
+    # this decision, and another one may.
+    SecondPersonRequired: 403,
+    ServiceAccountMayNotApprove: 403,
 }
 
 
@@ -303,10 +324,16 @@ _ORCHESTRATION_STATUS: dict[type[OrchestrationError], int] = {
     MalformedCondition: 422,
     WorkflowNotRunnable: 409,
     RunNotAwaitingOversight: 409,
+    # 409: a stop for a run that is already over (CHY-200). The state, not the
+    # request, is what refuses it.
+    RunAlreadyFinished: 409,
     # 409: the same person decided at this gate before. Not malformed — a
     # four-eyes gate needs someone else, and the state says who (CHY-176).
     ReviewerAlreadyDecided: 409,
     WorkflowRunNotFound: 404,
+    # Cleared at the end of its period (CHY-17): the run is there, its content
+    # is gone for good, and nothing the caller does brings it back (CHY-234).
+    RunContentPurged: 410,
     # 500: the run says it is waiting and no node is. Not something the caller
     # did or can fix — its position was never recorded.
     OversightGateMissing: 500,

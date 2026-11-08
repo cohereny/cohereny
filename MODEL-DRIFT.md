@@ -80,9 +80,9 @@ Dieses Beispiel zeigt das Kernproblem das Cohereny löst:
 - **Die Lösung:** Eine `TranslationRule` die das Systemrollen-Framing für
   `model_family: gemma4` automatisch anpasst
 
-In Cohereny würde das so aussehen:
+In Cohereny soll das die Adaptionsschicht übernehmen (geplant, M6). Eine Skizze, kein
+gültiger Block — den Blocktyp gibt es noch nicht:
 ```yaml
-# ContextBlock: calibration_anchor
 block_type: translation_rule
 name: gemma4-no-meta-commentary
 scope: global

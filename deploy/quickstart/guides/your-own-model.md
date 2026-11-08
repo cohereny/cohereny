@@ -70,7 +70,8 @@ models:
 
 Cohereny then refuses to route a `confidential` scope like *Example Corp* to it — at
 approval of the rule and again at every request. That is the point: which data may
-leave the house is decided once, reviewed, and enforced, not remembered.
+leave the house is decided once, reviewed, and enforced, not remembered. A rule naming
+such a model is approved by someone other than its writer, in every scope.
 
 A chain may fall back from a hosted model to a local one, never the other way round.
 

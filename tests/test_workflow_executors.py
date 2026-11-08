@@ -24,9 +24,11 @@ from uuid import uuid4
 
 import pytest
 
+from api.v1 import workflows
 from api.v1.workflows import get_executors
 from contexts.orchestration.errors import (
     MalformedCondition,
+    NodeExecutionFailed,
     NodeTypeNotExecutable,
 )
 from contexts.orchestration.execution import (
@@ -36,6 +38,24 @@ from contexts.orchestration.execution import (
     evaluate_edge_condition,
 )
 from contexts.orchestration.schema import ContextRequirements
+from core.completion import CompletionResult
+from kernel.redaction import RedactionPolicy
+from router.rules import RoutingRule
+
+
+@pytest.fixture(autouse=True)
+def _shipped_redaction_rules_only(monkeypatch):
+    """The executors here run without a database (`pool=None`).
+
+    Reading a scope's redaction rules needs one (CHY-63 part 2), so every test
+    here runs under the shipped rules alone. What a scope's rules do to a model
+    call is tested in tests/test_redaction_rules.py and through the real
+    reading in tests/test_workflow_over_repository.py.
+    """
+    async def shipped_only(_pool, _scope_id):
+        return RedactionPolicy()
+
+    monkeypatch.setattr(workflows, "redaction_policy_for", shipped_only)
 
 
 def _ctx(node_type: str, node_ref: str = "n", **kw) -> NodeContext:
@@ -409,8 +429,7 @@ class TestTheModelGetsContextAndRequest:
 
         async def answer(request, candidates, **_k):
             sent.append(request)
-            return SimpleNamespace(content="draft", trace_id=None,
-                                   model_used=candidates[0], attempts=[])
+            return CompletionResult(content="draft", model_used=candidates[0])
 
         monkeypatch.setattr(workflows, "route_for", chain)
         monkeypatch.setattr(workflows.completion, "complete_with_fallback", answer)
@@ -441,3 +460,112 @@ class TestTheModelGetsContextAndRequest:
                  input_data={"prompt": "hi"})
         )
         assert sent[0].system == ""
+
+
+class TestIdentifiersFromTheRunInput:
+    """An `llm_call` takes `identifiers_to_redact` from the run input (CHY-63).
+
+    From the run input, so a name listed once is replaced at every model call
+    of the run -- not only at the nodes whose mapping someone extended.
+    """
+
+    @staticmethod
+    def _capture(monkeypatch, **result):
+        sent = []
+
+        async def chain(*_a, **_k):
+            return RoutingRule("draft_reply", ("local-model",), uuid4(), uuid4(), 1,
+                               max_tokens=256)
+
+        async def answer(request, candidates, **_k):
+            sent.append(request)
+            return CompletionResult(content="draft", model_used=candidates[0], **result)
+
+        monkeypatch.setattr(workflows, "route_for", chain)
+        monkeypatch.setattr(workflows.completion, "complete_with_fallback", answer)
+        return workflows, sent
+
+    async def test_the_run_inputs_identifiers_reach_the_request(self, monkeypatch):
+        workflows, sent = self._capture(monkeypatch)
+        await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 input_data={"prompt": "Brief an Erika",
+                             "run": {"identifiers_to_redact": {"PERSON": ["Erika"]}}})
+        )
+        assert sent[0].identifiers_to_redact == {"PERSON": ("Erika",)}
+
+    async def test_a_run_without_a_list_still_gets_the_shipped_rules(self, monkeypatch):
+        workflows, sent = self._capture(monkeypatch)
+        await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 input_data={"prompt": "hi", "run": {"message": "hi"}})
+        )
+        assert sent[0].identifiers_to_redact == {}
+        assert sent[0].redaction_rules  # the shipped rules, not an empty tuple
+
+    async def test_a_malformed_list_fails_the_node_before_any_model_is_asked(
+        self, monkeypatch
+    ):
+        workflows, sent = self._capture(monkeypatch)
+        with pytest.raises(NodeExecutionFailed, match="identifiers_to_redact"):
+            await workflows._call_model_for(None)(
+                _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                     input_data={"prompt": "hi",
+                                 "run": {"identifiers_to_redact": {"PERSON": "Erika"}}})
+            )
+        assert sent == []
+
+    async def test_the_counts_go_into_the_nodes_output(self, monkeypatch):
+        workflows, _ = self._capture(
+            monkeypatch, redactions={"PERSON": 2}, unresolved_placeholders=1
+        )
+        result = await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 input_data={"prompt": "hi"})
+        )
+        assert result.output["redactions"] == {"PERSON": 2}
+        assert result.output["unresolved_placeholders"] == 1
+
+
+class TestARunThatKeepsItsPlaceholders:
+    """A run started since CHY-234 hands its node the mapping, not a list.
+
+    Every value the mapping holds is searched for, the request carries the
+    mapping so the answer comes back with placeholders, and what the answer
+    added goes back to the service, which seals it.
+    """
+
+    MAPPING = {"PERSON_1": "Erika Mustermann", "EMAIL_1": "erika@example.de"}
+
+    async def test_every_value_of_the_mapping_is_searched_for(self, monkeypatch):
+        """Not the list in the input: a run that keeps placeholders has none
+        there, and a name given only in the input would then be searched by nobody."""
+        workflows, sent = TestIdentifiersFromTheRunInput._capture(monkeypatch)
+        await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 run_mapping=self.MAPPING,
+                 input_data={"prompt": "Brief an {{PERSON_1}}",
+                             "run": {"identifiers_to_redact": {"PERSON": ["Stale"]}}})
+        )
+        assert sent[0].identifiers_to_redact == {"PERSON": ("Erika Mustermann",),
+                                                 "EMAIL": ("erika@example.de",)}
+        assert sent[0].run_mapping == self.MAPPING
+
+    async def test_what_the_answer_added_goes_back_to_the_service(self, monkeypatch):
+        extended = {**self.MAPPING, "PHONE_1": "0171 2345678"}
+        workflows, _ = TestIdentifiersFromTheRunInput._capture(monkeypatch, run_mapping=extended)
+        result = await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 run_mapping=self.MAPPING, input_data={"prompt": "hi"})
+        )
+        assert result.run_mapping == extended
+
+    async def test_a_run_started_before_it_sends_no_mapping(self, monkeypatch):
+        """E6: such a run keeps its values; the answer is restored at the boundary."""
+        workflows, sent = TestIdentifiersFromTheRunInput._capture(monkeypatch)
+        result = await workflows._call_model_for(None)(
+            _ctx("llm_call", "draft", task_type="draft_reply", scope_id=uuid4(),
+                 input_data={"prompt": "hi"})
+        )
+        assert sent[0].run_mapping is None
+        assert result.run_mapping is None

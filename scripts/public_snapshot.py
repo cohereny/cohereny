@@ -6,9 +6,10 @@ What goes into the public repository, and a check that nothing internal goes wit
 
 The public GitHub repository is a snapshot. Its history starts fresh: the internal
 history never leaves the self-hosted GitLab, because a cleanup commit removes a file from
-the current tree, not from the commits before it. Each release is copied from `dev` into
+the current tree, not from the commits before it. Each release is copied from `main` into
 the `publish` branch as one commit — never merged, since a merge would bring the whole
-internal history along.
+internal history along. Only released state goes public: the export runs from a clean
+checkout of origin/main and refuses anything else (CHY-191).
 
 Every tracked file is either PUBLIC or INTERNAL. A file in neither stops the check: a new
 top-level file must be classified on purpose, not slip into the snapshot or out of it by
@@ -26,7 +27,8 @@ Usage:
     python scripts/public_snapshot.py --export DIR [--docs DOCS_CHECKOUT]
         Replace the contents of DIR (a checkout of `publish`, `.git` kept) with the public
         files, the publish CI definition and, with --docs, the whitepaper and arc42 under
-        docs/. Then scan DIR. Exit 1 on a finding. DIR must be a checkout of `publish`.
+        docs/. Then scan DIR. Exit 1 on a finding. DIR must be a checkout of `publish`, and
+        this checkout must stand on origin/main with no tracked file changed (fetch first).
     python scripts/public_snapshot.py --scan DIR
         Scan every tracked file of DIR — the publish branch's CI runs this before the push.
         Internal patterns come from the environment variable LEAK_PATTERNS there. Exit 1
@@ -55,8 +57,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 #: Paths copied into the snapshot. A trailing slash means the whole directory.
 PUBLIC: tuple[str, ...] = (
-    ".env.example", ".gitignore", "CHANGELOG.md", "CHANGELOG.de.md", "COMMERCIAL-LICENSE.md",
-    "CONTRIBUTING.md", "CONVENTIONS.md", "DEPENDENCIES.md", "Dockerfile", "LICENSE.md",
+    ".dockerignore", ".env.example", ".gitignore", "CHANGELOG.md", "CHANGELOG.de.md", "COMMERCIAL-LICENSE.md",
+    "CONTRIBUTING.md", "CONVENTIONS.md", "CRYPTOGRAPHY.md", "DATA-PROTECTION.md",
+    "DATA-PROTECTION-EXAMPLE.md", "DATA-PROTECTION-EXAMPLE.de.md", "DEPENDENCIES.md",
+    "Dockerfile", "LICENSE.md",
     "MODEL-DRIFT.md",
     "README.md", "SECURITY.md", "openapi.yaml", "pyproject.toml", "quality-baseline.json",
     "api/", "assets/", "cli/", "contexts/", "contracts/", "core/", "deploy/", "docker/",
@@ -73,8 +77,7 @@ INTERNAL: tuple[str, ...] = (
     ".env.dev.example",      # stage templates of the reference installation
     ".env.test.example",
     ".env.prod.example",
-    "compose.yaml",          # the reference installation's stack
-    "Makefile",              # drives compose.yaml
+    "Makefile",              # drives the reference installation's stack
     "renovate.json",         # runs against the self-hosted GitLab
     ".leak-patterns",        # the internal names this check looks for
     "publish/",              # the publish branch's own CI, copied to its root by --export
@@ -128,10 +131,15 @@ def _git() -> str:
     return GIT
 
 
+def _run_git(path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Every git call of this script, in one place: arguments come from the code,
+    never from a file or the command line, and git itself from PATH."""
+    return subprocess.run([_git(), *args], cwd=path, capture_output=True, text=True,
+                          check=check)
+
+
 def tracked_files(root: Path) -> list[str]:
-    out = subprocess.run([_git(), "ls-files"], cwd=root, capture_output=True,
-                         text=True, check=True).stdout
-    return [line for line in out.splitlines() if line]
+    return [line for line in _run_git(root, "ls-files").stdout.splitlines() if line]
 
 
 def classify(files: list[str]) -> tuple[list[str], list[str]]:
@@ -182,9 +190,37 @@ def _branch(path: Path) -> str | None:
     # symbolic-ref, not rev-parse: it names the branch even before its first commit,
     # where rev-parse fails — and a failure read as "not publish" refused for the
     # wrong reason (found by the export dry run on 29.10.2026).
-    out = subprocess.run([_git(), "symbolic-ref", "--short", "HEAD"], cwd=path,
-                         capture_output=True, text=True, check=False)
+    out = _run_git(path, "symbolic-ref", "--short", "HEAD", check=False)
     return out.stdout.strip() if out.returncode == 0 else None
+
+
+def _commit(path: Path, ref: str) -> str | None:
+    out = _run_git(path, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    return out.stdout.strip() or None
+
+
+def source_problem(source: Path) -> str | None:
+    """Why `source` may not be exported, or None (CHY-191).
+
+    Only released state goes public (decided 29.10.2026, CHY-188). A checkout of
+    `dev` would publish whatever is being worked on, and a tracked file edited but
+    not committed would go out as it lies on disk — under a commit message that
+    names a sha which does not contain it. There is no switch around this:
+    exporting anything else is a change to this script, reviewed like any other.
+    """
+    main = _commit(source, "origin/main")
+    if main is None:
+        return "this checkout has no origin/main — run `git fetch origin` first"
+    head = _commit(source, "HEAD")
+    if head != main:
+        return (f"HEAD is {head[:12] if head else 'not a commit'}, origin/main is "
+                f"{main[:12]} — export from a checkout of origin/main "
+                f"(`git worktree add <dir> origin/main`)")
+    changed = _run_git(source, "status", "--porcelain", "--untracked-files=no").stdout.splitlines()
+    if changed:
+        return (f"{len(changed)} tracked file(s) changed and not committed, "
+                f"e.g. `{changed[0].strip()}`")
+    return None
 
 
 def export(source: Path, target: Path, docs: Path | None) -> list[str]:
@@ -330,10 +366,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{target} is not a checkout of the publish branch — refusing to empty it",
               file=sys.stderr)
         return 2
+    problem = source_problem(ROOT)
+    if problem is not None:
+        print(f"refusing to export: {problem}", file=sys.stderr)
+        return 2
     written = export(ROOT, target, args.docs)
     code = _report(scan(target, written, patterns), [])
     if code == 0:
         print(f"{len(written)} files exported to {target}, no finding.")
+        print(f"Commit it there as: snapshot from {_commit(ROOT, 'HEAD')} on main")
     return code
 
 

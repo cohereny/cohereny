@@ -136,7 +136,8 @@ def run_workflow(pdf_path: str, thread_id: str = "run-1",
     builder = _build()
 
     with PostgresSaver.from_conn_string(POSTGRES_URI) as checkpointer:
-        checkpointer.setup()
+        # Tables come from migrations/runner.py, created as the migration role:
+        # the application role may not run DDL (CHY-85).
         graph = builder.compile(checkpointer=checkpointer)
         config = {"configurable": {"thread_id": thread_id}, "callbacks": [langfuse]}
         return graph.invoke(_initial_state(pdf_path, model_map), config=config)
@@ -180,7 +181,8 @@ def stream_workflow(
 
     try:
         with PostgresSaver.from_conn_string(dsn) as checkpointer:
-            checkpointer.setup()
+            # Tables come from migrations/runner.py, created as the migration role:
+            # the application role may not run DDL (CHY-85).
             graph = builder.compile(checkpointer=checkpointer)
             config = {"configurable": {"thread_id": thread_id}, "callbacks": [langfuse]}
 

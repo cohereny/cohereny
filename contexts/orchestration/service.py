@@ -13,11 +13,13 @@ way to read a graph — and two ways to read a graph become two opinions about
 which edges exist.
 
 Dependencies:
-  - contexts.orchestration.{graph, store, schema, errors} · kernel.{access, audit, identity}
+  - contexts.orchestration.{graph, store, schema, errors}
+  - kernel.{access, audit, identity, mapping_cipher, redaction}
 """
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -39,8 +41,13 @@ from contexts.orchestration.execution import (
     NodeResult,
     evaluate_edge_condition,
 )
+# Re-exported for the same reason: an executor reads the run's own input under
+# this key -- the model call takes `identifiers_to_redact` from there (CHY-63)
+# -- and `dataflow` stays internal.
+from contexts.orchestration.dataflow import RUN_INPUT
 
 __all__ = [
+    "RUN_INPUT",
     "ConditionEvaluator",
     "ExecutorRegistry",
     "NodeExecutor",
@@ -52,6 +59,8 @@ from contexts.orchestration.errors import (
     MalformedCondition,
     OrchestrationError,
     OversightGateMissing,
+    RunAlreadyFinished,
+    RunContentPurged,
     RunDidNotSettle,
     RunNotAwaitingOversight,
     RunNotFound,
@@ -67,7 +76,10 @@ from contexts.orchestration.schema import (
     ContextRequirements,
     NodeExecutionOut,
     OversightDecision,
+    RunCancelRequest,
     RunNodesOut,
+    RunResolvedOut,
+    RunResolveRequest,
     WorkflowRunOut,
     WorkflowRunStart,
     ConnectionCreate,
@@ -81,10 +93,13 @@ from contexts.orchestration.schema import (
     WorkflowConnection,
     WorkflowStatusPut,
 )
+from kernel import acting, mapping_cipher
 from kernel.access import require
 from kernel.audit import (
     ACTION_WORKFLOW_ACTIVATED,
     ACTION_WORKFLOW_CREATED,
+    ACTION_RUN_CANCELLED,
+    ACTION_RUN_CONTENT_RESOLVED,
     ACTION_RUN_OVERSIGHT,
     ACTION_RUN_STARTED,
     ACTION_WORKFLOW_DEPRECATED,
@@ -92,14 +107,31 @@ from kernel.audit import (
     write_audit,
 )
 from kernel.identity import Caller, resolve_actor
+from kernel.redaction import (
+    RedactionPolicy,
+    identifiers_from,
+    identifiers_in,
+    merged,
+    placeholders_in,
+    rebased,
+    redact,
+    redact_structure,
+    renamed,
+    reserve,
+    resolved,
+)
+from kernel.retention import Periods, RetentionClass
 
 #: Graph changes are allowed only here. The same rule context_blocks follows:
 #: what a reviewer released must not change underneath the release.
 EDITABLE_STATUS = "draft"
 
+#: A person stopped the run (CHY-200, AI Act Art. 14(4)(e)).
+CANCELLED = "cancelled"
+
 #: A run in one of these is over; advancing it again is a no-op rather than an
 #: error, so a duplicate call from a retrying client cannot restart it.
-_TERMINAL_RUN_STATES: frozenset[str] = frozenset({"complete", "failed", "rejected"})
+_TERMINAL_RUN_STATES: frozenset[str] = frozenset({"complete", "failed", "rejected", CANCELLED})
 
 #: The one status from which a human decision is accepted.
 AWAITING = "awaiting_oversight"
@@ -364,6 +396,13 @@ async def set_workflow_status(
     Retiring is not validated. A workflow already active is being taken out of
     service, and refusing that because its graph has meanwhile become invalid
     would trap the exact workflow somebody wants to stop.
+
+    **A workflow that left the draft does not return to it (CHY-248).** Back in
+    `draft` its graph could be edited again — underneath the runs that used it,
+    which is the change `WorkflowNotEditable` exists to refuse. Until
+    2026-11-07 the transition was accepted; the contract fuzzer reopened an
+    active workflow and then failed to delete an edge its runs had counted.
+    A released workflow changes by a new version (CHY-127).
     """
     performer = await resolve_actor(pool, caller)
     require(performer, "reviewer")
@@ -372,6 +411,8 @@ async def set_workflow_status(
         current = await store.lock_workflow(conn, workflow_id)
         if current is None:
             raise WorkflowNotFound
+        if body.status == EDITABLE_STATUS and current["status"] != EDITABLE_STATUS:
+            raise WorkflowNotEditable(current["status"])
 
         if body.status == "active":
             violations = await _violations(conn, workflow_id)
@@ -408,6 +449,36 @@ class Advance:
     run: WorkflowRunOut
     rounds: int
     executed: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Placeholders:
+    """What a run's identifiers are replaced by, and the keys its mapping is
+    sealed with (CHY-234).
+
+    Handed in by the transport like the executors: the redaction rules of a
+    scope come from the repository, which this context does not import
+    (ADR-030), and the keys from the configuration.
+    """
+
+    policy_for: Callable[[UUID | None], Awaitable[RedactionPolicy]]
+    keys: mapping_cipher.KeyRing
+
+
+@dataclass(frozen=True)
+class Engine:
+    """What advances a run: the executors, and the pool they work in (CHY-92).
+
+    The pool is the system pool. The engine works for the installation and sees
+    every run; whether the person behind a request may start or decide one is
+    checked before the engine is handed the run. The two travel together from
+    the transport to `advance_run` and nowhere else, so they are one argument —
+    and since CHY-234 so do the placeholders a run is stored with.
+    """
+
+    registry: ExecutorRegistry
+    pool: object
+    placeholders: Placeholders
 
 
 def _run_out(row) -> WorkflowRunOut:
@@ -513,9 +584,12 @@ class _Claim:
     context_requirements: ContextRequirements | None
     task_type: str | None
     scope_id: object
+    #: The run's mapping as it stood at the claim (CHY-234); None before 036.
+    run_mapping: Mapping[str, str] | None = None
 
 
-async def _claim(conn, graph, run_row, steps) -> list[_Claim]:
+async def _claim(conn, graph, run_row, steps, *,
+                 run_mapping: Mapping[str, str] | None = None) -> list[_Claim]:
     """Write down that these nodes have started, and spend their tokens.
 
     In its own transaction, and **before** anything runs. Two reasons, and both
@@ -545,12 +619,107 @@ async def _claim(conn, graph, run_row, steps) -> list[_Claim]:
         claimed.append(_Claim(
             step=step, execution_id=execution_id["id"], input_data=node_input,
             config=detail.config, context_requirements=detail.context_requirements,
-            task_type=detail.task_type, scope_id=scope_id,
+            task_type=detail.task_type, scope_id=scope_id, run_mapping=run_mapping,
         ))
     return claimed
 
 
-async def advance_run(pool, run_id: UUID, *, registry: ExecutorRegistry) -> Advance:
+# ── the run's placeholders (CHY-234) ──────────────────────────────────────────
+
+def _opened(row, run_id: UUID, keys: mapping_cipher.KeyRing | None) -> dict[str, str] | None:
+    """The run's mapping in the clear, or None for a run started before CHY-234.
+
+    Whether a run keeps placeholders is decided by its row, never by whether a
+    key is at hand: a missing key stops the run, it never lets a value through.
+    Such a run, started before migration 036, keeps its values until its
+    content period ends (E6) and is replaced only at each model call.
+    """
+    if row is None:
+        return None
+    if keys is None:
+        msg = f"run {run_id} keeps its placeholders, and no key was handed in to open them"
+        raise mapping_cipher.MappingKeyError(msg)
+    if row["ciphertext"] is None:
+        msg = f"the mapping of run {run_id} was cleared with its content"
+        raise mapping_cipher.MappingUnreadableError(msg)
+    sealed = mapping_cipher.Sealed(row["key_id"], bytes(row["nonce"]), bytes(row["ciphertext"]))
+    return mapping_cipher.unseal(sealed, run_id=run_id, keys=keys)
+
+
+def _sealed(mapping: Mapping[str, str], run_id: UUID, keys: mapping_cipher.KeyRing) -> dict:
+    sealed = mapping_cipher.seal(mapping, run_id=run_id, keys=keys)
+    return {"key_id": sealed.key_id, "nonce": sealed.nonce, "ciphertext": sealed.ciphertext}
+
+
+def _with_placeholders(run_input: Mapping, policy: RedactionPolicy) -> tuple[dict, dict, dict]:
+    """The input as it is stored, the run's mapping, and the counts per category.
+
+    Every text of the input is replaced (E2), by the scope's rules and every
+    name the caller listed. The list itself is not stored -- it is what it
+    protects. It goes into the mapping, so later steps still search for each
+    name (kernel.redaction.reserve).
+    """
+    listed = identifiers_from(run_input.get("identifiers_to_redact"))
+    rest = {key: value for key, value in run_input.items() if key != "identifiers_to_redact"}
+    stored, redaction = redact_structure(
+        rest, identifiers=merged(policy.identifiers, listed), rules=policy.rules)
+    mapping = reserve(listed, known=redaction.replacements, taken=redaction.preexisting)
+    return stored, mapping, redaction.counts
+
+
+async def _reason_with_placeholders(conn, run_row, reason: str | None,
+                                    placeholders: Placeholders) -> str | None:
+    """A reason as it is stored -- given at the gate or when stopping the run
+    (CHY-200) -- with the run's placeholders (E7).
+
+    Whoever rejects easily writes the name into the reason -- "not the file of
+    Ms Mustermann". Replaced like the input, by the run's mapping, the scope's
+    rules and the shipped patterns, under the row lock; a value the run did not
+    know yet extends its mapping. A run started before CHY-234 keeps its values
+    here as everywhere (E6).
+    """
+    if not reason:
+        return reason
+    run_id = run_row["id"]
+    current = _opened(await store.lock_pii_mapping(conn, run_id), run_id, placeholders.keys)
+    if current is None:
+        return reason
+    definition = await store.workflow(conn, run_row["workflow_id"])
+    policy = await placeholders.policy_for(definition["scope_id"] if definition else None)
+    redaction = redact({"reason": reason}, rules=policy.rules, known=current,
+                       identifiers=merged(policy.identifiers, identifiers_in(current)))
+    if redaction.replacements != current:
+        await store.update_pii_mapping(
+            conn, run_id, **_sealed(redaction.replacements, run_id, placeholders.keys))
+    return redaction.texts["reason"]
+
+
+async def _merged_output(conn, run_id: UUID, claim: _Claim, result: NodeResult,
+                         keys: mapping_cipher.KeyRing | None) -> dict:
+    """The node's output with its new names merged into the run's mapping.
+
+    Under the row lock (E1). Another step of the run may have recorded since
+    this one was claimed and handed out the same name for somebody else; then
+    this step's names move, in its output as in the mapping
+    (kernel.redaction.rebased).
+    """
+    output = dict(result.output)
+    if claim.run_mapping is None or result.run_mapping is None:
+        return output
+    current = _opened(await store.lock_pii_mapping(conn, run_id), run_id, keys)
+    if current is None:
+        msg = f"the mapping of run {run_id} disappeared while a step was running"
+        raise mapping_cipher.MappingUnreadableError(msg)
+    mapping, renames = rebased(
+        claim.run_mapping, result.run_mapping, current,
+        taken=placeholders_in(output) - frozenset(result.run_mapping))
+    if mapping != current:
+        await store.update_pii_mapping(conn, run_id, **_sealed(mapping, run_id, keys))
+    return renamed(output, renames)
+
+
+async def advance_run(pool, run_id: UUID, *, registry: ExecutorRegistry,
+                      keys: mapping_cipher.KeyRing | None = None) -> Advance:
     """Move a run as far as it will go, then stop.
 
     The one operation this module offers, and the reason there is only one:
@@ -574,6 +743,9 @@ async def advance_run(pool, run_id: UUID, *, registry: ExecutorRegistry) -> Adva
     recorded as `failed`, the run becomes `failed`, and the message survives.
     The alternative — swallowing it and carrying on — would produce a run that
     completed without doing its work, which is indistinguishable from success.
+
+    `keys` open the run's placeholder mapping (CHY-234). Only a run without one
+    — started before migration 036 — advances without them.
     """
     executed: list[str] = []
 
@@ -611,7 +783,8 @@ async def advance_run(pool, run_id: UUID, *, registry: ExecutorRegistry) -> Adva
                 # that node will advance the run when it finishes.
                 return Advance(_run_out(run_row), round_number - 1, tuple(executed))
 
-            claimed = await _claim(conn, graph, run_row, decision.steps)
+            run_mapping = _opened(await store.pii_mapping(conn, run_id), run_id, keys)
+            claimed = await _claim(conn, graph, run_row, decision.steps, run_mapping=run_mapping)
 
         for claim in claimed:
             node = graph.node(claim.step.node_id)
@@ -619,7 +792,7 @@ async def advance_run(pool, run_id: UUID, *, registry: ExecutorRegistry) -> Adva
             await _execute_and_record(
                 pool, run_id,
                 _Job(graph=graph, node=node, claim=claim, run_row=run_row),
-                registry=registry,
+                registry=registry, keys=keys,
             )
 
     raise RunDidNotSettle(run_id, MAX_ROUNDS)
@@ -641,7 +814,8 @@ class _Job:
 
 
 async def _execute_and_record(
-    pool, run_id: UUID, job: _Job, *, registry: ExecutorRegistry
+    pool, run_id: UUID, job: _Job, *, registry: ExecutorRegistry,
+    keys: mapping_cipher.KeyRing | None = None,
 ) -> None:
     """Run one node and write down where the run goes next.
 
@@ -662,6 +836,7 @@ async def _execute_and_record(
         config=claim.config, context_requirements=claim.context_requirements,
         task_type=claim.task_type, input_data=claim.input_data,
         scope_id=claim.scope_id, actor_id=job.run_row["actor_id"],
+        run_mapping=claim.run_mapping,
     )
     try:
         result = await registry.for_type(node.node_type, node.node_ref)(ctx)
@@ -687,12 +862,35 @@ async def _execute_and_record(
                 edge.id, edge.condition, result
             )
 
+    try:
+        await _record(pool, job, result, conditions, keys=keys)
+    except (mapping_cipher.MappingKeyError, mapping_cipher.MappingUnreadableError) as exc:
+        # Written down before it is raised, as for an executor's exception: a
+        # mapping that does not open must not leave the run at `running`.
+        await _record_failure(
+            pool, run_id, claim.execution_id, f"{type(exc).__name__}: {exc}"
+        )
+        raise
+
+
+async def _record(pool, job: _Job, result: NodeResult, conditions: dict, *,
+                  keys: mapping_cipher.KeyRing | None) -> None:
+    """Write down what one node produced and where the run goes next.
+
+    Under the run's lock, and that is not caution for its own sake: a person
+    may have stopped the run while this node was working (CHY-200). Its result
+    is then dropped — the execution stays `cancelled`, the run stays stopped,
+    and nothing it produced moves the run on.
+    """
+    node, claim, run_id = job.node, job.claim, job.run_row["id"]
     async with pool.acquire() as conn, conn.transaction():
+        if await _stopped_meanwhile(conn, run_id):
+            return
+        output = await _merged_output(conn, run_id, claim, result, keys)
         state = await _load_state(conn, run_id)
         firing = runner.fire(job.graph, state, node.id, conditions=conditions)
         await store.complete_execution(
-            conn, claim.execution_id,
-            output=dict(result.output), model_used=result.model_used,
+            conn, claim.execution_id, output=output, model_used=result.model_used,
         )
         if firing.failure:
             await store.set_run_status(conn, run_id, "failed", error=firing.failure)
@@ -701,14 +899,27 @@ async def _execute_and_record(
 
 
 async def _record_failure(pool, run_id: UUID, execution_id: UUID, message: str) -> None:
-    """End a claimed execution and its run as failed, saying why."""
+    """End a claimed execution and its run as failed, saying why — unless a
+    person stopped the run meanwhile (CHY-200): then both stay `cancelled`."""
     async with pool.acquire() as conn, conn.transaction():
+        if await _stopped_meanwhile(conn, run_id):
+            return
         await store.fail_execution(conn, execution_id, message)
         await store.set_run_status(conn, run_id, "failed", error=message)
 
 
+async def _stopped_meanwhile(conn, run_id: UUID) -> bool:
+    """Lock the run; True if a person stopped it while a node was working.
+
+    The lock comes before the mapping's, as everywhere: run first, then
+    mapping, so two writers never wait on each other in opposite order.
+    """
+    run_row = await store.lock_run(conn, run_id)
+    return run_row is None or run_row["status"] == CANCELLED
+
+
 async def start_workflow_run(
-    pool, caller: Caller, workflow_id: UUID, body: WorkflowRunStart, *, registry: ExecutorRegistry
+    pool, caller: Caller, workflow_id: UUID, body: WorkflowRunStart, *, engine: Engine,
 ) -> Advance:
     """Create a run of an active workflow and push it as far as it goes.
 
@@ -721,33 +932,53 @@ async def start_workflow_run(
     already identifies one version row, but carrying the number as well means
     an audit can answer "which version ran" without resolving a foreign key
     into a table whose rows may since have been retired.
+
+    The run is created as the starter — row-level security admits it because
+    they are its starter (CHY-92) — and then advanced by the `engine` in the
+    system context: the engine works for the installation, and the starter's
+    right to run the workflow is what was checked here.
+
+    **The run is stored with placeholders** (CHY-234). Its input is replaced
+    before the first row is written, the mapping back to the values is sealed
+    into `pii_mappings` in the same transaction, and from here on every step
+    reads and writes placeholders. The audit entry counts what was replaced,
+    per category — counts, never values.
     """
     starter = await resolve_actor(pool, caller)
     require(starter, "contributor")
 
-    async with pool.acquire() as conn, conn.transaction():
+    async with acting.acting_as(pool, starter.id) as conn, conn.transaction():
         definition = await store.workflow(conn, workflow_id)
         if definition is None:
             raise WorkflowNotFound
         if definition["status"] != "active":
             raise WorkflowNotRunnable(definition["status"])
 
+        policy = await engine.placeholders.policy_for(definition["scope_id"])
+        stored_input, mapping, counts = _with_placeholders(body.input_data, policy)
         row = await store.insert_run(conn, store.NewRun(
             workflow_id=workflow_id, workflow_version=definition["version"],
-            actor_id=starter.id, input_data=dict(body.input_data),
+            actor_id=starter.id, input_data=stored_input,
         ))
+        await store.insert_pii_mapping(
+            conn, row["id"], **_sealed(mapping, row["id"], engine.placeholders.keys))
         await write_audit(
             conn, action=ACTION_RUN_STARTED, actor_id=starter.id,
             target=target_ref("workflow_run", row["id"]),
             payload={"workflow_id": str(workflow_id),
-                     "workflow_version": definition["version"]},
+                     "workflow_version": definition["version"],
+                     "redactions": counts},
         )
-    return await advance_run(pool, row["id"], registry=registry)
+    return await advance_run(engine.pool, row["id"], registry=engine.registry,
+                             keys=engine.placeholders.keys)
 
 
 async def get_run(pool, caller: Caller, run_id: UUID) -> WorkflowRunOut:
-    require(await resolve_actor(pool, caller), "consumer")
-    row = await store.run(pool, run_id)
+    """A run, if the caller may see it (CHY-92); otherwise as if it did not exist."""
+    reader = await resolve_actor(pool, caller)
+    require(reader, "consumer")
+    async with acting.acting_as(pool, reader.id) as conn:
+        row = await store.run(conn, run_id)
     if row is None:
         raise RunNotFound
     return _run_out(row)
@@ -758,13 +989,16 @@ async def run_nodes(pool, caller: Caller, run_id: UUID) -> RunNodesOut:
 
     The same role as reading the run itself: whoever may see its input may see
     what was made of it. Read this before deciding at a `human_review` gate —
-    the decision is about this output.
+    the decision is about this output. Visible to the same people as the run
+    itself (CHY-92): starter, members of the workflow's scope chain, admin.
     """
-    require(await resolve_actor(pool, caller), "consumer")
-    row = await store.run(pool, run_id)
-    if row is None:
-        raise RunNotFound
-    history = await store.execution_history(pool, run_id)
+    reader = await resolve_actor(pool, caller)
+    require(reader, "consumer")
+    async with acting.acting_as(pool, reader.id) as conn:
+        row = await store.run(conn, run_id)
+        if row is None:
+            raise RunNotFound
+        history = await store.execution_history(conn, run_id)
     return RunNodesOut(run_id=run_id, status=row["status"],
                        nodes=[_execution_out(r) for r in history])
 
@@ -776,6 +1010,94 @@ def _execution_out(row) -> NodeExecutionOut:
     return NodeExecutionOut(**d)
 
 
+async def resolve_run(pool, caller: Caller, run_id: UUID, body: RunResolveRequest, *,
+                      keys: mapping_cipher.KeyRing) -> RunResolvedOut:
+    """A run's input and its steps' outputs with the values put back (CHY-234).
+
+    For whoever started the run, and from `reviewer` up for whoever sees it
+    (CHY-92): at the gate one has to be able to check that the right person is
+    meant (E4, decided 06.11.2026). A run the caller does not see is not found,
+    as everywhere; one they see without the role is refused. Everyone else
+    reads placeholders.
+
+    Every resolution is audited in the same transaction as the reading -- who,
+    which run, which steps; never a value.
+    """
+    reader = await resolve_actor(pool, caller)
+    require(reader, "consumer")
+    async with acting.acting_as(pool, reader.id) as conn, conn.transaction():
+        row = await store.run(conn, run_id)
+        if row is None:
+            raise RunNotFound
+        if row["actor_id"] != reader.id:
+            require(reader, "reviewer")
+        if row["content_purged_at"] is not None:
+            raise RunContentPurged
+        # None for a run started before CHY-234: stored with its values, it is
+        # returned as it is.
+        mapping = _opened(await store.pii_mapping(conn, run_id), run_id, keys) or {}
+        nodes = [
+            out.model_copy(update={"output": resolved(out.output, mapping),
+                                   "error_message": resolved(out.error_message, mapping)})
+            for out in map(_execution_out, await store.execution_history(conn, run_id))
+            if body.nodes is None or out.node_ref in body.nodes
+        ]
+        await write_audit(
+            conn, action=ACTION_RUN_CONTENT_RESOLVED, actor_id=reader.id,
+            target=target_ref("workflow_run", run_id),
+            payload={"nodes": sorted({n.node_ref for n in nodes}),
+                     "started_by_reader": row["actor_id"] == reader.id},
+        )
+    run = _run_out(row)
+    return RunResolvedOut(run_id=run_id, status=run.status,
+                          input_data=resolved(run.input_data, mapping), nodes=nodes)
+
+
+async def cancel_run(pool, caller: Caller, run_id: UUID, body: RunCancelRequest, *,
+                     engine: Engine) -> WorkflowRunOut:
+    """Stop a run that has not finished (CHY-200, AI Act Art. 14(4)(e)).
+
+    Allowed for whoever started the run, and from `reviewer` up for whoever
+    sees it (CHY-92, decided 07.11.2026) — the same people who may have its
+    values put back. A run the caller does not see is not found.
+
+    **`cancelled` is neither a failure nor a rejection.** The run and every
+    node that had not finished — the gate it waits at, or the node in flight —
+    end as `cancelled`. Nothing is recorded as a decision at the gate: stopping
+    a run is not judging its output, and an Art. 14 record of a judgement
+    nobody made would be worse than none. A node still working when the stop
+    arrives finishes, and its result is dropped (`_record`).
+
+    **The reason is optional** and stored with the run's placeholders, like a
+    reason at the gate (E7); who stopped the run, and when, is audited either
+    way. The audit entry names the state and the stopped nodes, never the
+    reason: the log is kept for good, the run's content only for its period.
+
+    A run that is already over is refused rather than stopped a second time —
+    see RunAlreadyFinished.
+    """
+    canceller = await resolve_actor(pool, caller)
+    require(canceller, "consumer")
+    async with acting.acting_as(pool, canceller.id) as conn, conn.transaction():
+        run_row = await store.lock_run(conn, run_id)
+        if run_row is None:
+            raise RunNotFound
+        if run_row["actor_id"] != canceller.id:
+            require(canceller, "reviewer")
+        if run_row["status"] in _TERMINAL_RUN_STATES:
+            raise RunAlreadyFinished(run_row["status"])
+        reason = await _reason_with_placeholders(conn, run_row, body.reason, engine.placeholders)
+        stopped = await store.cancel_open_executions(conn, run_id, reason)
+        row = await store.set_run_status(conn, run_id, CANCELLED, error=reason)
+        await write_audit(
+            conn, action=ACTION_RUN_CANCELLED, actor_id=canceller.id,
+            target=target_ref("workflow_run", run_id),
+            payload={"from_status": run_row["status"], "nodes": stopped,
+                     "started_by_canceller": run_row["actor_id"] == canceller.id},
+        )
+    return _run_out(row)
+
+
 #: How many different people must approve before a gate completes, by
 #: `review_role` (CHY-176). A role not listed — `approver`, or none set — needs
 #: one. Written as data so the rule reads as a rule, not as a branch.
@@ -783,7 +1105,7 @@ APPROVALS_REQUIRED: dict[str | None, int] = {"four_eyes": 2}
 
 
 async def record_oversight(
-    pool, caller: Caller, run_id: UUID, body: OversightDecision, *, registry: ExecutorRegistry
+    pool, caller: Caller, run_id: UUID, body: OversightDecision, *, engine: Engine,
 ) -> Advance:
     """A human decides at the gate, and the run moves on — or stops for good.
 
@@ -807,11 +1129,19 @@ async def record_oversight(
     approved; the first approval is recorded and audited, and the run stays at
     the gate. Until 2026-09-30 the value was stored and never read, and the
     first approval closed every gate.
+
+    **Only someone who may see the run decides it (CHY-92).** The decision is
+    taken in the reviewer's own context, so a run outside their scopes is not
+    found — the role alone is not enough. The engine continues afterwards in
+    the system context.
+
+    **The reason is stored with placeholders** (CHY-234, E7), like everything
+    else the run keeps.
     """
     reviewer = await resolve_actor(pool, caller)
     require(reviewer, "reviewer")
 
-    async with pool.acquire() as conn, conn.transaction():
+    async with acting.acting_as(pool, reviewer.id) as conn, conn.transaction():
         run_row = await store.lock_run(conn, run_id)
         if run_row is None:
             raise RunNotFound
@@ -825,9 +1155,12 @@ async def record_oversight(
             # run continue from a position nobody recorded.
             raise OversightGateMissing(run_id)
 
+        # Before it is written anywhere: the vote, the gate and the run each
+        # keep it (CHY-234, E7).
+        reason = await _reason_with_placeholders(conn, run_row, body.reason, engine.placeholders)
         # The vote first: a second decision by the same person is refused by
         # the table before anything is audited (CHY-176).
-        await store.record_vote(conn, gate["id"], reviewer.id, body.decision, body.reason)
+        await store.record_vote(conn, gate["id"], reviewer.id, body.decision, reason)
         required = APPROVALS_REQUIRED.get(await store.review_role(conn, gate["node_id"]), 1)
         approved = (await store.approvals(conn, gate["id"])
                     if body.decision == "approved" else 0)
@@ -839,10 +1172,8 @@ async def record_oversight(
         )
 
         if body.decision == "rejected":
-            await store.fail_execution(conn, gate["id"], body.reason or "rejected")
-            row = await store.set_run_status(
-                conn, run_id, "rejected", error=body.reason
-            )
+            await store.fail_execution(conn, gate["id"], reason or "rejected")
+            row = await store.set_run_status(conn, run_id, "rejected", error=reason)
             return Advance(_run_out(row), 0)
 
         if approved < required:
@@ -862,4 +1193,37 @@ async def record_oversight(
         await store.record_traversals(conn, run_id, list(firing.taken))
         await store.set_run_status(conn, run_id, "running")
 
-    return await advance_run(pool, run_id, registry=registry)
+    return await advance_run(engine.pool, run_id, registry=engine.registry,
+                             keys=engine.placeholders.keys)
+
+
+# ── retention (CHY-17, ADR-046) ───────────────────────────────────────────────
+
+async def purge_runs(conn, periods: Periods) -> dict[str, int]:
+    """Apply the retention periods to finished workflow runs, in the caller's transaction.
+
+    Content first: clear what went in and came out of every run past its
+    `run_content` period, mark it, keep the row. Then the trace: delete every
+    run past its `run_trace` period, leaf first. The period of a run is the one
+    that applies in its workflow's scope (kernel.retention). Runs that are not
+    finished are never touched.
+    """
+    scope_ids, keep_days = periods.finite(RetentionClass.RUN_CONTENT)
+    cleared = await store.runs_past_period(conn, scope_ids, keep_days, only_uncleared=True)
+    if cleared:
+        await store.clear_run_content(conn, cleared)
+
+    scope_ids, keep_days = periods.finite(RetentionClass.RUN_TRACE)
+    expired = await store.runs_past_period(conn, scope_ids, keep_days, only_uncleared=False)
+    deleted, held = await store.delete_runs(conn, expired) if expired else (0, 0)
+    return {"workflow_runs_cleared": len(cleared), "workflow_runs_deleted": deleted,
+            "workflow_runs_held": held}
+
+
+async def workflow_scopes(conn) -> dict[UUID, UUID]:
+    """Each workflow's scope, for a context that keeps rows per workflow.
+
+    Published so that context does not join workflow_definitions itself — the
+    table is this context's (CHY-231).
+    """
+    return await store.workflow_scopes(conn)

@@ -62,9 +62,12 @@ class TestTheAllowList:
 
         `calibration_anchor` joined `routing_rule` with CHY-67 (ADR-043): it
         carries the answer a benchmark measures, and it had been composable
-        since the list existed.
+        since the list existed. `redaction_rule` (CHY-63) was born outside the
+        list: composed, it would hand the model the values it keeps from it.
         """
-        assert ALL_BLOCK_TYPES - COMPOSABLE_BLOCK_TYPES == {"routing_rule", "calibration_anchor"}
+        assert ALL_BLOCK_TYPES - COMPOSABLE_BLOCK_TYPES == {
+            "routing_rule", "calibration_anchor", "redaction_rule",
+        }
 
 
 class TestTheQuery:

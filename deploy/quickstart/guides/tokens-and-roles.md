@@ -22,8 +22,10 @@ same identity, two names are two people in the audit log.
 | `admin` | admin | read the whole audit log, anonymise people |
 
 Roles come from the token's `groups` claim (`chy-<role>s`) on every request, so a
-real provider grants them by group membership. Roles apply to the whole installation
-for now; memberships per scope are recorded but not enforced yet.
+real provider grants them by group membership. Roles apply to the whole installation.
+Membership of a scope decides which runs you see: your own, those of the scopes you
+belong to and the scopes below them, or all of them as `admin` (`GET /v1/me` shows
+yours; `POST /v1/scopes/{id}/members` adds someone).
 
 ## Surfaces
 
@@ -32,7 +34,7 @@ that reads the audit log cannot write blocks with its token, even if its user co
 
 | Surface | Client id | Paths |
 |---|---|---|
-| `author` | `cohereny.author.ci` | `/v1/scopes`, `/v1/blocks`, `/v1/workflows`, `/v1/pilots` |
+| `author` | `cohereny.author.ci` | `/v1/me`, `/v1/scopes`, `/v1/blocks`, `/v1/workflows`, `/v1/pilots` |
 | `serve` | `cohereny.serve.ci` | `/v1/compose`, `/v1/complete`, `/v1/route` |
 | `observe` | `cohereny.observe.ci` | `/v1/audit-log`, `/v1/benchmarks`, `/v1/questions` |
 | `admin` | `cohereny.admin.ci` | `/v1/admin/...` |

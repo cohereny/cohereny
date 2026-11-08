@@ -32,7 +32,7 @@ from uuid import uuid4
 
 import pytest
 
-from kernel.audit import ACTION_BLOCK_APPROVED, ACTION_BLOCK_SUBMITTED
+from kernel.audit import ACTION_BLOCK_APPROVED, ACTION_BLOCK_CREATED, ACTION_BLOCK_SUBMITTED
 from kernel.schema import ScopeNodeType
 from kernel.scopes import REVIEW_MODES, ReviewMode, review_mode
 from tests.conftest import DEFAULT_ACTOR_ID, actor_row, client_for, make_pool, make_redis
@@ -145,8 +145,9 @@ class TestCreate:
         with client_for(pool) as client:
             client.post("/v1/blocks", json=_CREATE)
 
-        (submitted, s_payload), (approved, a_payload) = _audit(pool)
-        assert (submitted, approved) == (ACTION_BLOCK_SUBMITTED, ACTION_BLOCK_APPROVED)
+        (created, _), (submitted, s_payload), (approved, a_payload) = _audit(pool)
+        assert (created, submitted, approved) == (
+            ACTION_BLOCK_CREATED, ACTION_BLOCK_SUBMITTED, ACTION_BLOCK_APPROVED)
         assert s_payload["mode"] == a_payload["mode"] == "direct"
         # The writer approves their own block — recorded as such, visibly.
         assert a_payload["approved_by"] == a_payload["author_id"] == str(DEFAULT_ACTOR_ID)
@@ -154,7 +155,8 @@ class TestCreate:
 
     @pytest.mark.parametrize("node_type", ["org", "team", "workspace"])
     def test_in_a_strict_scope_it_stays_a_draft(self, node_type):
-        """Acceptance criterion 2: a draft, and nothing written besides it."""
+        """Acceptance criterion 2: a draft, and nothing written besides it —
+        except the record of who wrote it (CHY-171)."""
         pool = _pool(node_type, [_row("draft")])
         with client_for(pool) as client:
             response = client.post("/v1/blocks", json=_CREATE)
@@ -162,7 +164,7 @@ class TestCreate:
         assert response.status_code == 201
         assert response.json()["status"] == "draft"
         assert _status_changes(pool) == []
-        assert _audit(pool) == []
+        assert [action for action, _ in _audit(pool)] == [ACTION_BLOCK_CREATED]
 
     def test_a_direct_create_invalidates_the_composed_cache(self):
         """It changes what the scope composes; a draft does not."""

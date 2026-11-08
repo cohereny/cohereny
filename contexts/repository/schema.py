@@ -18,6 +18,8 @@ Block types and their meaning:
   example_io          → few-shot examples (input → expected output)
   calibration_anchor  → a benchmark test case; never composed (ADR-043)
   routing_rule        → which model handles a task; never composed (ADR-037)
+  redaction_rule      → what is replaced before a model sees it; never composed
+                        (ADR-018, CHY-63)
 
 Versioning: each block has a block_id (logical id) and a version number. An
 update writes a new row with an incremented version; exactly one row per line
@@ -44,6 +46,9 @@ BlockType = Literal[
     "calibration_anchor",
     # Not prompt material. See COMPOSABLE_BLOCK_TYPES below (CHY-87, ADR-037).
     "routing_rule",
+    # Not prompt material either (CHY-63): composed into a prompt, it would hand
+    # the model the values it exists to keep away from it.
+    "redaction_rule",
 ]
 
 #: The types that may be concatenated into a prompt.

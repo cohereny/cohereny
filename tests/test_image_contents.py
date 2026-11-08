@@ -109,3 +109,36 @@ def test_a_plain_build_is_the_production_image():
     last = DOCKERFILE.read_text(encoding="utf-8").rsplit("\nFROM app\n", 1)[1]
     assert not re.search(r"^(COPY|RUN|ADD)\b", last, re.M), "the final stage adds something"
     assert ("app", "quickstart") in stages
+
+
+# ── No credentials in the image (CHY-85) ───────────────────────────────────────
+#
+# Until 06.11.2026 the deploy copied .env.<stage> into pilots/banking/ before
+# building, and `COPY pilots/banking/` put it into every API image — the
+# superuser's password for the database sat in the one container role separation
+# exists to keep it out of. Two locks: the deploy no longer copies, and
+# .dockerignore keeps environment files out of the build context altogether.
+
+def _ignored_patterns() -> list[str]:
+    lines = (REPO / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    return [ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")]
+
+
+def test_environment_files_never_reach_the_build_context():
+    patterns = _ignored_patterns()
+    assert "**/.env" in patterns
+    assert "**/.env.*" in patterns
+
+
+def test_the_example_files_still_do():
+    """Counter-probe: the exclusion is narrow — an example holds no secret, and
+    an ignore file that excluded everything would pass the test above too."""
+    assert "!**/.env.example" in _ignored_patterns()
+
+
+def test_no_deploy_step_copies_an_environment_file_into_the_source_tree():
+    ci = (REPO / ".gitlab-ci.yml").read_text(encoding="utf-8")
+    assert not re.search(r"\bcp\s+\.env\S*\s+\S*pilots/", ci), (
+        "a deploy step copies an .env file into pilots/ — it would be built into "
+        "the image along with the credentials it holds"
+    )

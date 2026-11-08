@@ -30,14 +30,16 @@ from fastapi import APIRouter, Depends, Query, Response, status
 
 from api.deps import CurrentUser, require_auth
 from api.v1._responses import (
+    BLOCK_APPROVE,
     BLOCK_CREATE,
     BLOCK_READ,
     BLOCK_TRANSITION,
     BLOCK_WRITE,
     PROMOTE_CONFLICT,
+    SELF_APPROVAL_HEADER,
     UNPROCESSABLE,
 )
-from api.v1._activation import check_before_activation
+from api.v1._activation import HOOKS
 from contexts.repository import service
 from contexts.repository.schema import (
     BlockCreate,
@@ -113,15 +115,21 @@ async def withdraw_block(
     )
 
 
-# 422 besides the transition errors: a routing rule that could never be used
-# is refused at approval, the approver's to fix (CHY-166).
-@router.post(
-    "/{block_id}/approve", response_model=BlockOut,
-    responses={**BLOCK_TRANSITION, **UNPROCESSABLE},
+#: What a self-approval tells the client (ADR-045). ASCII, because headers are.
+SELF_APPROVAL_NOTICE = (
+    "self-approved data-flow block: no second person checked whether data may "
+    "leave this installation (single operator, see SECURITY.md)"
 )
+
+
+# 422 besides the transition errors: a routing rule that could never be used
+# is refused at approval, the approver's to fix (CHY-166). 403 also when four
+# eyes refuses (CHY-163).
+@router.post("/{block_id}/approve", response_model=BlockOut, responses=BLOCK_APPROVE)
 async def approve_block(
     block_id: UUID,
     body: BlockTransition,
+    response: Response,
     actor: CurrentUser = Depends(require_auth),
     pool: asyncpg.Pool = Depends(get_pool),
     redis: aioredis.Redis = Depends(get_redis),
@@ -132,11 +140,17 @@ async def approve_block(
     candidate must be allowed to see the data the scope holds. The check runs
     inside the transition, on the locked row — not before it, where it would
     cost a second read and judge a row that might not be the one approved.
+
+    A block that decides where data may go needs a second person (ADR-045). A
+    single operator may approve their own, and the response says so in the
+    `Cohereny-Notice` header.
     """
-    return await service.transition(
-        pool, redis, actor, block_id, "approve", expected_version=body.version,
-        before_activation=check_before_activation,
+    approval = await service.approve(
+        pool, redis, actor, block_id, expected_version=body.version, hooks=HOOKS,
     )
+    if approval.four_eyes is service.Verdict.SELF_APPROVED:
+        response.headers[SELF_APPROVAL_HEADER] = SELF_APPROVAL_NOTICE
+    return approval.block
 
 
 @router.post(
@@ -209,9 +223,13 @@ async def create_block(
     pool: asyncpg.Pool = Depends(get_pool),
     redis: aioredis.Redis = Depends(get_redis),
 ) -> BlockOut:
-    """Create a block — a draft in a strict scope, active in a direct one (ADR-042)."""
+    """Create a block — a draft in a strict scope, active in a direct one (ADR-042).
+
+    A block that decides where data may go waits for a second person even in a
+    direct scope: it comes back `pending_review` (ADR-045).
+    """
     return await service.create_block(
-        pool, redis, actor, body, before_activation=check_before_activation,
+        pool, redis, actor, body, hooks=HOOKS,
     )
 
 
@@ -238,10 +256,12 @@ async def patch_block(
 ) -> BlockOut:
     """Edit a block. 200 if the draft was changed, 201 if a version was published.
 
-    In a direct scope the result is active at once, either way (ADR-042).
+    In a direct scope the result is active at once, either way (ADR-042) —
+    except a block that decides where data may go, which waits for a second
+    person (ADR-045).
     """
     block, superseded = await service.patch_block(
-        pool, redis, actor, block_id, body, before_activation=check_before_activation,
+        pool, redis, actor, block_id, body, hooks=HOOKS,
     )
     if superseded:
         response.status_code = status.HTTP_201_CREATED

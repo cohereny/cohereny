@@ -37,6 +37,7 @@ from uuid import uuid4
 from api.v1 import workflows as transport
 from contexts.orchestration import service
 from contexts.orchestration.execution import ExecutorRegistry, NodeContext, NodeResult
+from core.completion import CompletionResult
 from tests.test_workflow_advance import (
     FakeDb,
     _NullPool,
@@ -76,6 +77,11 @@ def _repository(blocks: list[dict]):
             # below would otherwise hand every block back as a rule — a double
             # that is right about composition and wrong about routing (CHY-145).
             return [b for b in blocks if b["block_type"] == "routing_rule"]
+        if "block_type = 'redaction_rule'" in sql:
+            # The scope's redaction rules (CHY-63), the same way: by their own
+            # query, so the real reading runs and finds none unless a test
+            # puts one in `blocks`.
+            return [b for b in blocks if b["block_type"] == "redaction_rule"]
         if "context_blocks" in sql:
             # The type filter is applied here because it is applied in the
             # query (ADR-037). A double that returned every row regardless
@@ -100,6 +106,16 @@ def _routing_rule(task_type: str, candidates: list[str], max_tokens: int = 256) 
         "created_at": _NOW, "governance_key": None, "privacy_impact": None,
         "locked": False,
         "metadata": {"task_type": task_type, "candidates": candidates, "max_tokens": max_tokens},
+    }
+
+
+def _redaction_rule(metadata: dict) -> dict:
+    """An approved redaction rule in the scope (CHY-63), shaped like its row."""
+    return {
+        "block_id": uuid4(), "version": 1, "block_type": "redaction_rule",
+        "content": "so entschieden", "scope_id": _SCOPE, "tags": [],
+        "created_at": _NOW, "governance_key": None, "privacy_impact": None,
+        "locked": False, "metadata": metadata,
     }
 
 
@@ -282,17 +298,21 @@ async def _drive_routed(monkeypatch, blocks: list[dict], *, answers=None):
     # than in the return value, so the tests that do not look at it keep their
     # four-tuple.
     db.max_tokens_seen = []
+    db.requests_seen = []
 
     async def fake_fallback(request, candidates, **_kw):
         chains.append(tuple(candidates))
         db.max_tokens_seen.append(request.max_tokens)
+        db.requests_seen.append(request)
         answered = answers or candidates[0]
         attempts = [
             SimpleNamespace(model=m, outcome="refused", detail="429 quota")
             for m in candidates[: candidates.index(answered)]
         ] + [SimpleNamespace(model=answered, outcome="answered", detail="")]
-        return SimpleNamespace(content="…", model_used=answered,
-                               trace_id="t", attempts=tuple(attempts))
+        # The real result type, not a namespace: a field added to it later
+        # (CHY-63 added two) reaches this fake without editing it.
+        return CompletionResult(content="…", model_used=answered,
+                                trace_id="t", attempts=tuple(attempts))
 
     async def fake_audit(_pool, **kw):
         audits.append(kw)
@@ -333,6 +353,22 @@ class TestTheModelIsRouted:
         ])
         assert chains, "no model was called"
         assert db.max_tokens_seen == [64]
+
+    async def test_the_scopes_redaction_rules_reach_the_model_call(self, monkeypatch):
+        """CHY-63 part 2, through the real reading: a rule block in the scope
+        reaches the request a run's model call is built from, and a redaction
+        rule is never composed into the prompt."""
+        db, _, chains, _ = await _drive_routed(monkeypatch, [
+            _block("Du bist ein Kreditanalyst."),
+            _routing_rule("summarize", ["gemma4-e4b"]),
+            _redaction_rule({"category": "STAFF", "texts": ["Dr. Schmidt"]}),
+            _redaction_rule({"category": "CASE_NUMBER", "pattern": r"\b\d+ C \d+/\d{2}\b"}),
+        ])
+        assert chains, "no model was called"
+        request = db.requests_seen[0]
+        assert request.identifiers_to_redact == {"STAFF": ("Dr. Schmidt",)}
+        assert request.redaction_rules[-1].category == "CASE_NUMBER"
+        assert "so entschieden" not in request.prompt  # no rule block is composed
 
     async def test_without_a_rule_the_run_fails_and_names_the_task_type(
         self, monkeypatch

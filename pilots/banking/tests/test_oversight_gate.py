@@ -12,6 +12,7 @@ import threading
 import pytest
 
 from banking.nodes import (
+    CANCELLED_AT_GATE,
     OVERSIGHT_TIMEOUT_SECONDS,
     OversightGateError,
     WorkflowCancelledError,
@@ -146,6 +147,22 @@ class TestDecisions:
         with pytest.raises(WorkflowCancelledError) as exc:
             node_human_oversight({"risk_level": "ROT", "ratios": {}, "anomalies": []})
         assert exc.value.oversight_outcome == "rejected"
+
+    def test_cancelled_passes_through(self):
+        set_oversight_gate(*_decided_gate("cancelled"))
+        assert wait_for_oversight_decision() == "cancelled"
+
+    def test_a_run_cancelled_at_the_gate_ends_without_an_oversight_outcome(self):
+        """CHY-153: the cancel path released the gate with "rejected", and the
+        run was booked as an Art. 14 rejection. Without an outcome the executor
+        ends it the way it ends every cancelled run — and its message must not
+        contain the phrase the executor still reads as a rejection."""
+        set_oversight_gate(*_decided_gate("cancelled"))
+        with pytest.raises(WorkflowCancelledError) as exc:
+            node_human_oversight({"risk_level": "ROT", "ratios": {}, "anomalies": []})
+        assert exc.value.oversight_outcome is None
+        assert str(exc.value) == CANCELLED_AT_GATE
+        assert "rejected by human oversight" not in str(exc.value).lower()
 
     @pytest.mark.parametrize("garbage", [None, "", "yes", "APPROVED", "maybe", 1, True])
     def test_unusable_value_raises_instead_of_approving(self, garbage):

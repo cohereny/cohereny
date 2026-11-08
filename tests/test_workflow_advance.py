@@ -27,6 +27,7 @@ test answers neither well.
 """
 from __future__ import annotations
 
+import typing
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from datetime import UTC, datetime
@@ -36,13 +37,17 @@ import pytest
 
 from contexts.orchestration import runner, service
 from contexts.orchestration.errors import (
+    NodeExecutionFailed,
     NodeTypeNotExecutable,
     OversightGateMissing,
     ReviewerAlreadyDecided,
+    RunAlreadyFinished,
     RunNotAwaitingOversight,
 )
 from contexts.orchestration.execution import ExecutorRegistry, NodeContext, NodeResult
-from contexts.orchestration.schema import OversightDecision
+from contexts.orchestration.schema import OversightDecision, RunCancelRequest, RunStatus
+from kernel import mapping_cipher
+from kernel.redaction import RedactionPolicy
 from tests.conftest import stub_user
 
 
@@ -62,6 +67,9 @@ class FakeDb:
     #: The workflow's scope. On the definition, not on the run — which is why
     #: `_claim` has to read the definition to fill `NodeContext.scope_id`.
     scope_id: UUID = field(default_factory=uuid4)
+    #: Sealed mappings per run, as `pii_mappings` (036, CHY-234). A run with
+    #: no entry is one started before CHY-234: it advances without keys.
+    mappings: dict[UUID, dict] = field(default_factory=dict)
 
     def install(self, monkeypatch) -> None:
         """Replace the store module's functions, keeping their signatures."""
@@ -103,6 +111,15 @@ class FakeDb:
             for row in self.executions:
                 if row["id"] == execution_id:
                     row.update(status="failed", error_message=error)
+
+        async def cancel_open_executions(_conn, run_id, reason):
+            stopped = []
+            for row in self.executions:
+                if row["run_id"] == run_id and row["status"] in ("pending", "running"):
+                    row.update(status="cancelled", error_message=reason)
+                    stopped.append(next(n["node_ref"] for n in self.nodes
+                                        if n["id"] == row["node_id"]))
+            return sorted(stopped)
 
         async def record_traversals(_conn, run_id, edge_ids):
             for edge_id in edge_ids:
@@ -162,6 +179,12 @@ class FakeDb:
             return sum(1 for v in self.votes
                        if v["execution_id"] == execution_id and v["decision"] == "approved")
 
+        async def pii_mapping(_conn, run_id):
+            return self.mappings.get(run_id)
+
+        async def write_pii_mapping(_conn, run_id, *, key_id, nonce, ciphertext):
+            self.mappings[run_id] = {"key_id": key_id, "nonce": nonce, "ciphertext": ciphertext}
+
         for name, fn in (
             ("review_role", review_role), ("record_vote", record_vote),
             ("approvals", approvals),
@@ -169,9 +192,14 @@ class FakeDb:
             ("executions", executions), ("traversals", traversal_rows),
             ("start_execution", start_execution),
             ("complete_execution", complete_execution), ("fail_execution", fail_execution),
+            ("cancel_open_executions", cancel_open_executions),
             ("record_traversals", record_traversals), ("set_run_status", set_run_status),
             ("node_details", node_details), ("predecessor_outputs", predecessor_outputs),
             ("workflow", workflow),
+            # No SQL, so no lock to take: a lock is shown against PostgreSQL
+            # (tests/integration/test_run_placeholders_db.py).
+            ("pii_mapping", pii_mapping), ("lock_pii_mapping", pii_mapping),
+            ("insert_pii_mapping", write_pii_mapping), ("update_pii_mapping", write_pii_mapping),
         ):
             monkeypatch.setattr(service.store, name, fn)
 
@@ -183,6 +211,9 @@ class _NullTx:
 
 class _NullConn:
     def transaction(self): return _NullTx()
+
+    # kernel.acting sets and clears the acting person on the connection (CHY-92).
+    async def execute(self, *a): return None
 
 
 class _NullPool:
@@ -257,6 +288,19 @@ async def _ok(ctx: NodeContext) -> NodeResult:
 
 def _registry() -> ExecutorRegistry:
     return ExecutorRegistry({"tool_call": _ok, "context_compose": _ok, "llm_call": _ok})
+
+
+#: The keys a test run's mapping is sealed with (CHY-234).
+KEYS = mapping_cipher.keyring_from(mapping_cipher.generate_key("test"))
+
+
+async def _shipped_rules_only(_scope_id):
+    return RedactionPolicy()
+
+
+def _engine(registry: ExecutorRegistry | None = None) -> service.Engine:
+    return service.Engine(registry or _registry(), _NullPool(),
+                          service.Placeholders(policy_for=_shipped_rules_only, keys=KEYS))
 
 
 # ── advancing ─────────────────────────────────────────────────────────────────
@@ -595,7 +639,7 @@ class TestOversight:
         db, run_id, _ = await _at_the_gate(monkeypatch)
         result = await service.record_oversight(
             _NullPool(), _caller(), run_id,
-            OversightDecision(decision="approved"), registry=_registry(),
+            OversightDecision(decision="approved"), engine=_engine(),
         )
         assert result.run.status == "complete"
         assert result.executed == ("after",)
@@ -610,7 +654,7 @@ class TestOversight:
         result = await service.record_oversight(
             _NullPool(), _caller(), run_id,
             OversightDecision(decision="rejected", reason="numbers look wrong"),
-            registry=_registry(),
+            engine=_engine(),
         )
         assert result.run.status == "rejected"
         assert db.runs[run_id]["error_message"] == "numbers look wrong"
@@ -624,7 +668,7 @@ class TestOversight:
         with pytest.raises(RunNotAwaitingOversight):
             await service.record_oversight(
                 _NullPool(), _caller(), run_id,
-                OversightDecision(decision="approved"), registry=_registry(),
+                OversightDecision(decision="approved"), engine=_engine(),
             )
 
     async def test_a_waiting_run_with_no_claimed_node_is_refused(self, monkeypatch):
@@ -640,8 +684,93 @@ class TestOversight:
         with pytest.raises(OversightGateMissing):
             await service.record_oversight(
                 _NullPool(), _caller(), run_id,
-                OversightDecision(decision="approved"), registry=_registry(),
+                OversightDecision(decision="approved"), engine=_engine(),
             )
+
+
+class TestCancel:
+    """A person stops a run (CHY-200, AI Act Art. 14(4)(e)).
+
+    The two tests in the middle are the ones the store cannot show: a node that
+    is still working when the stop arrives. Its result must not move the run
+    on, and its failure must not turn the stop into an incident. Without the
+    check in `_record` and `_record_failure` the first ends with the execution
+    `complete`, the second with the run `failed`.
+    """
+
+    async def test_at_the_gate_run_and_gate_end_cancelled_and_nobody_decided(self, monkeypatch):
+        db, run_id, gate = await _at_the_gate(monkeypatch)
+        out = await service.cancel_run(_NullPool(), _caller(), run_id,
+                                       RunCancelRequest(reason="wrong file"), engine=_engine())
+        assert out.status == "cancelled"
+        assert db.runs[run_id]["error_message"] == "wrong file"
+        claimed = next(e for e in db.executions if e["node_id"] == gate["id"])
+        assert claimed["status"] == "cancelled"
+        assert db.votes == [], "stopping is not a decision at the gate"
+
+    @staticmethod
+    def _stopping_executor(db: FakeDb, run_id: UUID, *, then_fail: bool):
+        """A node during which a person stops the run, as cancel_run leaves it."""
+        async def work(ctx: NodeContext) -> NodeResult:
+            db.runs[run_id]["status"] = "cancelled"
+            for row in db.executions:
+                if row["run_id"] == run_id and row["status"] == "running":
+                    row["status"] = "cancelled"
+            if then_fail:
+                raise NodeExecutionFailed(ctx.node_ref, "model refused")
+            return NodeResult(output={"late": True})
+        return work
+
+    async def test_a_result_that_arrives_after_the_stop_is_dropped(self, monkeypatch):
+        a, b = _node("a"), _node("b")
+        db = FakeDb(nodes=[a, b], connections=[_conn_row(a, b)])
+        db.install(monkeypatch)
+        run_id = _run(db)
+        registry = ExecutorRegistry({"tool_call": self._stopping_executor(db, run_id,
+                                                                          then_fail=False)})
+
+        result = await service.advance_run(_NullPool(), run_id, registry=registry)
+
+        assert result.run.status == "cancelled"
+        assert result.executed == ("a",), "b never starts"
+        assert [(e["status"], e["output_data"]) for e in db.executions] == [("cancelled", None)]
+
+    async def test_a_failure_after_the_stop_does_not_turn_it_into_one(self, monkeypatch):
+        a = _node("a")
+        db = FakeDb(nodes=[a])
+        db.install(monkeypatch)
+        run_id = _run(db)
+        registry = ExecutorRegistry({"tool_call": self._stopping_executor(db, run_id,
+                                                                          then_fail=True)})
+
+        result = await service.advance_run(_NullPool(), run_id, registry=registry)
+
+        assert result.run.status == "cancelled"
+        assert db.runs[run_id]["error_message"] is None
+        assert db.executions[0]["status"] == "cancelled"
+
+    async def test_a_run_that_is_over_is_not_stopped_again(self, monkeypatch):
+        db, run_id, _ = await _at_the_gate(monkeypatch)
+        db.runs[run_id]["status"] = "complete"
+        with pytest.raises(RunAlreadyFinished):
+            await service.cancel_run(_NullPool(), _caller(), run_id, RunCancelRequest(),
+                                     engine=_engine())
+        assert db.runs[run_id]["status"] == "complete"
+
+
+def test_every_end_is_an_end_everywhere():
+    """Three places decide that a run is over, and they must agree (CHY-200).
+
+    The runner stops advancing it, the purge clears it at the end of its period
+    (`store._FINISHED_RUN_STATES`), and every state is either one of those ends
+    or one of the three a run passes through. `cancelled` missing from the
+    purge list would keep a stopped run's content for good — no error, no
+    warning, just a run that never expires.
+    """
+    passing_through = {"pending", "running", "awaiting_oversight"}
+    assert set(service.store._FINISHED_RUN_STATES) == service._TERMINAL_RUN_STATES
+    assert service._TERMINAL_RUN_STATES | passing_through == set(typing.get_args(RunStatus))
+    assert not service._TERMINAL_RUN_STATES & passing_through
 
 
 class TestFourEyes:
@@ -666,7 +795,7 @@ class TestFourEyes:
     async def _decide(self, run_id, decision="approved"):
         return await service.record_oversight(
             _NullPool(), _caller(), run_id,
-            OversightDecision(decision=decision), registry=_registry(),
+            OversightDecision(decision=decision), engine=_engine(),
         )
 
     async def test_the_first_approval_leaves_the_run_at_the_gate(self, monkeypatch):

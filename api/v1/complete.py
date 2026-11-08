@@ -8,8 +8,10 @@ Flow:
   2. Compose the context for the scope (contexts.repository.compose), or load an explicit
      selection of blocks — from the same scope's chain only (CHY-196)
   3. Build messages: system (the composed context) + user (prompt)
-  4. POST to LiteLLM /chat/completions
-  5. Return content + model_used + token counts + latency + blocks_used
+  4. POST to LiteLLM /chat/completions -- identifiers replaced on the way out
+     and put back on the way in, by core.completion (CHY-63)
+  5. Return content + model_used + token counts + latency + blocks_used +
+     how many identifiers were replaced
 
 Why this calls contexts.repository.compose instead of querying blocks itself (CHY-24):
   It used to run its own SELECT, and that SELECT had drifted into something
@@ -41,19 +43,21 @@ from uuid import UUID
 import asyncpg
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from api.config import settings
 from api.deps import CurrentUser, require_auth
 from api.v1._responses import FORBIDDEN, GATEWAY, NOT_FOUND, ROUTING_CONFLICT, UNPROCESSABLE
 from kernel.audit import ACTION_ROUTING_FELL_BACK, target_ref, write_audit
 from kernel.identity import resolve_actor
+from kernel.redaction import identifiers_from, merged
 from contexts.repository import service as repository
 from kernel.errors import ScopeNotFound
 from core.db import get_pool
 from core.redis import get_redis
 from core import completion as core_completion
 from contexts.repository.schema import ComposeRequest
+from api.v1._redaction import redaction_policy_for
 from api.v1._routing import route_for, router_config
 from router import rules as routing_rules
 
@@ -75,6 +79,25 @@ class CompleteRequest(BaseModel):
     # No `le` here: the rule is the upper bound, and the value never reaches a
     # database column that could overflow.
     max_tokens: int | None = Field(default=None, ge=1)
+    # Replaced before the model sees the prompt, put back in the answer
+    # (CHY-63). Patterns such as e-mail addresses are found without this; a
+    # name is found only if it is named here.
+    identifiers_to_redact: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Values that identify someone, by category, e.g. "
+            '{"PERSON": ["Erika Mustermann"]}. Replaced with placeholders '
+            "before the model sees prompt or context and put back in the "
+            "answer. E-mail addresses, phone numbers, IBANs, German tax ids, "
+            "health insurance numbers and labelled dates of birth are found "
+            "without being named; names are not."
+        ),
+    )
+
+    @field_validator("identifiers_to_redact")
+    @classmethod
+    def _identifiers_are_usable(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        return {k: list(v) for k, v in identifiers_from(value).items()}
 
 
 class CompleteResponse(BaseModel):
@@ -85,6 +108,16 @@ class CompleteResponse(BaseModel):
     latency_ms: float
     blocks_used: int = 0
     trace_id: str | None = None
+    redactions: dict[str, int] = Field(
+        default_factory=dict,
+        description="Identifiers replaced before the model call, per category. "
+                    "Counts, never values.",
+    )
+    unresolved_placeholders: int = Field(
+        default=0,
+        description="Placeholders in the answer that could not be put back "
+                    "because the model changed them. They are left as written.",
+    )
 
 
 async def _load_explicit_blocks(
@@ -145,6 +178,10 @@ async def complete(
         )
     rule = await route_for(pool, router_config, body.scope_id, body.task_type)
     candidates = rule.candidates
+    # The scope's own rules on top of the shipped ones and the caller's list
+    # (CHY-63). Read before composing, like the routing rule: a scope whose
+    # rules cannot be read should not cost a composition first.
+    policy = await redaction_policy_for(pool, body.scope_id)
     # Before composing: a request the rule refuses should not cost a
     # composition first.
     max_tokens = routing_rules.token_limit(rule, body.max_tokens)
@@ -194,6 +231,8 @@ async def complete(
             scope_id=body.scope_id,
             block_versions=block_versions,
             max_tokens=max_tokens,
+            identifiers_to_redact=merged(policy.identifiers, body.identifiers_to_redact),
+            redaction_rules=policy.rules,
         ),
         candidates,
         base_url=settings.litellm_base_url,
@@ -228,4 +267,6 @@ async def complete(
         latency_ms=result.latency_ms,
         blocks_used=len(block_versions),
         trace_id=result.trace_id,
+        redactions=dict(result.redactions),
+        unresolved_placeholders=result.unresolved_placeholders,
     )

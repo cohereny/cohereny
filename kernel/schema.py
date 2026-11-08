@@ -295,11 +295,117 @@ class ScopeMemberCreate(BaseModel):
     """Grant an actor a role inside one scope.
 
     The role vocabulary is the one from domain/roles.py, and the CHECK on
-    scope_memberships.role lists the same five values (INFRA-92). Whether a
-    membership *grants* anything is a separate and still open question —
-    CHY-92. Today it records an intent; it does not yet widen or narrow what
-    anyone may read.
+    scope_memberships.role lists the same five values (INFRA-92). Since CHY-92 a
+    membership grants something: the runs of the scope's workflows and of every
+    scope below it become visible to the member (migration 035). The role
+    inside the scope is recorded; what a person may *do* still follows their
+    global role.
     """
 
     actor_id: UUID
     role: ActorRole
+
+
+class MembershipOut(BaseModel):
+    """One scope the caller belongs to, and the role recorded there."""
+
+    scope_id: UUID
+    role: ActorRole
+
+
+class MeOut(BaseModel):
+    """Who the caller is to Cohereny (CHY-92).
+
+    `actor_id` is what an admin needs to add someone to a scope, and the API
+    named it nowhere before: the identity provider knows a person by their
+    subject, Cohereny by this id.
+    """
+
+    actor_id: UUID
+    role: ActorRole
+    is_service_account: bool
+    memberships: list[MembershipOut]
+
+
+# ── retention (CHY-17, ADR-046) ───────────────────────────────────────────────
+
+#: The retention classes that take a period today. The CHECK on
+#: retention_policies.retention_class lists the same two values;
+#: tests/test_retention.py holds the two together.
+ConfigurableRetentionClass = Literal["run_content", "run_trace"]
+
+#: The longest finite period: a hundred years. Not PG_INT_MAX — a value that
+#: fits the column still breaks the purge, whose `now() - make_interval(days =>
+#: keep_days)` leaves the timestamp range long before int32 ends. Schemathesis
+#: found the unbounded field on 05.11.2026 (1,204,274,781,580 days → 500). Longer
+#: than a century is what `null` is for.
+MAX_KEEP_DAYS = 36_500
+
+
+class RetentionPolicySet(BaseModel):
+    """Set how long a retention class is kept — installation-wide or for one scope.
+
+    `keep_days` is required and may be null: null keeps without limit, which a
+    credit file can need. Leaving it out is a malformed request, not a way to
+    say "unlimited" by accident.
+    """
+
+    scope_id: UUID | None = None
+    keep_days: int | None = Field(..., ge=1, le=MAX_KEEP_DAYS)
+
+
+class RetentionPolicy(BaseModel):
+    """One stored period. `scope_id` null is the installation-wide one."""
+
+    retention_class: ConfigurableRetentionClass
+    scope_id: UUID | None
+    keep_days: int | None
+    set_by: UUID | None
+    set_at: datetime
+
+
+class RetentionTable(BaseModel):
+    """A table of a retention class, and the columns that are its content."""
+
+    table: str
+    owner: str
+    content_columns: list[str]
+
+
+class RetentionClassOut(BaseModel):
+    """One retention class as an operator or a supervisor reads it."""
+
+    retention_class: str
+    description: str
+    #: What a purge does to it: clear the content columns, delete the rows, or
+    #: nothing — with `reason` saying why nothing.
+    action: Literal["clear", "delete", "none"]
+    configurable: bool
+    reason: str | None
+    tables: list[RetentionTable]
+    #: Stored periods: the installation-wide one first, then scope overrides.
+    policies: list[RetentionPolicy]
+    #: For the scope asked about: the period that applies there, and where it
+    #: was declared (null: installation-wide). Absent without a scope.
+    effective_keep_days: int | None = None
+    effective_from_scope: UUID | None = None
+
+
+class ExternalStoreOut(BaseModel):
+    """Data Cohereny writes outside its own tables, and who keeps it how long."""
+
+    name: str
+    retention_class: str
+    handled_by: str
+
+
+class RetentionOverview(BaseModel):
+    """Every retention class, every table in it, every period that is set."""
+
+    scope_id: UUID | None
+    classes: list[RetentionClassOut]
+    external_stores: list[ExternalStoreOut]
+    #: The newest `retention.purged` entry: when the purge last ran and what it
+    #: removed. Null until it ran once — the periods are then set, not applied.
+    last_purge_at: datetime | None = None
+    last_purge_counts: dict[str, int] | None = None

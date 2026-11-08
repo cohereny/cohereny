@@ -12,6 +12,11 @@ What a pool double cannot show:
     must exist, one measurement per pair and run, evidence is not edited
   - calibration_anchor is no longer accepted where a node asks for context
   - the new UNIQUE (block_id, version) on context_blocks
+
+Runs and measurements are written here as the migration role (`owner_pool`):
+the application only reads them until CHY-68 writes them, and the constraints
+are the schema's, not the application's. The trigger is shown to refuse even the
+owner; that the application may not even try is tests/integration/test_app_role_db.py.
 """
 from __future__ import annotations
 
@@ -26,6 +31,9 @@ from contexts.learning.errors import AnchorNotApprovable
 from contexts.repository import service as repository
 from contexts.repository.schema import BlockCreate
 from tests.integration._callers import caller
+
+_ANCHOR_CHECK = repository.ActivationHooks(
+    before_activation=learning.check_anchor_before_approval)
 
 pytestmark = pytest.mark.integration
 
@@ -50,7 +58,7 @@ class TestTheStrictApproval:
         block = await _anchor(pool, redis, scope)
         approved = await repository.transition(
             pool, redis, caller("reviewer"), block.block_id, "approve", expected_version=1,
-            before_activation=learning.check_anchor_before_approval)
+            hooks=_ANCHOR_CHECK)
         assert approved.status == "active"
 
     async def test_an_incomplete_anchor_is_refused_and_stays_in_review(self, pool, redis, scope):
@@ -59,7 +67,7 @@ class TestTheStrictApproval:
         with pytest.raises(AnchorNotApprovable, match="raw_prompt"):
             await repository.transition(
                 pool, redis, caller("reviewer"), block.block_id, "approve", expected_version=1,
-                before_activation=learning.check_anchor_before_approval)
+                hooks=_ANCHOR_CHECK)
         assert await pool.fetchval(
             "SELECT status FROM context_blocks WHERE block_id = $1", block.block_id,
         ) == "pending_review"
@@ -86,67 +94,67 @@ async def _measure(pool, run_id, block, **kw):
 
 
 class TestMeasurements:
-    async def test_an_outage_carries_no_score(self, pool, redis, scope):
-        block, run_id = await _anchor(pool, redis, scope), await _run(pool)
-        await _measure(pool, run_id, block, model="gemma4-e4b", outcome="unreachable",
+    async def test_an_outage_carries_no_score(self, owner_pool, pool, redis, scope):
+        block, run_id = await _anchor(pool, redis, scope), await _run(owner_pool)
+        await _measure(owner_pool, run_id, block, model="gemma4-e4b", outcome="unreachable",
                        score=None, scores="{}", detail="connection refused")
         with pytest.raises(asyncpg.exceptions.CheckViolationError,
                            match="score_iff_measured"):
-            await _measure(pool, run_id, block, model="gemma3-4b", outcome="unreachable",
+            await _measure(owner_pool, run_id, block, model="gemma3-4b", outcome="unreachable",
                            score=0.0)
 
-    async def test_a_measurement_carries_one(self, pool, redis, scope):
-        block, run_id = await _anchor(pool, redis, scope), await _run(pool)
+    async def test_a_measurement_carries_one(self, owner_pool, pool, redis, scope):
+        block, run_id = await _anchor(pool, redis, scope), await _run(owner_pool)
         with pytest.raises(asyncpg.exceptions.CheckViolationError,
                            match="score_iff_measured"):
-            await _measure(pool, run_id, block, score=None)
+            await _measure(owner_pool, run_id, block, score=None)
 
-    async def test_the_anchor_version_must_exist(self, pool, redis, scope):
-        block, run_id = await _anchor(pool, redis, scope), await _run(pool)
+    async def test_the_anchor_version_must_exist(self, owner_pool, pool, redis, scope):
+        block, run_id = await _anchor(pool, redis, scope), await _run(owner_pool)
         with pytest.raises(asyncpg.exceptions.ForeignKeyViolationError,
                            match="anchor_version"):
-            await _measure(pool, run_id, block, version=7)
+            await _measure(owner_pool, run_id, block, version=7)
 
-    async def test_one_measurement_per_pair_and_run(self, pool, redis, scope):
-        block, run_id = await _anchor(pool, redis, scope), await _run(pool)
-        await _measure(pool, run_id, block)
+    async def test_one_measurement_per_pair_and_run(self, owner_pool, pool, redis, scope):
+        block, run_id = await _anchor(pool, redis, scope), await _run(owner_pool)
+        await _measure(owner_pool, run_id, block)
         with pytest.raises(asyncpg.exceptions.UniqueViolationError, match="once_per_run"):
-            await _measure(pool, run_id, block)
-        await _measure(pool, run_id, block, variant="raw")  # another variant is another pair
+            await _measure(owner_pool, run_id, block)
+        await _measure(owner_pool, run_id, block, variant="raw")  # another variant is another pair
 
     @pytest.mark.parametrize("statement", [
         "UPDATE benchmark_measurements SET score = 1 WHERE run_id = $1",
         "DELETE FROM benchmark_measurements WHERE run_id = $1",
     ])
-    async def test_evidence_is_not_edited(self, pool, redis, scope, statement):
-        block, run_id = await _anchor(pool, redis, scope), await _run(pool)
-        await _measure(pool, run_id, block)
+    async def test_evidence_is_not_edited(self, owner_pool, pool, redis, scope, statement):
+        block, run_id = await _anchor(pool, redis, scope), await _run(owner_pool)
+        await _measure(owner_pool, run_id, block)
         with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError,
                            match="append-only"):
-            await pool.execute(statement, run_id)
+            await owner_pool.execute(statement, run_id)
 
-    async def test_and_not_truncated(self, pool):
+    async def test_and_not_truncated(self, owner_pool):
         with pytest.raises(asyncpg.exceptions.IntegrityConstraintViolationError,
                            match="append-only"):
-            await pool.execute("TRUNCATE benchmark_measurements")
+            await owner_pool.execute("TRUNCATE benchmark_measurements")
 
 
 class TestRuns:
-    async def test_a_finished_run_has_an_end_and_a_running_one_none(self, pool):
+    async def test_a_finished_run_has_an_end_and_a_running_one_none(self, owner_pool):
         with pytest.raises(asyncpg.exceptions.CheckViolationError, match="end_matches_status"):
-            await pool.execute("INSERT INTO benchmark_runs (mode, status) VALUES ('drift', 'complete')")
+            await owner_pool.execute("INSERT INTO benchmark_runs (mode, status) VALUES ('drift', 'complete')")
         with pytest.raises(asyncpg.exceptions.CheckViolationError, match="end_matches_status"):
-            await pool.execute(
+            await owner_pool.execute(
                 "INSERT INTO benchmark_runs (mode, status, finished_at) "
                 "VALUES ('drift', 'running', clock_timestamp())")
 
-    async def test_read_back_through_the_service(self, pool, redis, scope):
-        block, run_id = await _anchor(pool, redis, scope), await _run(pool, "complete")
-        await _measure(pool, run_id, block)
-        await _measure(pool, run_id, block, model="gemma4-e4b", outcome="unreachable",
+    async def test_read_back_through_the_service(self, owner_pool, pool, redis, scope):
+        block, run_id = await _anchor(pool, redis, scope), await _run(owner_pool, "complete")
+        await _measure(owner_pool, run_id, block)
+        await _measure(owner_pool, run_id, block, model="gemma4-e4b", outcome="unreachable",
                        score=None, scores="{}", detail="connection refused")
 
-        detail = await learning.get_run(pool, caller("reviewer"), run_id)
+        detail = await learning.get_run(owner_pool, caller("reviewer"), run_id)
 
         assert detail.status == "complete"
         measured, outage = detail.measurements

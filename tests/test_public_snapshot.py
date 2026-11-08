@@ -116,7 +116,7 @@ def _source(tmp_path: Path) -> Path:
     (src / "publish").mkdir()
     (src / "README.md").write_text("readme", encoding="utf-8")
     (src / "api" / "main.py").write_text("app = None", encoding="utf-8")
-    (src / "compose.yaml").write_text("internal stack", encoding="utf-8")
+    (src / "Makefile").write_text("internal targets", encoding="utf-8")
     (src / "publish" / "gitlab-ci.yml").write_text("stages: [check]", encoding="utf-8")
     _git(src, "init", "-q")
     _git(src, "add", ".")
@@ -137,7 +137,7 @@ def test_export_writes_exactly_the_snapshot(tmp_path):
 
     assert written == [".gitlab-ci.yml", "README.md", "api/main.py"]
     assert (dst / ".gitlab-ci.yml").read_text(encoding="utf-8") == "stages: [check]"
-    assert not (dst / "compose.yaml").exists(), "an internal file reached the snapshot"
+    assert not (dst / "Makefile").exists(), "an internal file reached the snapshot"
     assert not (dst / "stale.txt").exists(), "a file from an earlier snapshot lingered"
     assert (dst / ".git").is_dir()
 
@@ -155,16 +155,65 @@ def test_export_takes_the_documents_along(tmp_path):
     assert (dst / "docs" / "cohereny-arc42.md").exists()
 
 
-def test_export_through_main_works_on_the_publish_branch(tmp_path):
-    """The positive case, through the real entry point and this repository. Without it
-    the refusals below could pass because main() refuses everything — which is what
-    happened on 29.10.2026, when a target without a first commit was refused for that
-    reason and not for its branch."""
-    if not (ROOT / ps.PUBLISH_CI).exists():
-        pytest.skip("this is the snapshot: exports are made from dev, not from here")
+def _released(tmp_path: Path) -> Path:
+    """A source checkout standing on origin/main, as the export requires (CHY-191)."""
+    src = _source(tmp_path)
+    _git(src, "-c", "user.name=t", "-c", "user.email=t@example.org", "commit", "-q",
+         "-m", "release")
+    _git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return src
+
+
+def test_export_through_main_works_on_the_publish_branch(tmp_path, monkeypatch, capsys):
+    """The positive case, through the real entry point. Without it the refusals below
+    could pass because main() refuses everything — which is what happened on
+    29.10.2026, when a target without a first commit was refused for that reason and
+    not for its branch. From a released checkout, since this one is not main."""
+    monkeypatch.setattr(ps, "ROOT", _released(tmp_path))
     dst = _target(tmp_path, branch="publish")
     assert ps.main(["--export", str(dst)]) == 0
     assert (dst / "README.md").exists() and not (dst / "stale.txt").exists()
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ps.ROOT, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    assert f"snapshot from {head} on main" in capsys.readouterr().out
+
+
+class TestOnlyReleasedStateGoesPublic:
+    """The export runs from a clean checkout of origin/main and from nothing else
+    (CHY-191). Each refusal leaves the target as it was."""
+
+    def _refused(self, monkeypatch, tmp_path, source: Path, capsys) -> str:
+        monkeypatch.setattr(ps, "ROOT", source)
+        dst = _target(tmp_path, branch="publish")
+        assert ps.main(["--export", str(dst)]) == 2
+        assert (dst / "stale.txt").exists(), "the refused export emptied its target"
+        return capsys.readouterr().err
+
+    def test_a_checkout_of_another_commit_is_refused(self, monkeypatch, tmp_path, capsys):
+        """The case the ticket is about: a worktree on dev, ahead of main."""
+        src = _released(tmp_path)
+        _git(src, "checkout", "-q", "-b", "dev")
+        (src / "README.md").write_text("half finished", encoding="utf-8")
+        _git(src, "-c", "user.name=t", "-c", "user.email=t@example.org", "commit", "-q",
+             "-am", "work in progress")
+        assert "origin/main is" in self._refused(monkeypatch, tmp_path, src, capsys)
+
+    def test_a_changed_file_on_main_is_refused(self, monkeypatch, tmp_path, capsys):
+        src = _released(tmp_path)
+        (src / "README.md").write_text("edited, not committed", encoding="utf-8")
+        assert "not committed" in self._refused(monkeypatch, tmp_path, src, capsys)
+
+    def test_a_checkout_without_origin_main_is_refused(self, monkeypatch, tmp_path, capsys):
+        src = _released(tmp_path)
+        _git(src, "update-ref", "-d", "refs/remotes/origin/main")
+        assert "git fetch" in self._refused(monkeypatch, tmp_path, src, capsys)
+
+    def test_an_untracked_file_does_not_stop_it(self, monkeypatch, tmp_path):
+        """Untracked files are not exported, so they are no reason to refuse."""
+        src = _released(tmp_path)
+        (src / "notes.txt").write_text("local", encoding="utf-8")
+        monkeypatch.setattr(ps, "ROOT", src)
+        assert ps.main(["--export", str(_target(tmp_path, branch="publish"))]) == 0
 
 
 def test_export_refuses_a_checkout_of_another_branch(tmp_path):

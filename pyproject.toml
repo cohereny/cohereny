@@ -25,6 +25,9 @@ dependencies = [
     # A calibration anchor's json_schema validator runs in the service, not
     # only in the E2E (CHY-67, ADR-006 layer 1).
     "jsonschema>=4.23",
+    # Seals a run's placeholder mapping (CHY-234, kernel/mapping_cipher.py).
+    # Came in through PyJWT[crypto] before; named here now that it is used.
+    "cryptography>=44",
 ]
 
 [project.scripts]

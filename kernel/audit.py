@@ -45,14 +45,32 @@ import asyncpg
 # silently never matches a filter.
 ACTION_ACTOR_PROVISIONED = "actor.provisioned"
 ACTION_ACTOR_ROLE_CHANGED = "actor.role_changed"
+# The account was marked as, or released from being, a technical account
+# (CHY-163). Its own action, not part of role_changed: what an account may do
+# and whether it is a person are different questions.
+ACTION_ACTOR_SERVICE_ACCOUNT_CHANGED = "actor.service_account_changed"
 ACTION_ACTOR_ANONYMIZED = "actor.anonymized"
+# Version 1 of a new line. Defined since the first audit table and written by
+# nothing until CHY-171: a block had no record of who wrote it until somebody
+# approved it.
 ACTION_BLOCK_CREATED = "block.created"
+# A draft changed in place. Without it, who wrote a version was knowable only
+# for the person who created it — and four eyes asks about everyone who did
+# (CHY-163, ADR-045).
+ACTION_BLOCK_EDITED = "block.edited"
 ACTION_BLOCK_SUPERSEDED = "block.superseded"
 ACTION_BLOCK_DEPRECATED = "block.deprecated"
 ACTION_BLOCK_SUBMITTED = "block.submitted"
 ACTION_BLOCK_WITHDRAWN = "block.withdrawn"
 ACTION_BLOCK_APPROVED = "block.approved"
 ACTION_BLOCK_REJECTED = "block.rejected"
+# A retention period was set, changed or removed (CHY-17, ADR-046). From and to
+# both: a period that changes without saying from what cannot be judged later.
+ACTION_RETENTION_POLICY_CHANGED = "retention.policy_changed"
+# One purge run: what it cleared and deleted, per table, and the periods it
+# applied. Its absence for longer than the timer interval is the signal that
+# the purge stopped — a silent run and a failed one look the same otherwise.
+ACTION_RETENTION_PURGED = "retention.purged"
 # The first entry of a block that was copied upward. Names the line and version
 # it came from; the block itself carries no link back (ADR-042, CHY-65).
 ACTION_BLOCK_PROMOTED = "block.promoted"
@@ -87,6 +105,14 @@ ACTION_WORKFLOW_DEPRECATED = "workflow.deprecated"
 # to say who approved, or it is not a record (CHY-127).
 ACTION_RUN_STARTED = "workflow.run_started"
 ACTION_RUN_OVERSIGHT = "workflow.run_oversight_decided"
+# A person had a run's values put back in place of its placeholders (CHY-234,
+# E4). Who, which run, which steps -- never a value: the entry is evidence of
+# the reading, not a copy of what was read.
+ACTION_RUN_CONTENT_RESOLVED = "workflow.run_content_resolved"
+# A person stopped a run (CHY-200, Art. 14(4)(e)). Who, from which state, which
+# nodes were stopped -- the reason stays with the run, where its period clears
+# it, not in a log that is kept for good.
+ACTION_RUN_CANCELLED = "workflow.run_cancelled"
 
 
 def target_ref(entity_type: str, entity_id: UUID | str) -> str:
@@ -161,9 +187,9 @@ async def read_entries(pool, *, target: str | None = None,
                        limit: int = 100, offset: int = 0) -> list[AuditLogEntry]:
     """A page of the log, newest first, optionally narrowed to one target or actor.
 
-    The only place the log is read from. api/v1/audit.py assembled the query
-    itself until CHY-123 — a transport module holding the schema of a
-    kernel-owned table.
+    The log is read only in this module — here and in `entries_for` below.
+    api/v1/audit.py assembled the query itself until CHY-123 — a transport
+    module holding the schema of a kernel-owned table.
 
     **Who may read what is not decided here**, and that is deliberate rather
     than an omission. The rule is "reviewer or higher, or the author of the
@@ -185,5 +211,23 @@ async def read_entries(pool, *, target: str | None = None,
         f"ORDER BY created_at DESC, id DESC "
         f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}",
         *params, limit, offset,
+    )
+    return [AuditLogEntry(**dict(r)) for r in rows]
+
+
+async def entries_for(conn, target: str, actions: tuple[str, ...]) -> list[AuditLogEntry]:
+    """Every entry of one target with one of these actions, oldest first.
+
+    For a decision made inside a transaction: four eyes asks who wrote a block
+    version since its line was last approved (CHY-163, ADR-045). On the
+    caller's connection, so the answer belongs to the transaction that acts on
+    it, and unpaged — one block has few entries, and a page boundary would
+    split the answer.
+    """
+    rows = await conn.fetch(
+        "SELECT id, actor_id, action, target_ref, payload, created_at "
+        "FROM audit_log WHERE target_ref = $1 AND action = ANY($2::text[]) "
+        "ORDER BY created_at, id",
+        target, list(actions),
     )
     return [AuditLogEntry(**dict(r)) for r in rows]

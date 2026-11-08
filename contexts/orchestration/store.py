@@ -292,7 +292,7 @@ async def lock_run(conn, run_id: UUID):
     return await conn.fetchrow(
         "SELECT id, workflow_id, workflow_version, status, actor_id, input_data, "
         "       result, error_message, started_at, completed_at, created_at, "
-        "       parent_run_id, parent_node_id "
+        "       parent_run_id, parent_node_id, content_purged_at "
         "FROM workflow_runs WHERE id = $1 FOR UPDATE",
         run_id,
     )
@@ -302,9 +302,48 @@ async def run(conn_or_pool, run_id: UUID):
     return await conn_or_pool.fetchrow(
         "SELECT id, workflow_id, workflow_version, status, actor_id, input_data, "
         "       result, error_message, started_at, completed_at, created_at, "
-        "       parent_run_id, parent_node_id "
+        "       parent_run_id, parent_node_id, content_purged_at "
         "FROM workflow_runs WHERE id = $1",
         run_id,
+    )
+
+
+# ── the run's mapping (CHY-234) ───────────────────────────────────────────────
+#
+# Sealed and opened by the service with kernel.mapping_cipher; here it is bytes.
+
+async def insert_pii_mapping(conn, run_id: UUID, *, key_id: str, nonce: bytes,
+                             ciphertext: bytes) -> None:
+    await conn.execute(
+        "INSERT INTO pii_mappings (run_id, key_id, nonce, ciphertext) VALUES ($1, $2, $3, $4)",
+        run_id, key_id, nonce, ciphertext,
+    )
+
+
+async def pii_mapping(conn, run_id: UUID):
+    """The run's sealed mapping, or None for a run started before CHY-234."""
+    return await conn.fetchrow(
+        "SELECT key_id, nonce, ciphertext FROM pii_mappings WHERE run_id = $1", run_id)
+
+
+async def lock_pii_mapping(conn, run_id: UUID):
+    """As `pii_mapping`, held until the transaction ends.
+
+    Two steps of a run that both found something new would otherwise both
+    extend the mapping they read, and the second write would drop the first
+    one's names (E1, decided 06.11.2026).
+    """
+    return await conn.fetchrow(
+        "SELECT key_id, nonce, ciphertext FROM pii_mappings WHERE run_id = $1 FOR UPDATE",
+        run_id)
+
+
+async def update_pii_mapping(conn, run_id: UUID, *, key_id: str, nonce: bytes,
+                             ciphertext: bytes) -> None:
+    await conn.execute(
+        "UPDATE pii_mappings SET key_id = $2, nonce = $3, ciphertext = $4, "
+        "sealed_at = clock_timestamp() WHERE run_id = $1",
+        run_id, key_id, nonce, ciphertext,
     )
 
 
@@ -406,6 +445,26 @@ async def fail_execution(conn, execution_id: UUID, error: str) -> None:
     )
 
 
+async def cancel_open_executions(conn, run_id: UUID, reason: str | None) -> list[str]:
+    """Stop every node of the run that has not finished; returns their node_refs.
+
+    Usually one — the gate the run waits at, or the node in flight — but a fork
+    can have several branches running, and all of them stop with the run
+    (CHY-200).
+    """
+    rows = await conn.fetch(
+        "WITH stopped AS ("
+        "    UPDATE node_executions SET status = 'cancelled', error_message = $2, "
+        "           completed_at = now() "
+        "    WHERE run_id = $1 AND status IN ('pending', 'running') "
+        "    RETURNING node_id) "
+        "SELECT n.node_ref FROM stopped s JOIN workflow_nodes n ON n.id = s.node_id "
+        "ORDER BY n.node_ref",
+        run_id, reason,
+    )
+    return [row["node_ref"] for row in rows]
+
+
 async def record_traversals(conn, run_id: UUID, edge_ids: list[UUID]) -> None:
     """Count each edge one more time.
 
@@ -436,7 +495,7 @@ async def set_run_status(conn, run_id: UUID, status: str, *,
     return await conn.fetchrow(
         "UPDATE workflow_runs SET status = $2, result = $3::text::jsonb, "
         "       error_message = $4, "
-        "       completed_at = CASE WHEN $2 IN ('complete', 'failed', 'rejected') "
+        "       completed_at = CASE WHEN $2 IN ('complete', 'failed', 'rejected', 'cancelled') "
         "                           THEN now() ELSE completed_at END "
         "WHERE id = $1 "
         "RETURNING id, workflow_id, workflow_version, status, actor_id, input_data, "
@@ -537,3 +596,98 @@ async def predecessor_outputs(conn, run_id: UUID, node_ids: list[UUID]) -> list:
         "ORDER BY node_id, iteration DESC, completed_at DESC",
         run_id, node_ids,
     )
+
+
+# ── retention (CHY-17, ADR-046) ───────────────────────────────────────────────
+
+_CLEAR_NODE_EXECUTIONS = (
+    "UPDATE node_executions SET input_data = NULL, output_data = NULL, error_message = NULL "
+    "WHERE run_id = ANY($1::uuid[])"
+)
+_CLEAR_REVIEW_VOTES = (
+    "UPDATE review_votes SET reason = NULL "
+    "WHERE execution_id IN (SELECT id FROM node_executions WHERE run_id = ANY($1::uuid[]))"
+)
+_CLEAR_PII_MAPPINGS = (
+    "UPDATE pii_mappings SET nonce = NULL, ciphertext = NULL "
+    "WHERE run_id = ANY($1::uuid[])"
+)
+_CLEAR_WORKFLOW_RUNS = (
+    "UPDATE workflow_runs SET input_data = '{}'::jsonb, result = NULL, error_message = NULL, "
+    "content_purged_at = now() WHERE id = ANY($1::uuid[])"
+)
+
+#: Runs nothing happens to any more. A pending, running or waiting run is never
+#: touched, however old: its content is still the work in progress.
+_FINISHED_RUN_STATES: list[str] = ["complete", "failed", "rejected", "cancelled"]
+
+
+async def runs_past_period(conn, scope_ids: list[UUID], keep_days: list[int], *,
+                           only_uncleared: bool) -> list[UUID]:
+    """Finished runs whose period, in their workflow's scope, has passed.
+
+    `scope_ids` and `keep_days` are parallel arrays — one period per scope, as
+    kernel.retention.Periods.finite gives them. A run that never completed
+    counts from its creation, so a run that failed before starting expires too.
+    """
+    rows = await conn.fetch(
+        "SELECT r.id FROM workflow_runs r "
+        "JOIN workflow_definitions d ON d.id = r.workflow_id "
+        "JOIN unnest($1::uuid[], $2::int[]) AS p(scope_id, keep_days) "
+        "  ON p.scope_id = d.scope_id "
+        "WHERE r.status = ANY($3::text[]) "
+        "  AND COALESCE(r.completed_at, r.created_at) "
+        "      < now() - make_interval(days => p.keep_days) "
+        "  AND (NOT $4::bool OR r.content_purged_at IS NULL)",
+        scope_ids, keep_days, _FINISHED_RUN_STATES, only_uncleared,
+    )
+    return [row["id"] for row in rows]
+
+
+async def clear_run_content(conn, run_ids: list[UUID]) -> None:
+    """Clear what went into these runs and came out; their trace stays.
+
+    The statements are below, static. What they clear is decided by the
+    inventory (kernel/retention.py): tests/test_retention_purge.py holds each
+    SET clause to kernel.retention.clear_assignments, so a column added there
+    fails a test until it is cleared here too. Assembling the clause at run
+    time would say the same, and S608 would count it as an assembled query.
+    """
+    await conn.execute(_CLEAR_NODE_EXECUTIONS, run_ids)
+    await conn.execute(_CLEAR_REVIEW_VOTES, run_ids)
+    await conn.execute(_CLEAR_PII_MAPPINGS, run_ids)
+    await conn.execute(_CLEAR_WORKFLOW_RUNS, run_ids)
+
+
+async def delete_runs(conn, run_ids: list[UUID]) -> tuple[int, int]:
+    """Delete runs leaf first. Returns how many went and how many are held.
+
+    A run that started a sub-workflow is the parent of that run's row, and the
+    sub-run may live in a scope that keeps longer. It is not deleted out from
+    under it: the parent waits, counted as held, until its last sub-run has
+    gone. Node executions and loop counters go with their run (ON DELETE
+    CASCADE); votes refer to executions without a cascade, deliberately
+    (migration 027), so they are deleted here first, by name.
+    """
+    remaining = set(run_ids)
+    deleted = 0
+    while remaining:
+        leaves = [row["id"] for row in await conn.fetch(
+            "SELECT r.id FROM workflow_runs r WHERE r.id = ANY($1::uuid[]) "
+            "AND NOT EXISTS (SELECT 1 FROM workflow_runs c WHERE c.parent_run_id = r.id)",
+            list(remaining))]
+        if not leaves:
+            break
+        await conn.execute(
+            "DELETE FROM review_votes WHERE execution_id IN "
+            "(SELECT id FROM node_executions WHERE run_id = ANY($1::uuid[]))", leaves)
+        await conn.execute("DELETE FROM workflow_runs WHERE id = ANY($1::uuid[])", leaves)
+        deleted += len(leaves)
+        remaining -= set(leaves)
+    return deleted, len(remaining)
+
+
+async def workflow_scopes(conn) -> dict[UUID, UUID]:
+    """Each workflow's scope — for contexts that hold rows per workflow."""
+    return {row["id"]: row["scope_id"]
+            for row in await conn.fetch("SELECT id, scope_id FROM workflow_definitions")}

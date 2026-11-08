@@ -37,8 +37,9 @@ class RunRegistry:
 
         # Oversight gate for banking runs waiting on a human decision.
         # The result holder is a one-element list so the API can write
-        # "approved"/"rejected" into it before setting the event; the thread
-        # reads it immediately after waking.
+        # "approved"/"rejected" — or "cancelled", when the run is cancelled
+        # while it waits (CHY-153) — into it before setting the event; the
+        # thread reads it immediately after waking.
         self._oversight_event: dict[UUID, threading.Event] = {}
         self._oversight_result: dict[UUID, list] = {}
 

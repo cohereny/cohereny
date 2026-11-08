@@ -149,8 +149,7 @@ def test_list_runs_requires_auth():
 # ── GET /v1/pilots/runs/{id} ──────────────────────────────────────────────────
 
 def test_get_run_found():
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value=_make_run_record(status="running"))
+    pool = _make_pool(fetchrow=_make_run_record(status="running"))
     client = _make_client(pool)
     try:
         resp = client.get(f"/v1/pilots/runs/{_RUN_ID}")
@@ -164,8 +163,7 @@ def test_get_run_found():
 
 def test_get_run_complete_with_result():
     result_data = {"fakten": ["Fakt 1", "Fakt 2"], "lernziel_erreicht": True}
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value=_make_run_record(
+    pool = _make_pool(fetchrow=_make_run_record(
         status="complete", result_json=result_data
     ))
     client = _make_client(pool)
@@ -181,8 +179,7 @@ def test_get_run_complete_with_result():
 
 
 def test_get_run_not_found():
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value=None)
+    pool = _make_pool(fetchrow=None)
     client = _make_client(pool)
     try:
         resp = client.get(f"/v1/pilots/runs/{uuid4()}")
@@ -307,8 +304,7 @@ def test_start_run_requires_auth():
 # ── GET /v1/pilots/runs/{id}/stream ──────────────────────────────────────────
 
 def test_stream_run_not_found():
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value=None)
+    pool = _make_pool(fetchrow=None)
     client = _make_client(pool)
     try:
         resp = client.get(f"/v1/pilots/runs/{uuid4()}/stream")
@@ -325,8 +321,7 @@ def test_stream_run_requires_auth():
 def test_stream_run_already_complete():
     """For a finished run, endpoint synthesizes a done event immediately and closes."""
     result_data = {"fakten": ["F1", "F2", "F3"], "lernziel_erreicht": True, "iteration_count": 1}
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value={
+    pool = _make_pool(fetchrow={
         "status": "complete",
         "result_json": result_data,
         "events_json": None,
@@ -350,8 +345,7 @@ def test_stream_run_already_complete():
 
 def test_stream_run_live_events():
     """Live run: SSE endpoint yields all queued events and closes on sentinel."""
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value={"status": "running", "result_json": None})
+    pool = _make_pool(fetchrow={"status": "running", "result_json": None})
     client = _make_client(pool)
 
     # Simulate the background thread emitting before the client connects —
@@ -388,8 +382,7 @@ def test_stream_run_live_events():
 
 def test_stream_run_live_queue_cleaned_up_after_eof():
     """The registry forgets a run once its stream has sent eof."""
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value={"status": "running", "result_json": None})
+    pool = _make_pool(fetchrow={"status": "running", "result_json": None})
     client = _make_client(pool)
 
     registry.open(_RUN_ID)
@@ -411,8 +404,7 @@ def test_stream_replay_from_events_json():
         {"type": "node_complete", "node": "extract", "elapsed_ms": 320, "details": "12 Fakten extrahiert", "iteration": 0, "preview": None},
         {"type": "done", "lernziel_erreicht": True, "iteration_count": 2, "facts_count": 12},
     ]
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value={
+    pool = _make_pool(fetchrow={
         "status": "complete",
         "result_json": {"lernziel_erreicht": True, "fakten": ["f"] * 12, "iteration_count": 2},
         "events_json": events,
@@ -452,8 +444,7 @@ def test_stream_oversight_historical_rewrite():
         {"type": "node_complete", "node": "summarize", "elapsed_ms": 200, "iteration": 0, "details": "Bericht erstellt", "preview": None},
         {"type": "done", "lernziel_erreicht": True, "iteration_count": 1, "facts_count": 5},
     ]
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value={
+    pool = _make_pool(fetchrow={
         "status": "complete",
         "result_json": None,
         "events_json": events,
@@ -485,8 +476,7 @@ def test_stream_oversight_required_preserved_when_awaiting():
     events = [
         {"type": "oversight_required", "node": "compliance_check", "question": "Genehmigen?"},
     ]
-    pool = _make_pool()
-    pool.fetchrow = AsyncMock(return_value={
+    pool = _make_pool(fetchrow={
         "status": "awaiting_oversight",
         "result_json": None,
         "events_json": events,
@@ -550,7 +540,10 @@ def test_oversight_records_approver_and_time():
                            json={"decision": "approved"})
         assert resp.status_code == 200
 
-        update_sql = pool.conn.execute.call_args[0][0]
+        # The UPDATE, not the last call: the connection says for whom it acts
+        # and clears that again afterwards (CHY-92).
+        update_sql = next(c.args[0] for c in pool.conn.execute.call_args_list
+                          if "UPDATE pilot_runs" in c.args[0])
         assert "oversight_by" in update_sql
         assert "oversight_at" in update_sql
     finally:

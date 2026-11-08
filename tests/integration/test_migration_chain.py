@@ -19,9 +19,11 @@ pytestmark = pytest.mark.integration
 _MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
 
 
-async def test_every_migration_file_was_applied_once(pool):
+async def test_every_migration_file_was_applied_once(owner_pool):
+    """Read as the migration role: the application has no access to
+    schema_migrations at all (CHY-85)."""
     on_disk = sorted(int(p.name[:3]) for p in _MIGRATIONS.glob("[0-9]*.sql"))
-    applied = [r["version"] for r in await pool.fetch(
+    applied = [r["version"] for r in await owner_pool.fetch(
         "SELECT version FROM schema_migrations ORDER BY version"
     )]
     assert applied == on_disk, (

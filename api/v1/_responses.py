@@ -138,6 +138,37 @@ GATEWAY = {
 BLOCK_READ = {**NOT_FOUND}
 BLOCK_WRITE = {**FORBIDDEN, **NOT_FOUND}
 BLOCK_TRANSITION = {**FORBIDDEN, **NOT_FOUND, **CONFLICT}
+
+#: The header that tells a client a data-flow block was approved by the person
+#: who wrote it (ADR-045). A header, not a field: the notice belongs to this one
+#: response, and a field on BlockOut would be empty on every other read.
+SELF_APPROVAL_HEADER = "Cohereny-Notice"
+
+#: Approve, which four eyes can refuse besides the role (CHY-163), and whose
+#: success may carry the self-approval notice.
+BLOCK_APPROVE = {
+    **BLOCK_TRANSITION,
+    **UNPROCESSABLE,
+    403: _err(
+        "The actor's role does not permit this — or four eyes refuses it: the "
+        "block decides where data may go, and the approver wrote this version "
+        "while somebody else could approve it, or is a technical account "
+        "(ADR-045)."
+    ),
+    200: {
+        "description": "The block is active.",
+        "headers": {
+            SELF_APPROVAL_HEADER: {
+                "description": (
+                    "Present when a single operator approved a data-flow block "
+                    "they wrote: nobody second checked whether data may leave "
+                    "the installation (ADR-045). Absent otherwise."
+                ),
+                "schema": {"type": "string"},
+            },
+        },
+    },
+}
 # A create can meet the ratchet since ADR-042 (direct scopes approve on write),
 # and a rule it cannot store or approve is a 422 (CHY-165, CHY-166).
 BLOCK_CREATE = {**FORBIDDEN, **NOT_FOUND, **CONFLICT, **UNPROCESSABLE}

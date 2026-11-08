@@ -87,6 +87,21 @@ def test_planned_operations_name_a_ticket(path, method, op):
     assert "501" in op["responses"]
 
 
+def test_exactly_the_pilots_are_deprecated():
+    """The LangGraph pilots and their question bank, and nothing else (2026-11-08).
+
+    They call the model with the values and store them, which a workflow run
+    does not. Until CHY-172 rebuilds them on the runner the contract says so on
+    every operation; a deprecation that spreads to another router, or quietly
+    disappears, shows up here.
+    """
+    deprecated = {(p, m) for p, m, op in _operations() if op.get("deprecated")}
+    pilots = {(p, m) for p, m, _ in _operations()
+              if p.startswith(("/v1/pilots", "/v1/questions"))}
+    assert pilots, "no pilot operations found — the prefix changed"
+    assert deprecated == pilots
+
+
 # ── The per-surface contracts (CHY-109) ──────────────────────────────────────
 #
 # A contract that lists an operation the gate will refuse, or omits one it

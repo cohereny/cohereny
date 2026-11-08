@@ -419,3 +419,28 @@ async def active_routing_rules(pool, scope_ids: list[UUID]) -> list:
         "ORDER BY block_id, version DESC",
         scope_ids,
     )
+
+
+async def active_redaction_rules(pool, scope_ids: list[UUID]) -> list:
+    """Approved redaction rules across a scope chain (CHY-63).
+
+    The same shape as `active_routing_rules` and for the same reason a query of
+    its own: configuration, never on the composition path. Spelled out rather
+    than sharing one query with the block type as a parameter -- a statement
+    per question keeps each readable on its own, and the block type stays a
+    literal a reader can grep for.
+
+    `scope_id` and the governance columns come along: whether a block may
+    switch a shipped rule off depends on where it stands and what it declares.
+    """
+    return await pool.fetch(
+        "SELECT DISTINCT ON (block_id) "
+        "       block_id, version, scope_id, metadata, "
+        "       governance_key, privacy_impact, created_at "
+        "FROM context_blocks "
+        "WHERE scope_id = ANY($1::uuid[]) "
+        "  AND status = 'active' "
+        "  AND block_type = 'redaction_rule' "
+        "ORDER BY block_id, version DESC",
+        scope_ids,
+    )

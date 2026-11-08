@@ -183,3 +183,61 @@ class MembershipExists(KernelError):
             f"Actor {actor_id} already holds a role in this scope. "
             f"Changing it is not supported yet."
         )
+
+
+class RetentionOverrideNotFound(KernelError):
+    """The scope has no period of its own for this retention class (CHY-17).
+
+    A 404 rather than a quiet success: removing an override that is not there
+    usually means the wrong scope was named, and the inherited period the
+    caller expected to restore is already the one that applies.
+    """
+
+    def __init__(self, retention_class: str, scope_id: object) -> None:
+        self.retention_class = retention_class
+        self.scope_id = scope_id
+        super().__init__(
+            f"Scope {scope_id} has no period of its own for {retention_class}; "
+            "it already inherits one."
+        )
+
+
+class InvalidIdentifiers(KernelError, ValueError):
+    """What a caller named for redaction cannot be used (CHY-63).
+
+    Also a ValueError, so that a pydantic validator turns it into a 422 without
+    a handler of its own; the kernel mapping says 422 as well, for any path
+    that raises it outside a request model. The runner turns it into a failed
+    node: a run whose list is malformed must not send its data out unredacted.
+    """
+
+
+class RedactionRuleNotApprovable(KernelError):
+    """A redaction rule that cannot become active, with the reason (CHY-63).
+
+    Raised where a person is approving and the fix is cheap: a pattern that
+    does not compile, a shipped rule switched off below the top of the tree, a
+    loosening that does not declare itself. 422, like a routing rule that
+    cannot be approved.
+    """
+
+    def __init__(self, block_id: object, reason: str) -> None:
+        self.block_id = block_id
+        self.reason = reason
+        super().__init__(f"Redaction rule {block_id} cannot be approved: {reason}")
+
+
+class MalformedRedactionRule(KernelError):
+    """An active redaction rule that cannot be read (CHY-63).
+
+    Reached only when a row became active without the check at approval. The
+    call is refused rather than made without the rule: a rule that was meant
+    to protect something and is silently skipped protects nothing. 500, like a
+    malformed routing rule -- the fault is in the stored configuration, not in
+    the request.
+    """
+
+    def __init__(self, block_id: object, reason: str) -> None:
+        self.block_id = block_id
+        self.reason = reason
+        super().__init__(f"Redaction rule {block_id} cannot be read: {reason}")

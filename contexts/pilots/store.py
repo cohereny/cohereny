@@ -24,11 +24,11 @@ from datetime import datetime, UTC
 from typing import Any
 from uuid import UUID
 
-import asyncpg
+from kernel import acting
 
 _RUN_COLUMNS = (
     "id, thread_id, pilot_name, input_file, status, started_at, "
-    "completed_at, error_message, created_at"
+    "completed_at, error_message, created_at, content_purged_at"
 )
 
 
@@ -145,8 +145,8 @@ async def clear_oversight_gate(conn, run_id: UUID) -> None:
     """Return a gated run to running without recording a decision.
 
     Used when a *cancellation* releases the gate. Writing "rejected" into
-    oversight_decision here would manufacture an Art. 14 record for a decision
-    nobody made.
+    oversight_decision here would manufacture a record of oversight for a
+    decision nobody made.
     """
     await conn.execute(
         "UPDATE pilot_runs SET status='running', oversight_pending=FALSE WHERE id=$1",
@@ -158,8 +158,9 @@ async def record_oversight(conn, run_id: UUID, *, decision: str, decided_by: UUI
     """Decision, approver and time in one statement.
 
     Migration 014 refuses the UPDATE if the approver or the time is missing —
-    recording that "a human decided" without naming the human is not evidence
-    of oversight (CHY-88).
+    recording that "a human decided" without naming the human and the time is
+    not a record of oversight (CHY-88). The record follows from Art. 12 of the
+    AI Act, the oversight it records from Art. 14 (CHY-152, migration 037).
     """
     await conn.execute(
         "UPDATE pilot_runs SET status='running', oversight_pending=FALSE, "
@@ -228,7 +229,12 @@ async def upsert_workflow_config(pool, pilot_name: str, *,
 
 
 async def _execute(dsn: str, sql: str, *args: Any) -> None:
-    conn = await asyncpg.connect(dsn)
+    """One statement from the pilot thread, in the system context (CHY-92).
+
+    The thread works for the run, not for a person: the person's right to
+    start it was checked before it was handed over.
+    """
+    conn = await acting.connect_as_system(dsn)
     try:
         await conn.execute(sql, *args)
     finally:
@@ -295,3 +301,43 @@ async def t_insert_transparency_record(dsn: str, run_id: UUID, *,
         "VALUES ($1, $2, $3)",
         run_id, model_used, disclosure,
     )
+
+
+# ── retention (CHY-17, ADR-046) ───────────────────────────────────────────────
+
+async def clear_run_content(conn, keep_days: int, finished: list[str]) -> int:
+    """Clear the content of finished pilot runs older than `keep_days`; return how many.
+
+    Pilot runs belong to no scope, so the installation-wide period applies.
+    The SET clause is the inventory's (kernel/retention.py), held to it by
+    tests/test_retention_purge.py. A run already cleared is skipped by its
+    mark, so a second purge changes nothing.
+    """
+    rows = await conn.fetch(
+        "UPDATE pilot_runs SET input_file = '[purged]', result_json = NULL, "
+        "  events_json = '[]'::jsonb, error_message = NULL, content_purged_at = now() "
+        "WHERE status = ANY($1::text[]) AND content_purged_at IS NULL "
+        "  AND COALESCE(completed_at, created_at) < now() - make_interval(days => $2) "
+        "RETURNING id",
+        finished, keep_days,
+    )
+    return len(rows)
+
+
+async def delete_runs(conn, keep_days: int, finished: list[str]) -> int:
+    """Delete finished pilot runs older than `keep_days`; return how many.
+
+    Their transparency records go first and by name: migration 015 took the
+    cascade away so that deleting a run could not take the Art. 50 evidence
+    along silently. Here it is the period that decides, the same one as for the
+    run, and the purge's audit entry says so. Coverage rows still cascade.
+    """
+    ids = [row["id"] for row in await conn.fetch(
+        "SELECT id FROM pilot_runs WHERE status = ANY($1::text[]) "
+        "  AND COALESCE(completed_at, created_at) < now() - make_interval(days => $2)",
+        finished, keep_days)]
+    if ids:
+        await conn.execute(
+            "DELETE FROM transparency_records WHERE pilot_run_id = ANY($1::uuid[])", ids)
+        await conn.execute("DELETE FROM pilot_runs WHERE id = ANY($1::uuid[])", ids)
+    return len(ids)

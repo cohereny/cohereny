@@ -22,6 +22,24 @@ without a database runs the unit suite as before. Run explicitly, the tests
 **fail** without `DATABASE_URL` rather than skip: a guard that only runs where
 the tool happens to exist is green for the wrong reason (the same argument the
 `test` job makes for installing git).
+
+Two roles, as in production (CHY-85)
+------------------------------------
+`DATABASE_URL` connects as the application role, the one the API runs as —
+everything that goes through the application is tested with the rights it
+really has. `OWNER_DATABASE_URL` connects as the migration role that owns the
+tables (`owner_pool`). Only two kinds of test use it: those that show a trigger
+refuses even the owner, and those that write a fixture the application never
+writes. A test that needs the owner for anything else has found a missing grant.
+
+Two contexts on the application role (CHY-92)
+---------------------------------------------
+`pool` knows nobody: the run tables show it no rows, exactly as the API's
+request pool before a service says for whom it reads. `system_pool` is the
+engine's view — the same role in the system context. Setting up runs and
+inspecting them the way the runner, the pilot thread and the purge see them
+uses `system_pool`; reading a run *for a person* goes through the service with
+a caller.
 """
 from __future__ import annotations
 
@@ -29,10 +47,22 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
+from pydantic_settings import BaseSettings
 
 from api.config import settings
 from core.db import _register_codecs
+from kernel import acting
 from tests.integration._redis import Generations
+
+
+class _OwnerSettings(BaseSettings):
+    """The migration role's URL, read for the tests only.
+
+    Not in api.config on purpose: the application must never know it — the
+    whole point of CHY-85 is that the API runs without the owner's credentials.
+    """
+
+    owner_database_url: str | None = None
 
 
 def _database_url() -> str:
@@ -69,6 +99,42 @@ async def pool():
     """
     p = await asyncpg.create_pool(
         _database_url(), min_size=1, max_size=4, init=_register_codecs
+    )
+    try:
+        yield p
+    finally:
+        await p.close()
+
+
+def _owner_database_url() -> str:
+    """The migration role's URL; fails, like `_database_url`, when missing."""
+    url = _OwnerSettings().owner_database_url
+    if not url:
+        pytest.fail(
+            "OWNER_DATABASE_URL is not set. A few integration tests need the "
+            "migration role (<database>_migrator) — see the `integration` job."
+        )
+    return url
+
+
+@pytest.fixture
+async def owner_pool():
+    """A pool as the migration role. For triggers and foreign fixtures only."""
+    p = await asyncpg.create_pool(
+        _owner_database_url(), min_size=1, max_size=2, init=_register_codecs
+    )
+    try:
+        yield p
+    finally:
+        await p.close()
+
+
+@pytest.fixture
+async def system_pool():
+    """The application role in the system context, as `core.db.get_system_pool`."""
+    p = await asyncpg.create_pool(
+        _database_url(), min_size=1, max_size=2, init=_register_codecs,
+        setup=acting.as_system,
     )
     try:
         yield p

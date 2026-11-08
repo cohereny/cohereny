@@ -46,11 +46,15 @@ class ResolvedActor:
     permission question. identity.py produces it; this module interrogates it.
     """
 
-    __slots__ = ("id", "role")
+    __slots__ = ("id", "is_service_account", "role")
 
-    def __init__(self, actor_id: UUID, role: str) -> None:
+    def __init__(self, actor_id: UUID, role: str, is_service_account: bool = False) -> None:
         self.id = actor_id
         self.role = role
+        #: A technical account (CHY-163). Not a rank: a CI account may hold
+        #: any role it needs and is still never a person who approves a block
+        #: that lets data leave the installation (ADR-045).
+        self.is_service_account = is_service_account
 
     def has_at_least(self, minimum: str) -> bool:
         return _ROLE_ORDER.get(self.role, -1) >= _ROLE_ORDER[minimum]

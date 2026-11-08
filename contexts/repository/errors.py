@@ -268,3 +268,36 @@ class GovernanceNotEditable(RepositoryError):
             f"published block. Patch the content first — that produces a draft "
             f"— then change the governance on that draft."
         )
+
+
+class SecondPersonRequired(RepositoryError):
+    """The approver wrote this data-flow block, and someone else could approve it.
+
+    Four eyes where data changes place (CHY-163, ADR-045): a routing rule that
+    names a model below `critical`, or a block that loosens a privacy rule, is
+    approved by a person who wrote nothing in this round. A single operator is
+    exempt — the refusal says how many people could approve instead.
+    """
+
+    def __init__(self, people_who_may_approve: int) -> None:
+        self.people_who_may_approve = people_who_may_approve
+        super().__init__(
+            "You wrote this version, and it decides where data may go: a routing "
+            "rule with a model below 'critical' or a block that loosens a privacy "
+            f"rule. {people_who_may_approve} people may approve in this installation — "
+            "one who did not write it has to (ADR-045)."
+        )
+
+
+class ServiceAccountMayNotApprove(RepositoryError):
+    """A technical account tried to approve a data-flow block (CHY-163).
+
+    A CI account holds the role its jobs need, and it is still not a person.
+    Approving where data may go is a decision a person answers for.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A technical account (group chy-service-accounts) cannot approve a "
+            "block that decides where data may go. A person has to (ADR-045)."
+        )

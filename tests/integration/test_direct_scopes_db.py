@@ -29,6 +29,7 @@ from contexts.repository.errors import PrivacyRatchetViolation
 from contexts.repository.schema import BlockCreate, BlockPatch, BlockPromote
 from kernel.audit import (
     ACTION_BLOCK_APPROVED,
+    ACTION_BLOCK_CREATED,
     ACTION_BLOCK_PROMOTED,
     ACTION_BLOCK_SUBMITTED,
     ACTION_BLOCK_SUPERSEDED,
@@ -81,6 +82,7 @@ async def test_a_block_in_a_personal_scope_is_active_at_once(pool, redis, scope)
 
     assert out.status == "active"
     assert await _audit(pool, out.block_id) == [
+        (ACTION_BLOCK_CREATED, None),
         (ACTION_BLOCK_SUBMITTED, "direct"), (ACTION_BLOCK_APPROVED, "direct"),
     ]
     assert redis.bumped, "a block went live and the composed cache was not told"
@@ -93,7 +95,8 @@ async def test_a_block_in_a_team_scope_waits_for_review(pool, redis, scope):
     out = await repository.create_block(pool, redis, caller("contributor"), _block(team))
 
     assert out.status == "draft"
-    assert await _audit(pool, out.block_id) == []
+    # Nothing but the record of who wrote it (CHY-171).
+    assert await _audit(pool, out.block_id) == [(ACTION_BLOCK_CREATED, None)]
     assert redis.bumped == []
 
 
@@ -166,7 +169,8 @@ class TestEditingInADirectScope:
         assert [tuple(r) for r in rows] == [(1, "active", 2), (2, "active", None)]
         # Three entries in one transaction — the supersede from inside
         # cc_supersede_block, then the two steps — in the order they happened.
-        assert [a for a, _ in await _audit(pool, first.block_id)][2:] == [
+        # The first three are the create: created, submitted, approved.
+        assert [a for a, _ in await _audit(pool, first.block_id)][3:] == [
             ACTION_BLOCK_SUPERSEDED, ACTION_BLOCK_SUBMITTED, ACTION_BLOCK_APPROVED,
         ]
 
@@ -223,6 +227,11 @@ class TestPromote:
         author, reviewer = caller("contributor"), caller("reviewer")
         loose = await repository.create_block(pool, redis, author, _block(
             project, governance_key=_KEY, privacy_impact="permissive"))
+        # A loosening claim waits for a second person even in a project since
+        # ADR-045 (CHY-163); promoted is only what went live.
+        assert loose.status == "pending_review"
+        await repository.transition(pool, redis, reviewer, loose.block_id, "approve",
+                                    expected_version=1)
         strict = await repository.create_block(pool, redis, author, _block(
             team, governance_key=_KEY, privacy_impact="restrictive"))
         await repository.transition(pool, redis, author, strict.block_id, "submit",

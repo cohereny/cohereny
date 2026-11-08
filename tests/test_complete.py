@@ -18,6 +18,7 @@ from datetime import datetime, UTC
 from uuid import uuid4
 
 import httpx
+from fastapi import status
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -70,7 +71,7 @@ _ROUTING_RULES = [
 ]
 
 
-def _make_pool(fetch_return=None, scope_exists=True) -> MagicMock:
+def _make_pool(fetch_return=None, scope_exists=True, redaction_rules=None) -> MagicMock:
     """Pool for /v1/complete.
 
     Since CHY-24 the scope path goes through core.compose, which reads the
@@ -90,6 +91,11 @@ def _make_pool(fetch_return=None, scope_exists=True) -> MagicMock:
         # rule and the routing path a system prompt.
         if "block_type = 'routing_rule'" in sql:
             return _ROUTING_RULES
+        # The scope's redaction rules (CHY-63), by their own query too: handed
+        # the composition rows, the reading would take a system prompt for a
+        # rule and refuse the call.
+        if "block_type = 'redaction_rule'" in sql:
+            return redaction_rules or []
         return rows
 
     pool.fetch = AsyncMock(side_effect=_fetch)
@@ -558,3 +564,85 @@ def test_max_tokens_zero_fails_validation():
     assert resp.status_code == 422
     assert isinstance(resp.json()["detail"], list)
     gateway.post.assert_not_called()
+
+
+# --- identifiers out, values back (CHY-63) ---
+
+def test_named_identifiers_never_reach_the_model_and_come_back_in_the_answer():
+    client = _make_client()
+    mock_http = _mock_http("Liebe {{PERSON_1}}, Ihr Termin steht.")
+    with patch("core.completion.httpx.AsyncClient", return_value=mock_http):
+        try:
+            resp = client.post("/v1/complete", json={
+                "scope_id": str(_SCOPE_ID), "task_type": "summarize",
+                "prompt": "Schreib Erika Mustermann (erika@example.de) eine Zusage.",
+                "identifiers_to_redact": {"PERSON": ["Erika Mustermann"]},
+            })
+        finally:
+            _cleanup()
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    sent = mock_http.post.call_args.kwargs["json"]["messages"][-1]["content"]
+    assert sent == "Schreib {{PERSON_1}} ({{EMAIL_1}}) eine Zusage."
+    data = resp.json()
+    assert data["content"] == "Liebe Erika Mustermann, Ihr Termin steht."
+    assert data["redactions"] == {"PERSON": 1, "EMAIL": 1}
+    assert data["unresolved_placeholders"] == 0
+
+
+def test_unusable_identifiers_are_refused_before_any_model_is_asked():
+    client = _make_client()
+    mock_http = _mock_http()
+    with patch("core.completion.httpx.AsyncClient", return_value=mock_http):
+        try:
+            resp = client.post("/v1/complete", json={
+                "scope_id": str(_SCOPE_ID), "task_type": "summarize", "prompt": "x",
+                "identifiers_to_redact": {"person": ["Erika"]},
+            })
+        finally:
+            _cleanup()
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, resp.text
+    assert "upper case" in resp.text
+    mock_http.post.assert_not_called()
+
+
+def _scope_rule(metadata: dict, **kw) -> dict:
+    return {"block_id": uuid4(), "version": 1, "scope_id": _SCOPE_ID, "metadata": metadata,
+            "governance_key": kw.get("key"), "privacy_impact": kw.get("impact"),
+            "created_at": _NOW}
+
+
+def test_the_scopes_own_rules_apply_and_a_switched_off_rule_does_not():
+    """CHY-63 part 2: a scope adds names and switches a shipped rule off."""
+    rules = [
+        _scope_rule({"category": "STAFF", "texts": ["Dr. Schmidt"]}),
+        _scope_rule({"disable": ["PHONE"]}, key="pii_redaction", impact="permissive"),
+    ]
+    client = _make_client(pool=_make_pool(redaction_rules=rules))
+    mock_http = _mock_http("Gern, {{STAFF_1}}.")
+    with patch("core.completion.httpx.AsyncClient", return_value=mock_http):
+        try:
+            resp = client.post("/v1/complete", json={
+                "scope_id": str(_SCOPE_ID), "task_type": "summarize",
+                "prompt": "Dr. Schmidt, Tel. 069 1234567.",
+            })
+        finally:
+            _cleanup()
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    sent = mock_http.post.call_args.kwargs["json"]["messages"][-1]["content"]
+    assert sent == "{{STAFF_1}}, Tel. 069 1234567."
+    assert resp.json()["content"] == "Gern, Dr. Schmidt."
+
+
+def test_a_scope_rule_that_cannot_be_read_refuses_the_call_before_any_model_is_asked():
+    rules = [_scope_rule({"category": "CODE", "pattern": "(a+)+"})]
+    client = _make_client(pool=_make_pool(redaction_rules=rules))
+    mock_http = _mock_http()
+    with patch("core.completion.httpx.AsyncClient", return_value=mock_http):
+        try:
+            resp = client.post("/v1/complete", json={
+                "scope_id": str(_SCOPE_ID), "task_type": "summarize", "prompt": "x",
+            })
+        finally:
+            _cleanup()
+    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR, resp.text
+    mock_http.post.assert_not_called()

@@ -33,11 +33,14 @@ seconds of the container log rather than in a dashboard nobody thinks to open.
 input and output would show that something happened, not what. Langfuse is
 self-hosted on the internal network, so the content does not leave the estate —
 but `LANGFUSE_CAPTURE_IO=false` turns it off for deployments where even that is
-too much. Field-level redaction is CHY-63 and belongs there, not here.
+too much. Since CHY-63 what arrives here is already redacted: `core.completion`
+replaces identifiers before the trace starts and records the answer with its
+placeholders, so the trace holds `{{EMAIL_1}}`, never the address. The metadata
+counts the replacements per category, never the values.
 
 Called by:
   - api/main.py       (lifespan: init and shutdown)
-  - api/v1/complete.py
+  - core/completion.py (every model call, since CHY-129)
 
 Dependencies:
   - langfuse (SDK v4 — the v2 `langfuse.trace()` API in the ticket no longer exists)
@@ -45,6 +48,7 @@ Dependencies:
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from contextlib import ExitStack, contextmanager
 from typing import Any, Iterator
 from uuid import UUID
@@ -186,6 +190,7 @@ def completion_trace(
     model: str,
     scope_id: UUID | None,
     block_versions: dict[str, int],
+    redactions: Mapping[str, int] | None = None,
 ) -> Iterator[_Recorder]:
     """One trace per completion.
 
@@ -193,6 +198,10 @@ def completion_trace(
     used says little when X has six versions and only one of them contained the
     sentence in question. It is the same map ComposedContext already carries, so
     the trace and the cache agree on what was composed.
+
+    `redactions` counts what was replaced before the call (CHY-63). Without it a
+    trace full of placeholders cannot be told apart from a prompt that happened
+    to contain braces.
     """
     if _client is None:
         yield _Recorder(None)
@@ -204,6 +213,7 @@ def completion_trace(
         "scope_id": str(scope_id) if scope_id else None,
         "task_type": task_type,
         "routed_model": model,
+        "redactions": dict(redactions or {}),
     }
 
     # ExitStack rather than nested `with`: the try/except must cover only the

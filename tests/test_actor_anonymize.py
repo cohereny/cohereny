@@ -53,7 +53,7 @@ _DEFAULT = object()
 def _make_pool(caller_row=_DEFAULT, target_row=None, remaining_admins=1) -> MagicMock:
     """Pool whose first fetchrow answers the admin check, second the target."""
     if caller_row is _DEFAULT:
-        caller_row = {"id": _CALLER_ID, "role": "admin"}
+        caller_row = {"id": _CALLER_ID, "role": "admin", "is_service_account": False}
 
     conn = MagicMock()
     conn.fetchrow = AsyncMock(return_value=target_row)
@@ -189,7 +189,7 @@ class TestRefusals:
         # The provisioning INSERT and the endpoint's own SELECT both run on the
         # transaction connection; the first answer is the freshly created actor.
         pool._conn.fetchrow = AsyncMock(
-            side_effect=[{"id": _CALLER_ID, "role": "consumer"}, _target()]
+            side_effect=[{"id": _CALLER_ID, "role": "consumer", "is_service_account": False}, _target()]
         )
         client = _make_client(pool)
         try:
@@ -200,7 +200,7 @@ class TestRefusals:
             _cleanup()
 
     def test_non_admin_is_refused(self):
-        pool = _make_pool(caller_row={"id": _CALLER_ID, "role": "reviewer"})
+        pool = _make_pool(caller_row={"id": _CALLER_ID, "role": "reviewer", "is_service_account": False})
         client = _make_client(pool)
         try:
             resp = client.post(f"/v1/admin/actors/{_TARGET_ID}/anonymize")
@@ -210,7 +210,7 @@ class TestRefusals:
             _cleanup()
 
     def test_non_admin_never_reaches_the_update(self):
-        pool = _make_pool(caller_row={"id": _CALLER_ID, "role": "consumer"})
+        pool = _make_pool(caller_row={"id": _CALLER_ID, "role": "consumer", "is_service_account": False})
         client = _make_client(pool)
         try:
             client.post(f"/v1/admin/actors/{_TARGET_ID}/anonymize")

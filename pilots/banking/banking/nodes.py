@@ -101,7 +101,15 @@ def node_metrics_enabled() -> bool:
 # consent — see wait_for_oversight_decision.
 OVERSIGHT_TIMEOUT_SECONDS = 7200
 
-_VALID_DECISIONS = ("approved", "rejected")
+# "cancelled" is not a decision: it is what the gate receives when somebody
+# cancels the run while it waits (CHY-153). A person can submit only the first
+# two (contexts/pilots/run.py, DECISIONS); the third comes from the cancel path.
+# Before it existed, cancelling sent "rejected", and the run was booked as an
+# Art. 14 rejection nobody made.
+_VALID_DECISIONS = ("approved", "rejected", "cancelled")
+
+#: The message a run cancelled at the gate ends with.
+CANCELLED_AT_GATE = "Run cancelled by user at the oversight gate"
 
 
 def set_oversight_gate(event: threading.Event | None, result_holder: list | None) -> None:
@@ -109,7 +117,8 @@ def set_oversight_gate(event: threading.Event | None, result_holder: list | None
 
     Used by the API: the background thread blocks on the event while
     POST /v1/pilots/runs/{id}/oversight writes "approved" or "rejected" into
-    index 0 of result_holder and then sets the event.
+    index 0 of result_holder and then sets the event. Cancelling the run writes
+    "cancelled" instead (CHY-153).
     """
     _ctx.oversight_event = event
     _ctx.oversight_result = result_holder
@@ -128,7 +137,8 @@ def set_oversight_prompt(fn) -> None:
 def wait_for_oversight_decision() -> str:
     """Obtain the human oversight decision (EU AI Act Art. 14).
 
-    Returns "approved", "rejected", or "timeout" — never approval by default.
+    Returns "approved", "rejected", "cancelled" or "timeout" — never approval
+    by default.
 
     Raises OversightGateError when no gate is registered at all, or when a
     registered gate yields something other than a valid decision. Both are
@@ -607,7 +617,9 @@ def node_human_oversight(state: BankingState) -> dict:
       1. Emit "oversight_required" SSE event so the UI shows Freigeben/Ablehnen.
       2. Block on threading.Event (set by POST /v1/pilots/runs/{id}/oversight).
       3. If rejected: raise WorkflowCancelledError → run marked "rejected".
-      4. If approved: return state update and continue to summarize.
+      4. If cancelled while waiting: raise WorkflowCancelledError without an
+         oversight outcome → the run ends like any cancelled run (CHY-153).
+      5. If approved: return state update and continue to summarize.
     """
     check_cancel()
     ratios = state.get("ratios", {})
@@ -645,6 +657,12 @@ def node_human_oversight(state: BankingState) -> dict:
 
     # Block until decision arrives (or timeout after 2 hours)
     decision = wait_for_oversight_decision()
+
+    if decision == "cancelled":
+        # Released, not decided (CHY-153). No oversight_outcome, so the run
+        # ends through the cancel path and no Art. 14 rejection is recorded
+        # for a judgement nobody made.
+        raise WorkflowCancelledError(CANCELLED_AT_GATE)
 
     audit_entry = _audit(
         f"Human Oversight Gate: decision={decision}, Risikoklasse={risk_level}, "

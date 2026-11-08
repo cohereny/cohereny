@@ -20,6 +20,8 @@ from uuid import uuid4
 
 import pytest
 
+from tests.conftest import make_pool, stub_user
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from api.main import _PILOT_STATUS  # noqa: E402
@@ -124,6 +126,12 @@ class TestTheSmallGuards:
         """Case included: "APPROVED" is not the value migration 014 stores."""
         with pytest.raises(InvalidDecision):
             rules.check_decision(decision)
+
+    def test_the_gates_third_value_is_not_a_decision_anyone_can_submit(self):
+        """"cancelled" releases the gate when a run is cancelled (CHY-153). Sent
+        to the oversight endpoint it would be stored as a decision nobody made."""
+        with pytest.raises(InvalidDecision):
+            rules.check_decision("cancelled")
 
     def test_the_gate_is_only_open_while_awaiting(self):
         rules.check_awaiting_oversight("awaiting_oversight")
@@ -295,12 +303,11 @@ class TestStreaming:
         r, run_id = RunRegistry(), uuid4()
         r.open(run_id)
 
-        class Pool:
-            async def fetchrow(self, *_a):
-                return {"status": "running", "events_json": None, "result_json": None}
+        pool = make_pool(fetchrow={"status": "running", "events_json": None, "result_json": None})
 
         async def drive():
-            stream = service.stream_events(Pool(), run_id, registry=r, idle_timeout=0.01)
+            stream = service.stream_events(pool, stub_user(), run_id, registry=r,
+                                           idle_timeout=0.01)
             first = await anext(stream)
             assert first is None, "an idle stream must tick, not invent an event"
             r.push(run_id, {"type": "node_complete"})
@@ -317,13 +324,12 @@ class TestStreaming:
         raise moved to a later step the endpoint would answer HTTP 200 with a
         body explaining that the run does not exist.
         """
-        class Pool:
-            async def fetchrow(self, *_a):
-                return None
+        pool = make_pool(fetchrow=None)
 
         async def drive():
             with pytest.raises(RunNotFound):
-                await anext(service.stream_events(Pool(), uuid4(), registry=RunRegistry()))
+                await anext(service.stream_events(pool, stub_user(), uuid4(),
+                                                  registry=RunRegistry()))
 
         asyncio.run(drive())
 

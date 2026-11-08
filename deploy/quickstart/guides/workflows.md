@@ -19,7 +19,7 @@ compose (context_compose) → draft (llm_call) → review (human_review)
 | `llm_call` | asks a model; which one is decided by the routing rule for its `task_type` |
 | `human_review` | stops the run until a person decides |
 | `fork_gateway`, `join_gateway` | run branches in parallel and wait for them |
-| `sub_workflow` | starts another workflow as its own run |
+| `sub_workflow` | names another workflow; checked for cycles when stored, but not run yet — a run that reaches one ends as `failed` |
 
 A workflow cannot be activated without a `context_compose`, an `llm_call` and a
 `human_review`. A model's output never leaves a workflow without a person having seen
@@ -66,8 +66,8 @@ curl -s -X PUT $API/v1/workflows/$WF -H "Authorization: Bearer $REVIEW" \
   -H 'Content-Type: application/json' -d '{"status": "active"}'
 ```
 
-`validate` lists what is wrong — a missing mandatory node, a model call without a task
-type, a loop without a limit — and activation refuses the same list. A draft cannot be
+`validate` lists what is wrong — a missing mandatory node, a loop without a limit, a
+path from a model call that bypasses the review — and activation refuses the same list. A draft cannot be
 run.
 
 ## Running one
@@ -76,11 +76,27 @@ run.
 as it goes and answers with where it stopped: `awaiting_oversight` at a review,
 `complete`, or `failed` with the reason. Then:
 
+- Who sees a run: whoever started it, members of the workflow's scope and of the
+  scopes above (`POST /v1/scopes/{id}/members`), and `admin`. Everyone else gets 404.
 - `GET /v1/workflows/runs/{run_id}/nodes` — what each step produced, in order; for an
   `llm_call` the answer under `output.content`. **Read this before deciding.**
+- `POST /v1/workflows/runs/{run_id}/resolve` — the same with the names in place of the
+  placeholders (below), for whoever started the run and, from `reviewer` up, whoever sees
+  it. Every call is audited.
 - `POST /v1/workflows/runs/{run_id}/oversight` with `{"decision": "approved"}` or
   `"rejected"`, and a `reason` — needs the `reviewer` role. A rejection ends the run.
+- `POST /v1/workflows/runs/{run_id}/cancel`, optionally with `{"reason": "…"}` — stops a
+  run that has not finished, for whoever started it and, from `reviewer` up, whoever sees
+  it. The run ends as `cancelled`, not as a rejection.
 - `GET /v1/audit-log?target=workflow_run:<run_id>` — the record of it.
+
+Names that must not reach the model go into the input under `identifiers_to_redact`,
+by category: `{"input_data": {"message": "…", "identifiers_to_redact": {"PERSON":
+["Erika Mustermann"]}}}`. E-mail addresses, phone numbers, IBANs and similar patterns
+are replaced without being listed. The run is stored with placeholders — its input,
+every answer, the reason given at the gate — so reading it shows `{{PERSON_1}}`; the
+list itself is not stored. `output.redactions` on each `llm_call` counts what was
+replaced, and `resolve` puts the names back for whoever may see them.
 
 ## Reviews
 
@@ -89,8 +105,10 @@ as it goes and answers with where it stopped: `awaiting_oversight` at a review,
 - `approver` — one reviewer.
 - `four_eyes` — two different reviewers; the same person approving twice is refused.
 
-`review_timeout` (for example `"P2D"`) and `on_timeout` (`reject` or `escalate`) say
-what happens when nobody decides. There is no timeout that approves.
+`review_timeout` (for example `"P2D"`) and `on_timeout` (`reject` or `escalate`) are stored
+with the gate, and an `on_timeout` that approves is refused. Nothing acts on them yet: a run
+nobody decides waits at the gate until someone does, or stops it
+(`POST /v1/workflows/runs/{run_id}/cancel`).
 
 ## Branches
 

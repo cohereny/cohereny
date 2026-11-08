@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from fastapi import status
 
 from tests.conftest import actor_row, client_for, make_pool
 
@@ -233,6 +234,24 @@ class TestDraftOnly:
         assert status in response.json()["detail"]
         assert "draft" in response.json()["detail"]
 
+    @pytest.mark.parametrize("status", ["active", "deprecated"])
+    def test_a_released_workflow_is_not_reopened(self, status: str):
+        """CHY-248: back in draft, its graph could change underneath its runs.
+
+        The double would answer the status update with a draft row, so without
+        the check the request succeeds with 200 — the response, not only the
+        code, says why it was refused.
+        """
+        pool = make_pool(
+            actor=actor_row(role="reviewer"),
+            conn_fetchrow=[_workflow_row(status=status), _workflow_row(status="draft")],
+        )
+        with client_for(pool) as client:
+            response = client.put(f"/v1/workflows/{_WF}", json={"status": "draft"})
+        assert response.status_code == 409, response.text
+        assert status in response.json()["detail"]
+        assert "new version" in response.json()["detail"]
+
     def test_a_node_can_be_added_to_a_draft(self):
         pool = make_pool(
             actor=actor_row(role="contributor"),
@@ -387,3 +406,18 @@ def test_a_structured_guard_is_accepted_and_survives_the_round_trip():
     assert response.json()["condition"] == guard, (
         "the guard did not survive the round trip"
     )
+
+
+def test_a_run_with_unusable_identifiers_to_redact_is_refused_at_the_start():
+    """Checked when the run starts, not at its first model call (CHY-63).
+
+    A run that would fail at its third node over a typo in the list should not
+    be started at all.
+    """
+    pool = make_pool(actor=actor_row(role="contributor"))
+    with client_for(pool) as client:
+        response = client.post(f"/v1/workflows/{_WF}/runs", json={
+            "input_data": {"identifiers_to_redact": {"PERSON": "Erika"}},
+        })
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, response.text
+    assert "must be a list" in response.text

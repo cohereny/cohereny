@@ -45,6 +45,8 @@ from kernel.errors import (
 from kernel.identity import Caller, resolve_actor
 from kernel.schema import (
     PRIVACY_LEVELS,
+    MeOut,
+    MembershipOut,
     ScopeCreate,
     ScopeMemberCreate,
     ScopeNode,
@@ -188,6 +190,25 @@ async def list_members(pool, scope_id: UUID) -> list[dict]:
 
 # ── writing ───────────────────────────────────────────────────────────────────
 
+async def me(pool, caller: Caller) -> MeOut:
+    """Who the caller is to Cohereny: actor id, role and memberships (CHY-92).
+
+    The id is what an admin passes to `add_member`. Before this, the API named
+    it nowhere, so a membership could not be granted through it at all.
+    """
+    actor = await resolve_actor(pool, caller)
+    rows = await pool.fetch(
+        "SELECT scope_id, role FROM scope_memberships WHERE actor_id = $1 "
+        "ORDER BY granted_at, scope_id",
+        actor.id,
+    )
+    return MeOut(
+        actor_id=actor.id, role=actor.role,
+        is_service_account=actor.is_service_account,
+        memberships=[MembershipOut(**dict(r)) for r in rows],
+    )
+
+
 async def create_scope(pool, caller: Caller, body: ScopeCreate) -> ScopeNode:
     """Create a scope. The path is derived from the parent, never given.
 
@@ -247,10 +268,8 @@ async def add_member(pool, caller: Caller, scope_id: UUID,
                      body: ScopeMemberCreate) -> dict:
     """Grant an actor a role in this scope. Admin only.
 
-    A membership records an intent today; it does not yet widen or narrow what
-    anyone may read (CHY-92). Writing it down before that decision is still
-    worth doing — the alternative is deciding scope isolation with no data about
-    who was ever meant to belong where.
+    The member sees the runs of this scope's workflows and of every scope below
+    it (CHY-92, migration 035). The actor's id comes from `GET /v1/me`.
     """
     granter = await resolve_actor(pool, caller)
     require(granter, "admin")
@@ -283,3 +302,13 @@ async def add_member(pool, caller: Caller, scope_id: UUID,
         )
 
     return dict(row)
+
+
+async def all_paths(conn) -> list:
+    """Every scope with its path as text — the whole tree in one read.
+
+    For the retention purge (CHY-17), which needs the period of every scope at
+    once and derives each scope's ancestors from its path rather than asking
+    for one chain per scope.
+    """
+    return await conn.fetch("SELECT id, scope_path::text AS scope_path FROM scope_nodes")

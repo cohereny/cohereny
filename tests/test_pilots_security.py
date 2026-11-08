@@ -275,9 +275,12 @@ class TestOwnership:
         """
         import asyncpg
         pool = self._pool(self._MINE, evidence=3)
-        pool.conn.execute.side_effect = asyncpg.ForeignKeyViolationError(
-            "violates foreign key constraint"
-        )
+        async def refuse_the_delete(sql, *args):
+            # Only the DELETE: the connection first says for whom it acts
+            # (set_config, CHY-92), and that must not be what fails here.
+            if "DELETE" in sql:
+                raise asyncpg.ForeignKeyViolationError("violates foreign key constraint")
+        pool.conn.execute.side_effect = refuse_the_delete
         with client_for(pool) as client:
             resp = client.request("DELETE", f"/v1/pilots/runs/{self._RUN}")
             assert resp.status_code == 409

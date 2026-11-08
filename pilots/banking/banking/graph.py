@@ -160,7 +160,8 @@ def run_workflow(
     set_oversight_prompt(oversight_prompt)
     try:
         with PostgresSaver.from_conn_string(POSTGRES_URI) as checkpointer:
-            checkpointer.setup()
+            # Tables come from migrations/runner.py, created as the migration role:
+            # the application role may not run DDL (CHY-85).
             graph = builder.compile(checkpointer=checkpointer)
             config = {"configurable": {"thread_id": thread_id}, "callbacks": [langfuse]}
             return graph.invoke(_initial_state(pdf_path, model_map), config=config)
@@ -183,7 +184,8 @@ def stream_workflow(
     oversight_gate is a (threading.Event, result_holder) pair. When provided,
     node_human_oversight blocks on the event until the API signals a decision.
     result_holder is a single-element list; the API writes "approved"/"rejected"
-    into index 0 before setting the event.
+    into index 0 before setting the event, or "cancelled" when the run is
+    cancelled at the gate (CHY-153).
 
     node_metrics emits node_metrics events with token usage per LLM call when True.
     It was called dev_mode until CHY-192.
@@ -210,7 +212,8 @@ def stream_workflow(
 
     try:
         with PostgresSaver.from_conn_string(dsn) as checkpointer:
-            checkpointer.setup()
+            # Tables come from migrations/runner.py, created as the migration role:
+            # the application role may not run DDL (CHY-85).
             graph = builder.compile(checkpointer=checkpointer)
             config = {"configurable": {"thread_id": thread_id}, "callbacks": [langfuse]}
 

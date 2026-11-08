@@ -31,12 +31,26 @@ places is that they stop agreeing.
 
 It takes a finished system message and a model id, and calls the model.
 
+What it does on the way: identifiers out, values back (CHY-63)
+---------------------------------------------------------------
+This is the one place that calls a model, which makes it the one place that can
+replace identifiers before they leave -- and the place nobody can forget to
+call. Every request is redacted with `kernel.redaction` before the body is
+built and before the trace starts; the answer is checked the same way and
+recorded with placeholders (CHY-244), and only then are the values put back for
+the caller. For `/v1/complete` the mapping exists for the length of the call and
+is never stored (ADR-018, decided 05.11.2026). A workflow run hands in its own
+mapping and gets the answer back with placeholders and the mapping extended; the
+run seals it (CHY-234).
+
 Dependencies:
-  - httpx · core.tracing
+  - httpx · core.tracing · kernel.redaction
 """
 from __future__ import annotations
 
 import time
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from uuid import UUID
 
@@ -44,6 +58,7 @@ import httpx
 
 from core.errors import CompletionError, ModelRefused, ModelUnreachable
 from core.tracing import completion_trace
+from kernel.redaction import SHIPPED_RULES, Rule, redact, unresolved_in
 
 #: Long enough for a slow local model on a Raspberry Pi, which is the actual
 #: constraint here — the Pi answers a 12 000-character prompt in minutes, not
@@ -76,6 +91,21 @@ class CompletionRequest:
     #: one-word prompt could take five minutes. The API always sets it from
     #: the routing rule; None remains for a direct call that has no rule.
     max_tokens: int | None = None
+    #: Values the caller knows identify someone, by category (CHY-63):
+    #: `{"PERSON": ["Erika Mustermann"]}`. Checked by the caller with
+    #: `kernel.redaction.identifiers_from`; replaced before the call, put back
+    #: in the answer.
+    identifiers_to_redact: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: How identifiers are found. The shipped rules unless a caller passes
+    #: others. Never empty by default: a caller that forgets this field gets
+    #: more protection, not less.
+    redaction_rules: tuple[Rule, ...] = SHIPPED_RULES
+    #: The mapping of the run this call works for (CHY-234), or None outside a
+    #: run. With it, a value the run already knows keeps its placeholder, a new
+    #: one is numbered after it, and the answer comes back *with* placeholders
+    #: -- checked by the same rules first -- because the run stores it. None is
+    #: the `/v1/complete` path: the values are put back, as since CHY-63.
+    run_mapping: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +119,15 @@ class CompletionResult:
     #: Every candidate that was asked, in order, including the one that
     #: answered. Empty for a direct `complete()` — there was no chain.
     attempts: tuple[Attempt, ...] = ()
+    #: Identifiers replaced before the call, per category (CHY-63). Counts,
+    #: never values.
+    redactions: Mapping[str, int] = field(default_factory=dict)
+    #: Placeholders in the answer that could not be put back, left as they
+    #: are: a name the call never handed out, or one the model changed.
+    unresolved_placeholders: int = 0
+    #: The run's mapping after this call, old and new: what the runner seals
+    #: back into `pii_mappings` (CHY-234). None outside a run.
+    run_mapping: Mapping[str, str] | None = None
 
 
 def build_messages(request: CompletionRequest) -> list[dict[str, str]]:
@@ -137,17 +176,38 @@ async def complete(
     The trace spans the model call and nothing else. A cache hit and a cache
     miss have to produce the same trace shape, or a latency comparison across
     runs measures the cache instead of the model (CHY-29).
+
+    The request is redacted first, so the body, the trace and any error text
+    the gateway echoes back carry placeholders only (CHY-63). The answer is
+    redacted too, with the same numbering, before the trace records it: a
+    model can write an address or an account number that no request contained
+    (CHY-244).
+
+    Outside a run the caller then gets the answer as the model gave it, with
+    the values put back. In a run (`request.run_mapping` set, CHY-234) it is
+    not restored: the run stores the redacted answer, numbered on from the
+    run's mapping (decided 06.11.2026, E3).
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    body = build_body(request)
+    redaction = redact(
+        {"system": request.system, "prompt": request.prompt},
+        identifiers=request.identifiers_to_redact,
+        rules=request.redaction_rules,
+        known=request.run_mapping,
+    )
+    outgoing = replace(
+        request, system=redaction.texts["system"], prompt=redaction.texts["prompt"]
+    )
+    body = build_body(outgoing)
 
     with completion_trace(
         actor_id=request.actor_id,
         task_type=request.task_type,
-        prompt=request.prompt,
+        prompt=outgoing.prompt,
         model=request.model,
         scope_id=request.scope_id,
         block_versions=request.block_versions,
+        redactions=redaction.counts,
     ) as trace:
         started = time.perf_counter()
         try:
@@ -177,20 +237,47 @@ async def complete(
         usage = payload.get("usage") or {}
         model_used = payload.get("model", request.model)
 
+        # The answer is checked before anyone records it, in and outside a run:
+        # what the model wrote on its own would otherwise reach the trace as
+        # written (CHY-244).
+        answer = redact(
+            {"content": content},
+            identifiers=request.identifiers_to_redact,
+            rules=request.redaction_rules,
+            known=redaction.replacements,
+        )
+
         trace.record_output(
-            content=content,
+            content=answer.texts["content"],
             model_used=model_used,
             input_tokens=usage.get("prompt_tokens"),
             output_tokens=usage.get("completion_tokens"),
         )
 
+    if request.run_mapping is not None:
+        content = answer.texts["content"]
+        return CompletionResult(
+            content=content,
+            model_used=model_used,
+            input_tokens=usage.get("prompt_tokens"),
+            output_tokens=usage.get("completion_tokens"),
+            latency_ms=latency_ms,
+            trace_id=payload.get("id"),
+            redactions=dict(Counter(redaction.counts) + Counter(answer.counts)),
+            unresolved_placeholders=unresolved_in(content, answer.replacements),
+            run_mapping=answer.replacements,
+        )
+
+    restored = redaction.restore(content)
     return CompletionResult(
-        content=content,
+        content=restored.text,
         model_used=model_used,
         input_tokens=usage.get("prompt_tokens"),
         output_tokens=usage.get("completion_tokens"),
         latency_ms=latency_ms,
         trace_id=payload.get("id"),
+        redactions=redaction.counts,
+        unresolved_placeholders=restored.unresolved,
     )
 
 

@@ -38,8 +38,15 @@ from api.deps import CurrentUser, require_auth
 from api.main import app
 from api.v1.router import SURFACE_PATHS
 from kernel.surfaces import AUDIENCES
-from core.db import get_pool
+from core.db import get_pool, get_system_pool
 from core.redis import get_redis
+from api.config import settings
+from kernel.mapping_cipher import generate_key
+
+# The key that seals each run's placeholder mapping (CHY-234). The API refuses
+# to start without one (E5); one fresh key per test session, unless the
+# environment brings its own.
+settings.pii_mapping_keys = settings.pii_mapping_keys or generate_key("test")
 
 # The one query core.authz.resolve_actor issues. Matching on a fragment rather
 # than the whole string keeps the double working when the SELECT list changes,
@@ -68,8 +75,10 @@ def stub_user(sub: str = "test-sub", username: str = "tester", groups=None,
     return CurrentUser(sub=sub, username=username, groups=groups, audience=audience)
 
 
-def actor_row(actor_id: UUID | None = None, role: str = "admin") -> dict:
-    return {"id": actor_id or DEFAULT_ACTOR_ID, "role": role}
+def actor_row(actor_id: UUID | None = None, role: str = "admin",
+              is_service_account: bool = False) -> dict:
+    return {"id": actor_id or DEFAULT_ACTOR_ID, "role": role,
+            "is_service_account": is_service_account}
 
 
 class _Rows:
@@ -142,6 +151,12 @@ def make_pool(
     conn_fetch   rows for a set-returning query inside a transaction. A
                  callable (sql, *args) -> rows when several such queries in one
                  handler need different answers.
+
+    Without `conn_fetchrow` / `conn_fetch`, a query on an acquired connection is
+    answered like one on the pool — by whatever `pool.fetchrow` / `pool.fetch`
+    is at the time of the call. Since CHY-92 a read on a person's behalf takes a
+    connection (kernel.acting.acting_as) where it used to ask the pool; the rows
+    a test prepared are the same rows.
     """
     actor_value = actor_row() if actor is _UNSET else actor
     config_value = workflow_config_row() if workflow_config is _UNSET else workflow_config
@@ -162,6 +177,8 @@ def make_pool(
     async def _conn_fetchrow(sql, *args):
         if _ACTOR_LOOKUP in sql:
             return actor_value
+        if conn_fetchrow is None:
+            return await pool.fetchrow(sql, *args)
         return conn_rows.next()
 
     conn = MagicMock()
@@ -178,7 +195,9 @@ def make_pool(
     async def _conn_fetch(sql, *args):
         if callable(conn_fetch):
             return list(conn_fetch(sql, *args))
-        return list(conn_fetch or [])
+        if conn_fetch is None:
+            return list(await pool.fetch(sql, *args))
+        return list(conn_fetch)
 
     conn.fetch = AsyncMock(side_effect=_conn_fetch)
     conn.fetchval = AsyncMock(return_value=conn_fetchval)
@@ -294,11 +313,14 @@ def client_for(pool, *, redis=None, user: CurrentUser | None = None):
 
     app.dependency_overrides[require_auth] = as_caller(user or stub_user())
     app.dependency_overrides[get_pool] = lambda: pool
+    # The engine's pool (CHY-92). The same double: a pool double has no row
+    # security, so the two pools differ only in who may reach for which.
+    app.dependency_overrides[get_system_pool] = lambda: pool
     app.dependency_overrides[get_redis] = lambda: redis if redis is not None else make_redis()
     try:
         yield TestClient(app)
     finally:
-        for dep in (require_auth, get_pool, get_redis):
+        for dep in (require_auth, get_pool, get_system_pool, get_redis):
             app.dependency_overrides.pop(dep, None)
 
 

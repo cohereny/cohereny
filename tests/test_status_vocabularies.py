@@ -79,6 +79,8 @@ VOCABULARIES: dict[tuple[str, str], str | None] = {
     ("benchmark_runs", "status"): "contexts.learning.schema:BenchmarkRunStatus",
     ("benchmark_measurements", "variant"): "contexts.learning.schema:MeasurementVariant",
     ("benchmark_measurements", "outcome"): "contexts.learning.schema:MeasurementOutcome",
+    # 030, CHY-17 (ADR-046): the retention classes that take a period.
+    ("retention_policies", "retention_class"): "kernel.schema:ConfigurableRetentionClass",
 }
 
 
