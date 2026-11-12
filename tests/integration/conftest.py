@@ -47,6 +47,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
+import redis.asyncio as aioredis
 from pydantic_settings import BaseSettings
 
 from api.config import settings
@@ -167,3 +168,23 @@ async def workflow(pool, scope) -> UUID:
 def redis() -> Generations:
     """Records the scope generations a block write bumps."""
     return Generations()
+
+
+@pytest.fixture
+async def cache():
+    """A real Redis, for the tests that compose.
+
+    The `redis` fixture counts scope generations and nothing else; composition
+    reads and writes its cache, and the claims of those tests are about the
+    real path -- the key a composition is cached under, and the generation an
+    approval moves. Keys carry the scope's id, so tests do not meet.
+    """
+    if "redis_url" not in settings.model_fields_set:
+        pytest.fail(
+            "REDIS_URL is not set. The tests that compose need a real Redis — "
+            "run them through the `integration` job, or point REDIS_URL at a "
+            "scratch instance."
+        )
+    client = aioredis.from_url(settings.redis_url)
+    yield client
+    await client.aclose()

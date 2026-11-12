@@ -279,7 +279,8 @@ async def supersede(pool, block_id: UUID, fields: dict, *,
 
 
 async def active_blocks_in_scopes(pool, scope_ids: list[UUID],
-                                  block_types: list[str] | None) -> list:
+                                  block_types: list[str] | None, *,
+                                  tags: list[str] | None = None) -> list:
     """The newest approved version of each block across a scope chain.
 
     Only `active`. A draft is somebody's work in progress, a pending_review
@@ -307,6 +308,11 @@ async def active_blocks_in_scopes(pool, scope_ids: list[UUID],
 
     DISTINCT ON needs its expression first in ORDER BY — the inner sort picks
     the version, and only that is the query's job now.
+
+    `tags` (CHY-178) filter **after** the version is chosen, in an outer query.
+    Inside, a block whose newest active version dropped a tag would fall back
+    to an older active version that still carries it, and the older text would
+    reach the prompt with nothing to show for it.
     """
     # Always filtered by type, and that is the change CHY-87 made. Before it,
     # an absent filter meant "everything active in the scope" — correct while
@@ -323,13 +329,16 @@ async def active_blocks_in_scopes(pool, scope_ids: list[UUID],
     ]
 
     return await pool.fetch(
-        "SELECT DISTINCT ON (block_id) "
-        "       block_id, version, block_type, content, scope_id, tags, created_at, "
-        "       governance_key, privacy_impact, locked "
-        "FROM context_blocks "
-        f"WHERE {' AND '.join(where)} "
-        "ORDER BY block_id, version DESC",
-        *args,
+        "SELECT * FROM ("
+        "  SELECT DISTINCT ON (block_id) "
+        "         block_id, version, block_type, content, scope_id, tags, created_at, "
+        "         governance_key, privacy_impact, locked "
+        "  FROM context_blocks "
+        f"  WHERE {' AND '.join(where)} "
+        "  ORDER BY block_id, version DESC"
+        ") AS newest "
+        "WHERE $3::text[] IS NULL OR newest.tags @> $3::text[]",
+        *args, list(tags) if tags else None,
     )
 
 

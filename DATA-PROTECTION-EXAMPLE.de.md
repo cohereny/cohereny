@@ -71,7 +71,11 @@ es die Rechtsabteilung.
 7. **Die Inhalte vergehen.** Der Bereich hält Inhalte sieben Tage — das Ergebnis liegt dann im
    KIS. Danach leert der nächtliche Löschlauf Eingabe, Ausgaben, Begründungen und die Zuordnung.
    Wer gestartet, welches Modell geantwortet und wer freigegeben hat, bleibt 183 Tage
-   (Art. 26(6) KI-Verordnung als Untergrenze), dann wird der Lauf gelöscht.
+   (Art. 26(6) KI-Verordnung als Untergrenze), dann wird der Lauf gelöscht. Sieben Tage für die
+   Inhalte setzen voraus, dass der Workflow als `limited` eingestuft ist, weil der
+   Verantwortliche ihn nicht als Hochrisiko-System bewertet hat (oben, nicht Gegenstand).
+   Stünde er auf `high` oder gar nicht eingestuft, verlangte Cohereny vor dem Aktivieren auch für
+   die Inhalte mindestens 183 Tage (CHY-266), und R6 und R9 wögen anders.
 
 ### Wo was liegt, und wer es lesen kann
 
@@ -140,7 +144,7 @@ tragen davon vor allem:
 | Bereich „Innere Medizin“ mit Datenklasse `critical`; nur das Modell auf eigenen Servern mit Obergrenze `critical` | R1 |
 | Das KIS nennt alle Namen, die es zum Fall kennt, unter `identifiers_to_redact`; ein `redaction_rule`-Block nennt die Beschäftigten und das Format der Fallnummern | R1, R6 |
 | Mitglieder des Bereichs sind die Ärztinnen und Ärzte der Klinik; Freigeben ab Rolle `reviewer`; das KIS-Konto in `chy-service-accounts` | R2, R7 |
-| Inhaltsfrist sieben Tage, Spur 183 Tage; `cc retention purge` nächtlich, Alarm, wenn der letzte Lauf älter als 36 Stunden ist | R6, R9 |
+| Inhaltsfrist sieben Tage, Spur 183 Tage; `cc oversight expire` und `cc retention purge` nächtlich, Alarm, wenn der letzte Lauf älter als 36 Stunden ist | R6, R9 |
 | Schlüssel für die Zuordnungen im Secret Store, Kopie offline beim Datenschutz; nicht im Datenbank-Backup | R3, R8 |
 | Monatliche Auswertung der Audit-Einträge `workflow.run_content_resolved` durch die Datenschutzbeauftragte | R7 |
 | Schulung: Der Entwurf ist kein Befund; wer freigibt, prüft Diagnosen und Dosierungen gegen den Brief | R4 |

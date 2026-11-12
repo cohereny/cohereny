@@ -9,7 +9,8 @@ into the current development line only; there are no maintained release branches
 
 **Please do not report security vulnerabilities in public GitHub issues.**
 
-Report them by email to **security@cohereny.com**.
+Report them privately, by email to **security@cohereny.com** or through GitHub's
+[private vulnerability reporting](https://github.com/cohereny/cohereny/security/advisories/new).
 
 Please include:
 
@@ -24,6 +25,8 @@ You will receive an acknowledgement within **72 hours** and a status update with
 ## Responsible disclosure
 
 - Vulnerabilities are fixed before they are disclosed publicly
+- A fix for a reported vulnerability appears on `next` only with the release that ships it,
+  not before: the tested state between releases is held while such a fix is on its way
 - Reporters are credited in the commit message of the fix, unless they ask not to be
 - No legal action is taken against good-faith security research
 
@@ -91,7 +94,9 @@ welcome.
 - **Authorization per scope covers reading runs, not yet blocks or writing.** A run is
   visible only to whoever started it, to the members of its workflow's scope and of the
   scopes above, and to admin; row-level security enforces it in the database, so a query
-  that does not say for whom sees nothing. It holds against application faults, not
+  that does not say for whom sees nothing. Its audit trail goes to the same people, and so
+  does that of a pilot run or a drawn direct call: anyone else asking the audit log for it
+  gets 404. It holds against application faults, not
   against someone holding the application's database credentials, who can claim to act
   for anyone. Blocks are still readable by every signed-in user, and roles still apply to
   the whole installation, so a contributor can write blocks in any scope.
@@ -112,9 +117,9 @@ welcome.
   second person with the role `reviewer` ends it; there is no setting for it.
 - **Technical accounts must be marked.** Put CI and automation accounts in the
   identity-provider group `chy-service-accounts`. A marked account never approves a block
-  that decides where data goes and does not count as a person. An unmarked one with an
-  approving role counts as a second person, and whoever can use its credentials can approve
-  as it.
+  that decides where data goes, never decides at a workflow gate, never judges a drawn
+  sample, and does not count as a person. An unmarked one with an approving role counts as
+  a second person, and whoever can use its credentials can approve and decide as it.
 - **Identifiers are found by pattern or by name, nothing else.** E-mail addresses, phone
   numbers, IBANs, German tax ids and health insurance numbers and labelled dates of birth
   are found on their own. A name, a postal address or any other identifier that nobody

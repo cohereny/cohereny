@@ -13,7 +13,7 @@ the endpoint should always respond quickly and only report real container failur
 from datetime import datetime, UTC
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
-from api.config import settings
+from core.version import VERSION
 
 router = APIRouter()
 
@@ -27,7 +27,7 @@ class HealthOut(BaseModel):
     """
 
     status: str = Field(..., examples=["ok"])
-    version: str = Field(..., examples=["0.1.0"])
+    version: str = Field(..., examples=["0.2.0"])
     timestamp: datetime
 
 
@@ -35,6 +35,6 @@ class HealthOut(BaseModel):
 async def health() -> HealthOut:
     return HealthOut(
         status="ok",
-        version=settings.api_version,
+        version=VERSION,
         timestamp=datetime.now(UTC),
     )

@@ -609,3 +609,85 @@ def test_oversight_audit_names_both_sides():
     finally:
         registry.forget(run_id)
         _cleanup()
+
+
+# ── what a failed run tells its reader (CHY-97) ───────────────────────────────
+
+class TestAFailedPilotRun:
+    """Until CHY-97 a failed pilot run stored its whole traceback and sent the
+    first 500 characters of it to the client as an event: file paths, and
+    whatever a library put in its message."""
+
+    @staticmethod
+    async def _fail_with(exc: Exception) -> tuple[str, list[dict]]:
+        """Run the thread with a database that raises `exc` on the first write.
+
+        Returns the stored error text and the events the client was sent.
+        """
+        import asyncio
+
+        from contexts.pilots.execution import RunSpec, run_in_thread
+        from contexts.pilots.registry import RunRegistry
+
+        run_id = uuid4()
+        own = RunRegistry()
+        spec = RunSpec(run_id=run_id, pdf_path=pathlib.Path("x.pdf"), thread_id="t",
+                       pilot_name="banking", db_dsn="postgresql://unused", model_used="m")
+        stored = AsyncMock()
+        with (
+            patch("contexts.pilots.execution.store.t_mark_running",
+                  AsyncMock(side_effect=exc)),
+            patch("contexts.pilots.execution.store.t_mark_failed", stored),
+            patch("contexts.pilots.execution.store.t_store_events", AsyncMock()),
+        ):
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, run_in_thread, spec, loop, own.open(run_id), own)
+        await asyncio.sleep(0)  # let the events the thread scheduled arrive
+        events, _ = own.buffers(run_id)
+        return stored.await_args.args[2], [e for e in events if e.get("type") == "error"]
+
+    async def test_an_unexpected_error_is_stored_and_sent_without_its_text(self, caplog):
+        with caplog.at_level("ERROR", logger="contexts.pilots.execution"):
+            stored, sent = await self._fail_with(RuntimeError("could not reach gpu-box.lan:5432"))
+        assert stored == "unexpected error (RuntimeError), details in the application log"
+        assert [e["message"] for e in sent] == [stored]
+        [line] = [r for r in caplog.records if r.name == "contexts.pilots.execution"]
+        assert "gpu-box.lan" in line.exc_text or "gpu-box.lan" in str(line.exc_info[1])
+
+    async def test_a_cancellation_keeps_its_own_words(self):
+        """Counter-probe: a person's cancellation is an outcome, not a defect
+        (CHY-153). Both pilots raise a class of this name."""
+
+        class WorkflowCancelledError(Exception):
+            pass
+
+        stored, _ = await self._fail_with(WorkflowCancelledError("Run cancelled by user"))
+        assert stored == "Run cancelled by user"
+
+
+def test_the_pilot_thread_knows_the_request_that_started_it():
+    """run_in_executor does not take the context along; without the copy the
+    thread's log lines and its error text would name no request (CHY-97)."""
+    import threading
+
+    from kernel import current_call
+
+    seen: list = []
+    ran = threading.Event()
+
+    def record(*_args):
+        seen.append(current_call.current())
+        ran.set()
+
+    pool = _make_pool(conn_fetchrow=_make_run_record())
+    client = _make_client(pool)
+    with _real_input_file(), patch("contexts.pilots.service.run_in_thread", side_effect=record):
+        try:
+            resp = client.post("/v1/pilots/runs", json={"input_file": "study-example.pdf"})
+            assert resp.status_code == 201, resp.text
+            assert ran.wait(timeout=5), "the thread never ran"
+        finally:
+            registry.forget(_RUN_ID)
+            _cleanup()
+    [call] = seen
+    assert call is not None and call.request_id == resp.headers["X-Request-ID"]

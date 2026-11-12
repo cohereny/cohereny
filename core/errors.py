@@ -14,7 +14,19 @@ from __future__ import annotations
 
 
 class CompletionError(Exception):
-    """Base class, so the transport layer can catch the family in one handler."""
+    """Base class, so the transport layer can catch the family in one handler.
+
+    Two texts, for two audiences (CHY-97). `str()` is what may leave the
+    installation: what went wrong, and nothing about where. `detail` is the
+    gateway's own account — its status, its body, the address it could not
+    reach — and belongs in the application log and the trace, never in a
+    response, a stored run or the audit log.
+
+    Until CHY-97 there was only one, and it was the second: a 502 of 14.08.2026
+    told an arbitrary caller the private address and port of an inference host.
+    """
+
+    detail: str
 
 
 class ModelRefused(CompletionError):
@@ -26,9 +38,15 @@ class ModelRefused(CompletionError):
     Retrying it unchanged will fail again.
     """
 
-    def __init__(self, status_code: int, body: str) -> None:
+    def __init__(self, status_code: int, body: str, *, retry_after: str | None = None) -> None:
         self.status_code = status_code
-        super().__init__(f"LiteLLM error {status_code}: {body[:200]}")
+        self.detail = f"LiteLLM error {status_code}: {body[:200]}"
+        # The header as sent, for the cooldown after a 429 (CHY-159). Kept raw:
+        # it is a number of seconds or a date, and reading it needs a clock.
+        self.retry_after = retry_after
+        # The status stays: it tells the caller whether to wait (429) or to
+        # change the request (400), and it says nothing about the inside.
+        super().__init__(f"the model gateway refused the request (status {status_code})")
 
 
 class ModelUnreachable(CompletionError):
@@ -39,4 +57,5 @@ class ModelUnreachable(CompletionError):
     """
 
     def __init__(self, cause: str) -> None:
-        super().__init__(f"LiteLLM unreachable: {cause}")
+        self.detail = f"LiteLLM unreachable: {cause}"
+        super().__init__("the model gateway is unreachable")

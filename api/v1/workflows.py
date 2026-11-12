@@ -28,17 +28,23 @@ Dependencies:
   - api.deps · contexts.orchestration.service · core.db
 """
 import functools
+import json
 from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path, Request
 
 from api.deps import CurrentUser, require_auth
 from api.v1._planned import not_implemented, planned
 from api.v1._responses import FORBIDDEN, NOT_FOUND
 from api.config import settings
 from contexts.orchestration import service
-from contexts.orchestration.errors import NodeExecutionFailed, NodeTypeNotExecutable
+from contexts.orchestration.errors import (
+    DocumentTooLarge,
+    NodeExecutionFailed,
+    NodeTypeNotExecutable,
+)
 from contexts.orchestration.service import (
     RUN_INPUT,
     ExecutorRegistry,
@@ -51,6 +57,7 @@ from contexts.orchestration.schema import (
     OversightDecision,
     NodeCreate,
     RunCancelRequest,
+    RunDocumentsOut,
     RunNodesOut,
     RunResolvedOut,
     RunResolveRequest,
@@ -67,9 +74,11 @@ from contexts.orchestration.schema import (
 from contexts.repository import service as repository
 from contexts.repository.schema import ComposeRequest
 from core.db import get_pool, get_system_pool
+from core.cooldown import ModelCooldown
 from core.redis import get_redis
 from api.v1._redaction import mapping_keys, policy_or_shipped, redaction_policy_for
 from api.v1._routing import route_for, router_config
+from kernel import current_call
 from kernel.audit import ACTION_ROUTING_FELL_BACK, target_ref, write_audit
 from kernel.errors import InvalidIdentifiers, MalformedRedactionRule, ScopeNotFound
 from kernel.redaction import Rule, identifiers_from, identifiers_in, merged
@@ -84,7 +93,9 @@ router = APIRouter()
 # refuses. The same reading as the block lifecycle (CHY-32).
 _GRAPH_CONFLICT = {
     409: {"description": "The workflow is not a draft, or its graph does not "
-                         "validate. See CHY-82."}
+                         "validate (CHY-82) — or, on activation, it counts as "
+                         "high-risk and its scope keeps logs for less than six "
+                         "months (AI Act Art. 26(6), CHY-266)."}
 }
 
 
@@ -104,6 +115,15 @@ async def create_workflow(
     pool=Depends(get_pool),
 ) -> WorkflowDefinition:
     return await service.create_workflow(pool, actor, body)
+
+
+def get_placeholders(pool=Depends(get_pool)) -> service.Placeholders:
+    """What a run's content is stored with (CHY-234): the scope's redaction
+    rules, read where the repository may be read, and the keys that seal each
+    run's mapping. Part of the engine, and on its own for a reason written at
+    the review queue (api/v1/samples.py)."""
+    return service.Placeholders(
+        policy_for=functools.partial(policy_or_shipped, pool), keys=mapping_keys())
 
 
 @router.get("/{workflow_id}", response_model=WorkflowDefinition, responses=NOT_FOUND)
@@ -147,7 +167,8 @@ async def set_workflow_status(
     Back to `draft` only from `draft`: a released or retired workflow answers
     **409**, because in draft its graph could change underneath its runs.
     """
-    return await service.set_workflow_status(pool, actor, workflow_id, body)
+    return await service.set_workflow_status(pool, actor, workflow_id, body,
+                                             limits=document_limits())
 
 
 @router.get("/{workflow_id}/graph", response_model=WorkflowDefinition, responses=NOT_FOUND)
@@ -175,7 +196,8 @@ async def validate_workflow(
     that ran successfully and found problems *succeeded* — reporting it as 4xx
     would conflate "your request was wrong" with "your workflow is".
     """
-    return await service.validate_workflow(pool, actor, workflow_id)
+    return await service.validate_workflow(pool, actor, workflow_id,
+                                           limits=document_limits())
 
 
 @router.post(
@@ -297,6 +319,9 @@ def _compose_for(pool, redis):
                 model_id=None,
                 block_types=(ctx.context_requirements.block_types
                              if ctx.context_requirements else None),
+                # A prompt per step (CHY-178): only blocks with these tags.
+                tags=(ctx.context_requirements.tags
+                      if ctx.context_requirements else None),
             ),
         )
         return NodeResult(output={
@@ -360,13 +385,37 @@ async def _with_scope_rules(
     return policy.rules, merged(policy.identifiers, named)
 
 
-def _call_model_for(pool):
+def _as_prompt(value: Any) -> str:
+    """A prompt as the model reads it (CHY-178).
+
+    Text stays text. An object — several upstream values mapped into one prompt
+    by dotted targets — becomes sections: a heading per key, text as it came,
+    anything else as indented JSON. A document's text keeps its fence this way;
+    inside a JSON string its markers and line breaks would be escaped. The
+    instruction comes from the composed system message, the data from here.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return "\n\n".join(
+            f"## {key}\n{item if isinstance(item, str) else _json_text(item)}"
+            for key, item in value.items())
+    return _json_text(value)
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _call_model_for(pool, redis=None):
     """Build the `llm_call` executor for this request.
 
     A closure for the reason `_compose_for` is one: resolving a model reads the
     routing rules of the scope tree, which takes a pool, and `NodeContext`
-    deliberately carries none.
+    deliberately carries none. The stage's Redis comes along for the cooldown
+    of models that keep answering 429 (CHY-159); without one, none is kept.
     """
+    cooldown = ModelCooldown(redis) if redis is not None else None
 
     async def _call_model(ctx: NodeContext) -> NodeResult:
         """Execute an `llm_call` node.
@@ -396,6 +445,10 @@ def _call_model_for(pool):
         "run.message"}` now gives the context as instructions and the input as
         the request — the split `/v1/complete` makes (system = composition,
         user = prompt). The config wins where both are set, as for the prompt.
+
+        **A node with an output schema asks for JSON** (CHY-175). Only the
+        asking happens here; whether the answer matches is checked by the
+        service after this returns, so no executor can skip it.
         """
         if ctx.scope_id is None:
             reason = (
@@ -411,7 +464,7 @@ def _call_model_for(pool):
             reason = f"Node {ctx.node_ref} has no task_type to be routed by."
             raise NodeTypeNotExecutable(ctx.node_type, ctx.node_ref, reason=reason)
 
-        prompt = ctx.config.get("prompt") or ctx.input_data.get("prompt", "")
+        prompt = _as_prompt(ctx.config.get("prompt") or ctx.input_data.get("prompt", ""))
         if not prompt:
             reason = (
                 f"Node {ctx.node_ref} has no prompt. Neither its config nor its "
@@ -446,6 +499,9 @@ def _call_model_for(pool):
                     # A node has no field of its own for this: the rule's limit
                     # is the one a run gets (CHY-166).
                     max_tokens=rule.max_tokens,
+                    # With an output schema the gateway is asked for JSON; the
+                    # service checks the answer against the schema (CHY-175).
+                    json_object=ctx.output_schema is not None,
                     identifiers_to_redact=identifiers,
                     redaction_rules=redaction_rules,
                     # Set for a run that keeps its placeholders (CHY-234): the
@@ -456,12 +512,17 @@ def _call_model_for(pool):
                 candidates,
                 base_url=settings.litellm_base_url,
                 api_key=settings.litellm_api_key,
+                cooldown=cooldown,
             )
         except completion.CompletionError as exc:
+            # The run keeps the generic text and the request's id; what the
+            # gateway said is in the application log under that id (CHY-97).
             raise NodeExecutionFailed(
                 ctx.node_ref,
-                f"no candidate for task type {ctx.task_type!r} answered "
-                f"({', '.join(candidates)}): {exc}",
+                current_call.with_reference(
+                    f"no candidate for task type {ctx.task_type!r} answered "
+                    f"({', '.join(candidates)}): {exc}"
+                ),
             ) from exc
 
         if result.model_used != candidates[0]:
@@ -522,7 +583,7 @@ def get_executors(
     `complete` without doing the work, which is indistinguishable from success.
     """
     return ExecutorRegistry({
-        "llm_call": _call_model_for(pool),
+        "llm_call": _call_model_for(pool, redis),
         "context_compose": _compose_for(pool, redis),
     })
 
@@ -530,7 +591,7 @@ def get_executors(
 def get_engine(
     executors: ExecutorRegistry = Depends(get_executors),
     system_pool=Depends(get_system_pool),
-    pool=Depends(get_pool),
+    placeholders: service.Placeholders = Depends(get_placeholders),
 ) -> service.Engine:
     """The executors and the system pool the engine advances runs in (CHY-92).
 
@@ -540,11 +601,7 @@ def get_engine(
     With them the placeholders (CHY-234): the scope's redaction rules, read
     where the repository may be read, and the keys that seal each run's mapping.
     """
-    return service.Engine(
-        registry=executors, pool=system_pool,
-        placeholders=service.Placeholders(
-            policy_for=functools.partial(policy_or_shipped, pool), keys=mapping_keys()),
-    )
+    return service.Engine(registry=executors, pool=system_pool, placeholders=placeholders)
 
 
 @router.post(
@@ -570,6 +627,11 @@ async def start_run(
     Only an **active** workflow can be run. A draft has not passed the
     validator, and the validator is what guarantees the mandatory nodes and a
     limit on every back edge (ADR-004, CHY-82).
+
+    A workflow with **`document` nodes** answers `awaiting_documents`: nothing
+    has run yet. Its documents are uploaded one by one
+    (`PUT /runs/{run_id}/documents/{name}`), and the last one starts the run
+    (ADR-049).
     """
     advance = await service.start_workflow_run(pool, actor, workflow_id, body, engine=engine)
     return advance.run
@@ -660,6 +722,134 @@ async def cancel_run(
     """
     return await service.cancel_run(
         pool, actor, run_id, body or RunCancelRequest(), engine=engine)
+
+
+# ── documents of a run (CHY-174, ADR-049) ─────────────────────────────────────
+
+def document_limits() -> service.DocumentLimits:
+    """The installation's ceiling for one document, from the configuration.
+
+    A dependency of the transport because the configuration is: the context
+    may not import it (ADR-030), so it is handed in like the mapping keys.
+    """
+    return service.DocumentLimits(max_bytes=settings.document_max_bytes,
+                                  max_pages=settings.document_max_pages)
+
+
+#: The upload takes the file as the body, typed by Content-Type — no multipart,
+#: no JSON around it (ADR-049). Declared here because the route reads the raw
+#: body and FastAPI would otherwise publish no request body at all.
+_DOCUMENT_BODY = {
+    "requestBody": {
+        "required": True,
+        "content": {media_type: {"schema": {"type": "string", "format": "binary"}}
+                    for media_type in ("application/pdf", "text/plain")},
+    }
+}
+
+_DOCUMENT_REFUSED = {
+    409: {"description": "The run no longer waits for documents, or this one "
+                         "has arrived before (ADR-049)."},
+    410: {"description": "The run's content was cleared at the end of its period."},
+    413: {"description": "Larger than the node's limit or the installation's."},
+    415: {"description": "Not application/pdf or text/plain."},
+    422: {"description": "Too many pages, no text layer, encrypted, not parseable "
+                         "or not UTF-8 text."},
+}
+
+#: Lower case, digits, underscores — as migration 041 holds `document_name`.
+_DOCUMENT_NAME = Path(pattern=r"^[a-z][a-z0-9_]{0,62}$")
+
+
+async def _body_up_to(request: Request, limit: int) -> bytes:
+    """The request body, read no further than `limit` bytes.
+
+    A declared Content-Length above the limit is refused before a byte is
+    read; a body that keeps coming past it is cut off there. Either way the
+    service never holds more than the installation allows.
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise DocumentTooLarge(limit, installation_limit=limit, size=int(declared))
+    received = bytearray()
+    async for chunk in request.stream():
+        received += chunk
+        if len(received) > limit:
+            raise DocumentTooLarge(limit, installation_limit=limit)
+    return bytes(received)
+
+
+@router.get(
+    "/runs/{run_id}/documents",
+    response_model=RunDocumentsOut,
+    responses=NOT_FOUND,
+)
+async def get_run_documents(
+    run_id: UUID,
+    actor: CurrentUser = Depends(require_auth),
+    pool=Depends(get_pool),
+) -> RunDocumentsOut:
+    """Which documents the run expects, and what arrived for each (ADR-049).
+
+    Without their text. A run whose workflow has `document` nodes waits as
+    `awaiting_documents` until every one has arrived; this says which are
+    still missing.
+    """
+    return await service.run_documents(pool, actor, run_id)
+
+
+async def _document_upload(request: Request, run_id: UUID,
+                           name: str = _DOCUMENT_NAME) -> service.DocumentUpload:
+    """The upload as one thing: which run, which document, which bytes and type.
+
+    A dependency, so the route below names the upload once instead of four
+    path, body and header details.
+
+    The body of a caller who is not signed in is never read. What ensures it is
+    the router's surface gate (`require_surface`, api/v1/router.py): it checks
+    the token before any dependency of the route runs. The route asks for the
+    sign-in before the upload as well, but that order is the second line, not
+    the first — swapping it changes nothing, as the counter-probe showed.
+    """
+    return service.DocumentUpload(
+        run_id=run_id, name=name,
+        data=await _body_up_to(request, settings.document_max_bytes),
+        content_type=request.headers.get("content-type"),
+    )
+
+
+@router.put(
+    "/runs/{run_id}/documents/{name}",
+    response_model=RunDocumentsOut,
+    responses={**FORBIDDEN, **NOT_FOUND, **_DOCUMENT_REFUSED},
+    openapi_extra=_DOCUMENT_BODY,
+)
+async def upload_document(
+    actor: CurrentUser = Depends(require_auth),
+    upload: service.DocumentUpload = Depends(_document_upload),
+    pool=Depends(get_pool),
+    engine: service.Engine = Depends(get_engine),
+) -> RunDocumentsOut:
+    """Upload one document of a run; the last one starts the run (ADR-049).
+
+    The file is the body, its type the `Content-Type`: `application/pdf` or
+    `text/plain`, e.g. `curl -T statement.pdf -H 'Content-Type: application/pdf'`.
+
+    **Only whoever started the run**, only while it is `awaiting_documents`,
+    only a name its workflow has a `document` node for, and each name once.
+    There is no upload token: the run is the binding.
+
+    A PDF is read to text here — one without a text layer is refused, there is
+    no text recognition —, the text is scanned for instruction-shaped content
+    and stored with the run's placeholders. The file is not kept. The scan's
+    findings, counted by kind and rule, are in the answer and in the audit
+    entry `workflow.run_document_received`; they do not stop the run.
+
+    With the last document the run starts in this call, and the status in the
+    answer is where it got to: `awaiting_oversight`, `complete`, `failed`.
+    """
+    return await service.receive_document(pool, actor, upload, engine=engine,
+                                          limits=document_limits())
 
 
 @router.post(

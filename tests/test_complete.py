@@ -15,9 +15,11 @@ Tests cover: routing, block injection, auth, error handling.
 """
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, UTC
+from decimal import Decimal
 from uuid import uuid4
 
 import httpx
+import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
@@ -33,7 +35,21 @@ _NOW = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
 _BLOCK_ID = uuid4()
 
 
-_CHAIN = [{"id": _SCOPE_ID, "scope_path": "org_x", "node_type": "org", "name": "x", "depth": 1, "privacy_level": None}]
+#: A scope where /v1/complete may answer at all (CHY-199): internal data and
+#: direct calls classified minimal, the one combination that asks only for
+#: sample review. What refuses a direct call is tested in tests/test_direct_calls.py.
+_CHAIN = [{"id": _SCOPE_ID, "scope_path": "org_x", "node_type": "org", "name": "x", "depth": 1,
+           "privacy_level": "internal", "direct_call_risk_class": "minimal",
+           "direct_call_sample_rate": Decimal("0.05")}]
+
+
+@pytest.fixture(autouse=True)
+def _nothing_drawn(monkeypatch):
+    """A share of direct calls is drawn for review (CHY-269), by a hash of a
+    fresh id. These tests are about the call itself, so none is drawn here;
+    tests/test_direct_calls.py draws, with ids it chose."""
+    monkeypatch.setattr("api.v1.complete.orchestration.draw_direct_call",
+                        AsyncMock(return_value=None))
 
 
 def _block(content: str, **kw) -> dict:
@@ -218,6 +234,44 @@ def test_complete_litellm_unreachable_503():
             assert resp.status_code == 503
         finally:
             _cleanup()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (httpx.ConnectError("Cannot connect to host gpu-box.lan:11434"), 503),
+        (
+            httpx.HTTPStatusError(
+                "e", request=MagicMock(),
+                response=MagicMock(status_code=500, text="upstream gpu-box.lan:11434 down"),
+            ),
+            502,
+        ),
+    ],
+    ids=["unreachable", "refused"],
+)
+def test_a_gateway_failure_leaves_without_its_host(failure, expected):
+    """Finding B6 of the audit of 14.08.2026, through the endpoint (CHY-97).
+
+    The 502 of that day named a private address and port to the caller. Now
+    the answer says what went wrong and which request it was; the rest is in
+    the application log under that id.
+    """
+    client = _make_client()
+    mock_http = AsyncMock()
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=False)
+    mock_http.post = AsyncMock(side_effect=failure)
+    with patch("core.completion.httpx.AsyncClient", return_value=mock_http):
+        try:
+            resp = client.post("/v1/complete", json={
+                "scope_id": str(_SCOPE_ID), "task_type": "summarize", "prompt": "test"})
+        finally:
+            _cleanup()
+
+    assert resp.status_code == expected
+    assert "gpu-box" not in resp.text
+    assert resp.json()["detail"].endswith(f"(request ID {resp.headers['X-Request-ID']})")
 
 
 def test_complete_refuses_a_task_type_nobody_decided():
@@ -502,6 +556,9 @@ def test_a_fallback_is_written_to_the_audit_log():
     assert payload["answered"] == "phi3-mini"
     assert [a["outcome"] for a in payload["attempts"]] == ["refused", "answered"]
     assert "502" in payload["attempts"][0]["detail"]
+    # The audit log is kept for good; the gateway's words stay in the
+    # application log, which is not (CHY-97).
+    assert "backend unavailable" not in payload["attempts"][0]["detail"]
 
 
 def test_no_audit_entry_when_the_first_candidate_answers():
@@ -587,6 +644,69 @@ def test_named_identifiers_never_reach_the_model_and_come_back_in_the_answer():
     assert data["content"] == "Liebe Erika Mustermann, Ihr Termin steht."
     assert data["redactions"] == {"PERSON": 1, "EMAIL": 1}
     assert data["unresolved_placeholders"] == 0
+
+
+def test_a_drawn_call_is_kept_with_placeholders_and_named_in_the_answer(monkeypatch):
+    """CHY-269: the scope draws a share for a check afterwards. What is kept is
+    what the model saw and gave — placeholders —, never the values the caller
+    gets back; and the answer names the sample, so a later objection can be
+    traced to the call."""
+    drawn_id = uuid4()
+    draw = AsyncMock(return_value=drawn_id)
+    monkeypatch.setattr("api.v1.complete.orchestration.draw_direct_call", draw)
+    client = _make_client()
+    mock_http = _mock_http("Liebe {{PERSON_1}}, Ihr Termin steht.")
+    with patch("core.completion.httpx.AsyncClient", return_value=mock_http):
+        try:
+            resp = client.post("/v1/complete", json={
+                "scope_id": str(_SCOPE_ID), "task_type": "summarize",
+                "prompt": "Schreib Erika Mustermann (erika@example.de) eine Zusage.",
+                "identifiers_to_redact": {"PERSON": ["Erika Mustermann"]},
+            })
+        finally:
+            _cleanup()
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    assert resp.json()["content"] == "Liebe Erika Mustermann, Ihr Termin steht."
+    assert resp.json()["sample_id"] == str(drawn_id)
+
+    _pool, call, rate = draw.await_args.args
+    assert rate == Decimal("0.05")
+    assert call.prompt == "Schreib {{PERSON_1}} ({{EMAIL_1}}) eine Zusage."
+    assert call.answer == "Liebe {{PERSON_1}}, Ihr Termin steht."
+    assert "Erika" not in call.prompt + call.answer
+    assert "erika@" not in call.prompt + call.answer
+    assert (call.scope_id, call.task_type, call.model_used) == (_SCOPE_ID, "summarize", "gemma3-4b")
+
+
+def test_a_call_not_drawn_says_so():
+    """Counter-probe: nothing drawn, nothing named (the module draws nothing)."""
+    client = _make_client()
+    with patch("core.completion.httpx.AsyncClient", return_value=_mock_http()):
+        try:
+            resp = client.post("/v1/complete", json={
+                "scope_id": str(_SCOPE_ID), "task_type": "summarize", "prompt": "p"})
+        finally:
+            _cleanup()
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    assert resp.json()["sample_id"] is None
+
+
+def test_minimal_without_a_share_is_refused_before_any_model_is_asked():
+    """Only a classification from before migration 048 has no share (CHY-269):
+    refused, not answered unchecked."""
+    chain = [{**_CHAIN[0], "direct_call_sample_rate": None}]
+    mock_http = _mock_http()
+    with patch("tests.test_complete._CHAIN", chain), \
+            patch("core.completion.httpx.AsyncClient", return_value=mock_http):
+        client = _make_client()
+        try:
+            resp = client.post("/v1/complete", json={
+                "scope_id": str(_SCOPE_ID), "task_type": "summarize", "prompt": "p"})
+        finally:
+            _cleanup()
+    assert resp.status_code == status.HTTP_409_CONFLICT, resp.text
+    assert "no share of them is drawn" in resp.json()["detail"]
+    mock_http.post.assert_not_called()
 
 
 def test_unusable_identifiers_are_refused_before_any_model_is_asked():

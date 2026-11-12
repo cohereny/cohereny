@@ -76,6 +76,15 @@ ACTION_RETENTION_PURGED = "retention.purged"
 ACTION_BLOCK_PROMOTED = "block.promoted"
 ACTION_SCOPE_CREATED = "scope.created"
 ACTION_SCOPE_MEMBER_ADDED = "scope.member_added"
+# Who classified direct model calls in a scope, from what to what (CHY-199). The
+# table keeps every setting too; the log is where an auditor looks first.
+ACTION_SCOPE_DIRECT_CALL_RISK_CLASS_SET = "scope.direct_call_risk_class_set"
+# The competence order of a scope (CHY-180, ADR-050): an area that votes at a
+# gate, and who belongs to it. A revocation is an entry of its own — the row
+# keeps its date, the log keeps every change, a grant again included.
+ACTION_REVIEW_AREA_CREATED = "review_area.created"
+ACTION_REVIEW_AREA_MEMBER_ADDED = "review_area.member_added"
+ACTION_REVIEW_AREA_MEMBER_REVOKED = "review_area.member_revoked"
 # EU AI Act Art. 14. The decision was already stored on the run; without an
 # entry here there was no record of who made it (CHY-88).
 ACTION_PILOT_RUN_STARTED = "pilot.run_started"
@@ -113,6 +122,36 @@ ACTION_RUN_CONTENT_RESOLVED = "workflow.run_content_resolved"
 # nodes were stopped -- the reason stays with the run, where its period clears
 # it, not in a log that is kept for good.
 ACTION_RUN_CANCELLED = "workflow.run_cancelled"
+# A document arrived for a run and was read and scanned (CHY-174, ADR-049).
+# Name, size, pages, what was replaced per category and the findings by kind
+# and rule -- also when there are none: "scanned, nothing" is a different
+# answer from "never scanned". Never an excerpt: that would be document text.
+ACTION_RUN_DOCUMENT_RECEIVED = "workflow.run_document_received"
+# Nobody decided at a gate (CHY-254, ADR-050): the run ended as `expired` after
+# the gate's time limit or the content period. No actor -- no person acted, and
+# the entry says so by naming none.
+ACTION_RUN_EXPIRED = "workflow.run_expired"
+# A gate escalated along its escalation edge to a further gate (ADR-050): on a
+# timeout, and from CHY-180 on when votes differ. Gate, reason, target -- never
+# content.
+ACTION_RUN_ESCALATED = "workflow.run_escalated"
+# A run reached a gate (CHY-223, ADR-050): which review level applied and why —
+# the gate as drawn, the data class of its scope, the workflow's risk class —
+# and whether the areas of the gate before had disagreed. No actor: the engine
+# reached it, no person did.
+ACTION_RUN_GATE_REACHED = "workflow.run_gate_reached"
+# A person judged a pass of a sample gate afterwards (CHY-223): confirmed or
+# objected. The reason stays with the run, not in the log.
+ACTION_SAMPLE_REVIEWED = "workflow.sample_reviewed"
+# The same for a direct call drawn for review (CHY-269). Its reason stays with
+# the sample and is cleared with the scope's content period.
+ACTION_DIRECT_CALL_SAMPLE_REVIEWED = "direct_call.sample_reviewed"
+# A loop used up its loop_limit (CHY-150): which node, which edge, the limit,
+# and where the run went — on along the other edges, or failed. The approval
+# question "criterion met, or budget spent?" is answered here and not only by
+# a counter somebody has to know to compare. No actor: the engine stopped the
+# loop, no person did.
+ACTION_RUN_LOOP_EXHAUSTED = "workflow.loop_exhausted"
 
 
 def target_ref(entity_type: str, entity_id: UUID | str) -> str:

@@ -47,6 +47,7 @@ async def purge(dsn: str, *, dry_run: bool) -> dict[str, int]:
             periods = await retention.current_periods(conn)
             counts: dict[str, int] = {}
             counts.update(await orchestration.purge_runs(conn, periods))
+            counts.update(await orchestration.purge_direct_samples(conn, periods))
             counts.update(await pilots.purge_runs(conn, periods))
             counts.update(await learning.purge_feedback(
                 conn, periods, await orchestration.workflow_scopes(conn)))

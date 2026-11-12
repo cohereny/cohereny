@@ -112,13 +112,30 @@ class TestThroughTheApi:
             })
         assert response.status_code == 201, response.text
         assert response.json()["context_requirements"] == {
-            "block_types": ["system_prompt"]
+            "block_types": ["system_prompt"], "tags": None,
         }
         # Parameter $8 of the INSERT, cast to jsonb. Asserted on the wire and
         # not only on the response, because the response is built from the row
         # the double handed back — which would look identical if the value
-        # never reached the query.
+        # never reached the query. No `tags` key, not `"tags": null`: the CHECK
+        # in 046 takes `tags` only as a non-empty array (CHY-178).
         assert json.loads(self._stored(pool)[8]) == {"block_types": ["system_prompt"]}
+
+    def test_the_tags_reach_the_column(self):
+        """CHY-178: a step that asks for its own prompt by tag."""
+        wanted = {"block_types": ["system_prompt"], "tags": ["banking:risiko"]}
+        pool = make_pool(
+            actor=actor_row(role="contributor"),
+            conn_fetchrow=[_workflow_row(), None,
+                           _node_row("compose", "context_compose", context_requirements=wanted)],
+        )
+        with client_for(pool) as client:
+            response = client.post(f"/v1/workflows/{_WF}/nodes", json={
+                "node_ref": "compose", "node_type": "context_compose",
+                "context_requirements": wanted,
+            })
+        assert response.status_code == 201, response.text
+        assert json.loads(self._stored(pool)[8]) == wanted
 
     def test_a_node_without_requirements_stores_null_not_an_empty_object(self):
         """NULL and `{}` would be two spellings of "no requirements", and the

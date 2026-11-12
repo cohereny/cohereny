@@ -19,6 +19,18 @@ lets a person approve them:
             workflow "Draft a reply to a customer"
               compose → draft (llm_call) → review (human_review)
 
+    Help Center                        org, strict, data class `internal`
+      shipping and returns             user_context
+      routing: summarize → the local model
+      direct calls classified `minimal`: /v1/complete answers here
+
+Two roots, because a direct call answers only where an answer may be used
+unchecked (CHY-199, ADR-050). Example Corp holds customer data, `confidential`,
+and asks for a person before an answer is used: there the model is reached
+through the workflow. The help center holds texts meant for customers anyway,
+`internal`, and an architect classified direct calls in it as minimal risk. It
+cannot sit below Example Corp: the strictest data class on a chain applies.
+
 Why through the API and not as SQL: the example should be made the way a user
 would make it, so it shows what the API asks for — and so the audit log of a
 fresh quickstart already tells the story. Two people are involved on purpose:
@@ -29,9 +41,10 @@ and the scopes above, and to admin (CHY-92) — without the membership the
 reviewer would not find the run they are to decide.
 
 A second run finds "Example Corp" and leaves the example as it is. It only adds
-the reviewer's membership if it is missing: a quickstart seeded before
-2026-11-08 has none, and after an update its reviewer would see no run
-(CHY-249). QUICKSTART_SEED=false skips it altogether.
+what an older seed lacks: the reviewer's membership (before 2026-11-08 there was
+none, and after an update the reviewer would see no run, CHY-249) and the help
+center (before CHY-199 step 3 asked the model in Example Corp's project, which
+now refuses a direct call). QUICKSTART_SEED=false skips it altogether.
 
 Environment:
     API_URL           where the API is reached (Compose: http://api:8000)
@@ -57,6 +70,7 @@ MODEL = os.environ.get("QUICKSTART_MODEL", "qwen2.5:1.5b")
 ORG = "Example Corp"
 TEAM = "Customer Support"
 PROJECT = "Order inquiries"
+HELP_CENTER = "Help Center"
 WORKFLOW = "Draft a reply to a customer"
 
 #: The task type the workflow's model call is routed by. A routing rule in the
@@ -105,6 +119,11 @@ RULE_REASON = (
     "Customer messages contain personal data (see the data rule of Example "
     "Corp), so replies are drafted by the local model only. Length limited to "
     "what a support reply needs."
+)
+
+HELP_RULE_REASON = (
+    "Help-center texts are written for customers and hold no personal data. "
+    "The local model summarises them; length limited to a short answer."
 )
 
 
@@ -195,12 +214,27 @@ def direct_block(author: httpx.Client, label: str, **body) -> str:
 
 
 def routing_rule(author: httpx.Client, reviewer: httpx.Client, scope_id: str,
-                 task_type: str, max_tokens: int) -> None:
+                 task_type: str, max_tokens: int, reason: str = RULE_REASON) -> None:
     reviewed_block(
         author, reviewer, f"routing rule {task_type}",
-        scope_id=scope_id, block_type="routing_rule", content=RULE_REASON,
+        scope_id=scope_id, block_type="routing_rule", content=reason,
         metadata={"task_type": task_type, "candidates": [MODEL], "max_tokens": max_tokens},
     )
+
+
+def help_center(admin: httpx.Client, reviewer: httpx.Client) -> str:
+    """The second root: internal data, direct calls classified minimal (CHY-199),
+    one call in ten drawn for a check afterwards (CHY-269)."""
+    root = scope(admin, HELP_CENTER, "org", privacy_level="internal")
+    reviewed_block(admin, reviewer, "shipping and returns",
+                   scope_id=root, block_type="user_context", content=PRODUCT_FACTS)
+    routing_rule(admin, reviewer, root, "summarize", max_tokens=200, reason=HELP_RULE_REASON)
+    verdict = expect(admin.put(f"/v1/scopes/{root}/direct-call-risk-class",
+                               json={"risk_class": "minimal", "sample_rate": 0.1}), 200,
+                     "classifying direct calls in the help center")
+    print(f"  direct     calls classified minimal, answered here: {verdict['direct_calls']}, "
+          f"one in {round(1 / verdict['effective_sample_rate'])} judged afterwards")
+    return root
 
 
 def workflow(author: httpx.Client, reviewer: httpx.Client, scope_id: str) -> str:
@@ -209,6 +243,10 @@ def workflow(author: httpx.Client, reviewer: httpx.Client, scope_id: str) -> str
         "scope_id": scope_id, "name": WORKFLOW,
         "description": "The model drafts a reply from the composed context; "
                        "a person approves it before it is sent.",
+        # A reply a person reads before it goes out: limited harm. Left out, the
+        # workflow would count as high and its gate would ask for four eyes;
+        # with the confidential scope, one approver is the minimum (CHY-223).
+        "risk_class": "limited",
     }), 201, "creating the workflow")["id"]
 
     nodes = (
@@ -236,10 +274,10 @@ def workflow(author: httpx.Client, reviewer: httpx.Client, scope_id: str) -> str
     return wf
 
 
-def seeded_org(c: httpx.Client) -> str | None:
-    """The id of Example Corp if an earlier run wrote the example, else None."""
+def seeded_org(c: httpx.Client, name: str = ORG) -> str | None:
+    """The id of a root an earlier run wrote, else None."""
     scopes = expect(c.get("/v1/scopes"), 200, "listing scopes")
-    return next((s["id"] for s in scopes if s["name"] == ORG and s["node_type"] == "org"),
+    return next((s["id"] for s in scopes if s["name"] == name and s["node_type"] == "org"),
                 None)
 
 
@@ -253,9 +291,15 @@ def main() -> int:
     org = seeded_org(admin)
     if org:
         # The CI checks a second start by "nothing changed" (.gitlab-ci.yml).
+        added = []
         if member(admin, reviewer, org, "reviewer"):
+            added.append("the reviewer's membership")
+        if not seeded_org(admin, HELP_CENTER):
+            help_center(admin, reviewer)
+            added.append(f"the {HELP_CENTER!r} scope")
+        if added:
             print(f"seed: {ORG!r} exists — the example is already there; "
-                  "the reviewer's membership was missing and is added")
+                  f"{' and '.join(added)} were missing and are added")
         else:
             print(f"seed: {ORG!r} exists — the example is already there, nothing changed")
         return 0
@@ -280,14 +324,15 @@ def main() -> int:
     reviewed_block(admin, reviewer, "example reply",
                    scope_id=team, block_type="example_io", content=EXAMPLE_REPLY)
     routing_rule(admin, reviewer, team, DRAFT_TASK, max_tokens=300)
-    routing_rule(admin, reviewer, team, "summarize", max_tokens=200)
     direct_block(admin, "carrier delay notice",
                  scope_id=project, block_type="user_context", content=CARRIER_NOTICE)
     wf = workflow(admin, reviewer, project)
+    helps = help_center(admin, reviewer)
 
     print(f"""
 seed: done. Next, from deploy/quickstart/README.md:
   project scope  {project}
+  help center    {helps}
   workflow       {wf}
   API docs       http://127.0.0.1:{os.environ.get('API_PORT', '8000')}/docs""")
     return 0

@@ -460,7 +460,9 @@ def _cover(f: F) -> list:
     # Fixture metadata box
     warn_style = ParagraphStyle("Warn", parent=SMALL, textColor=GREY)
     s.append(Paragraph(
-        f"[Fiktives Unternehmen \N{EN DASH} synthetische Testdaten — {f.filename} — Erwartet: {f.expected_risk}]",
+        # Without the expected risk level (CHY-178): this line is part of the
+        # document text, and a model that reads "Erwartet: ROT" is not rating.
+        f"[Fiktives Unternehmen \N{EN DASH} synthetische Testdaten — {f.filename}]",
         warn_style,
     ))
     s.append(PageBreak())
@@ -769,10 +771,9 @@ def _anhang_de(f: F) -> list:
     s.append(Paragraph(f"{section}2 Finanzielle Lage und Kennzahlen", H2))
     if f.anhang_text:
         s.append(Paragraph(f.anhang_text, BODY))
-    if f.expected_anomalies:
-        s.append(Paragraph(f"{section}3 Besondere Risikohinweise", H2))
-        for anomaly in f.expected_anomalies:
-            s.append(Paragraph(f"• {anomaly}", BODY))
+    # The expected anomalies stay out of the document (CHY-178). They were the
+    # findings of the bank's own rules, with their thresholds — "EK-Quote 17% <
+    # 20%" — written into the annual statement the rules are to be run on.
     s.append(PageBreak())
     return s
 

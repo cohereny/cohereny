@@ -23,7 +23,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from seed import MODEL, PROJECT, WORKFLOW, client  # noqa: E402 -- path set above
+from seed import HELP_CENTER, MODEL, PROJECT, WORKFLOW, client  # noqa: E402 -- path set above
 
 MESSAGE = ("Hi, I ordered a kettle on Tuesday (order 4711) and it still hasn't "
            "arrived. Where is it?")
@@ -47,6 +47,7 @@ def main() -> int:
     step(1, "Find the example")
     scopes = ok(author.get("/v1/scopes"), 200, "scopes listed")
     project = next(s["id"] for s in scopes if s["name"] == PROJECT)
+    help_center = next(s["id"] for s in scopes if s["name"] == HELP_CENTER)
     workflows = ok(author.get("/v1/workflows", params={"scope_id": project}), 200,
                    "workflows of the project listed")["items"]
     wf = next(w["id"] for w in workflows if w["name"] == WORKFLOW)
@@ -59,14 +60,25 @@ def main() -> int:
     if len(types) != 5:
         sys.exit("   ✗ expected tone, data rule, product facts, example and notice")
 
-    step(3, "Ask the model, routed by the rule")
-    answer = ok(serve.post("/v1/complete", json={
-        "task_type": "summarize", "scope_id": project,
-        "prompt": "Summarise our shipping and returns policy in two sentences.",
-    }), 200, "answer received")
+    step(3, "Ask the model directly — where that is allowed, and where not")
+    question = {"task_type": "summarize",
+                "prompt": "Summarise our shipping and returns policy in two sentences."}
+    answer = ok(serve.post("/v1/complete", json={**question, "scope_id": help_center}),
+                200, "help center: answer received")
     print(f"     model {answer['model_used']}, {answer['blocks_used']} blocks used")
     if answer["model_used"] != MODEL or not answer["content"].strip():
         sys.exit(f"   ✗ expected a non-empty answer from {MODEL}")
+    # One call in ten is drawn for a check afterwards (CHY-269); which one is a
+    # hash of the call, so this says what happened rather than expecting it.
+    drawn = f"yes, {answer['sample_id']}" if answer.get("sample_id") else "no"
+    print(f"     drawn for a check afterwards (one in ten): {drawn}")
+    # Example Corp holds customer data: an answer there needs a person first
+    # (CHY-199, ADR-050). The reason is checked, not only the code — a 409 for
+    # a missing routing rule would look the same.
+    refused = ok(serve.post("/v1/complete", json={**question, "scope_id": project}),
+                 409, "order inquiries: refused, an answer here needs review")
+    if "confidential" not in refused["detail"]:
+        sys.exit(f"   ✗ expected the data class as the reason: {refused['detail']}")
 
     step(4, "Start a run of the workflow")
     run = ok(author.post(f"/v1/workflows/{wf}/runs",

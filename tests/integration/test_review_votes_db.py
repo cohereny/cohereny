@@ -62,9 +62,9 @@ async def test_two_people_make_two_approvals(system_pool, workflow):
     first, second = await _reviewer(system_pool), await _reviewer(system_pool)
     async with system_pool.acquire() as conn:
         assert await store.review_role(conn, node_id) == "four_eyes"
-        await store.record_vote(conn, execution_id, first.id, "approved", None)
+        await store.record_vote(conn, execution_id, store.Vote(first.id, "approved", None))
         assert await store.approvals(conn, execution_id) == 1
-        await store.record_vote(conn, execution_id, second.id, "approved", None)
+        await store.record_vote(conn, execution_id, store.Vote(second.id, "approved", None))
         assert await store.approvals(conn, execution_id) == 2
 
 
@@ -73,9 +73,9 @@ async def test_the_same_person_cannot_decide_twice(system_pool, workflow):
     _, execution_id = await _gate_execution(system_pool, workflow)
     only = await _reviewer(system_pool)
     async with system_pool.acquire() as conn:
-        await store.record_vote(conn, execution_id, only.id, "approved", None)
+        await store.record_vote(conn, execution_id, store.Vote(only.id, "approved", None))
         with pytest.raises(ReviewerAlreadyDecided):
-            await store.record_vote(conn, execution_id, only.id, "approved", "again")
+            await store.record_vote(conn, execution_id, store.Vote(only.id, "approved", "again"))
         assert await store.approvals(conn, execution_id) == 1
 
 
@@ -83,7 +83,7 @@ async def test_a_rejection_does_not_count_as_an_approval(system_pool, workflow):
     _, execution_id = await _gate_execution(system_pool, workflow)
     reviewer = await _reviewer(system_pool)
     async with system_pool.acquire() as conn:
-        await store.record_vote(conn, execution_id, reviewer.id, "rejected", "no")
+        await store.record_vote(conn, execution_id, store.Vote(reviewer.id, "rejected", "no"))
         assert await store.approvals(conn, execution_id) == 0
 
 
@@ -95,6 +95,6 @@ async def test_a_vote_is_not_deleted_with_its_execution(system_pool, owner_pool,
     _, execution_id = await _gate_execution(system_pool, workflow)
     reviewer = await _reviewer(system_pool)
     async with system_pool.acquire() as conn:
-        await store.record_vote(conn, execution_id, reviewer.id, "approved", None)
+        await store.record_vote(conn, execution_id, store.Vote(reviewer.id, "approved", None))
     with pytest.raises(asyncpg.exceptions.ForeignKeyViolationError):
         await owner_pool.execute("DELETE FROM node_executions WHERE id = $1", execution_id)

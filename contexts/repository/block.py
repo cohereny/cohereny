@@ -97,6 +97,44 @@ TRANSITIONS: dict[str, Transition] = {
 }
 
 
+#: Retiring takes a block out of every composition. In a strict scope that is a
+#: reviewer's decision, as approving is.
+RETIRE_ROLE = "reviewer"
+
+#: The lowest role that may make any move on a block. Checked before the block
+#: is read, so a consumer is refused with 403 whatever the block and does not
+#: learn from a 404 whether it exists; the role the move really needs depends on
+#: the block's scope and is checked once the block is locked (`role_for`).
+LOWEST_ROLE = "contributor"
+
+
+def role_for(move: str, *, mode: ReviewMode, loosens: bool) -> str:
+    """The role a move on a block needs in a scope of this mode (CHY-170).
+
+    `move` is a key of TRANSITIONS or `retire`. In a direct scope a write is
+    active at once (ADR-042), so whoever may write there may also take a block
+    back and decide on one that waits (Thomas, 06.11.2026) — the lowering the
+    direct path already makes for activation, made symmetric. Strict scopes
+    keep their roles.
+
+    Not for a move that loosens what may flow (`loosens`): approving a
+    data-flow block. ADR-045 asks for a second person there in every scope, and
+    a contributor cannot activate such a block in a direct scope either — it
+    goes to review (point 3). It keeps the role a strict scope asks.
+
+    Retiring is never such a move. Data leaves only through an active routing
+    rule to a model below `critical` (ADR-045); retiring takes something out of
+    service, and whatever loosens next — a permissive claim, a cloud route — is
+    a data-flow block with four eyes of its own. That holds for a restrictive
+    privacy rule too: it is read only by the ratchet, when the next claim is
+    activated (Thomas, 09.11.2026).
+    """
+    strict = RETIRE_ROLE if move == "retire" else TRANSITIONS[move].role
+    if mode is ReviewMode.DIRECT and not loosens:
+        return LOWEST_ROLE
+    return strict
+
+
 class PatchPlan(enum.Enum):
     """What a PATCH means for a block in a given state (CHY-30)."""
 

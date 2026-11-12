@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from contexts.orchestration.graph import Edge, Graph, Node
 from contexts.orchestration.runner import (
+    DEFAULT_LABEL,
     FIRST_WINS,
     WAIT_ALL,
     WAIT_ANY,
@@ -260,17 +261,55 @@ class TestLoopLimit:
         assert fire(graph, state, b.id, conditions={}).exhausted == (back_1.id,)
         assert back_2.id in fire(graph, state, c.id, conditions={}).taken
 
-    def test_an_exhausted_loop_is_not_a_failure(self):
-        """A bounded loop ending is how a bounded loop is supposed to end.
+    def test_an_exhausted_loop_is_not_a_failure_while_the_run_can_go_on(self):
+        """A bounded loop ending is how a bounded loop is supposed to end — as
+        long as something else in the run is still under way."""
+        a, b, c = _n("a"), _n("b"), _n("c")
+        back = _e(b, a, loop_limit=1)
+        graph = Graph([a, b, c], [_e(a, b), back])
+        state = RunState(traversals={back.id: 1}, in_flight=frozenset({b.id, c.id}))
+        firing = fire(graph, state, b.id, conditions={})
+        assert firing.failure is None
+        assert firing.exhausted == (back.id,)
 
-        Whether the *run* is over depends on tokens elsewhere, which `plan`
-        sees and `fire` does not — so reporting this as a failure here would
-        turn every completed loop into an error.
-        """
+    def test_an_exhausted_loop_with_no_way_on_fails_the_run(self):
+        """CHY-150 (Thomas, 09.11.2026). Until then the run ended as `complete`:
+        nothing ready, nothing running — indistinguishable from a run that did
+        its work, although the loop had only used up its budget."""
         a, b = _n("a"), _n("b")
         back = _e(b, a, loop_limit=1)
         graph = Graph([a, b], [_e(a, b), back])
-        assert fire(graph, RunState(traversals={back.id: 1}), b.id, conditions={}).failure is None
+        state = RunState(traversals={back.id: 1}, in_flight=frozenset({b.id}))
+        firing = fire(graph, state, b.id, conditions={})
+        assert firing.taken == ()
+        assert firing.exhausted == (back.id,)
+        assert firing.failure is not None
+        assert "loop_limit of 1" in firing.failure and "b → a" in firing.failure
+
+    def test_an_exhausted_guarded_loop_lets_the_default_through(self):
+        """CHY-150 (Thomas, 09.11.2026): an exhausted guard counts as one that
+        did not hold. `draft → check → draft` while the check wants more work,
+        `check → review` as the default: once the budget is used up, the run
+        goes to the review instead of ending without one."""
+        draft, check, review = _n("draft"), _n("check"), _n("review", "human_review")
+        back = _e(check, draft, loop_limit=2, condition={"op": "eq", "field": "ok", "value": False})
+        on = _e(check, review, label=DEFAULT_LABEL)
+        graph = Graph([draft, check, review], [_e(draft, check), back, on])
+        state = RunState(traversals={back.id: 2}, in_flight=frozenset({check.id}))
+        firing = fire(graph, state, check.id, conditions={back.id: True})
+        assert firing.taken == (on.id,)
+        assert firing.exhausted == (back.id,)
+        assert firing.failure is None
+
+    def test_below_the_limit_a_holding_guard_still_wins_over_the_default(self):
+        """Counter-probe: the default is the way on after the budget, not
+        instead of it."""
+        draft, check, review = _n("draft"), _n("check"), _n("review", "human_review")
+        back = _e(check, draft, loop_limit=2, condition={"op": "eq", "field": "ok", "value": False})
+        on = _e(check, review, label=DEFAULT_LABEL)
+        graph = Graph([draft, check, review], [_e(draft, check), back, on])
+        state = RunState(traversals={back.id: 1}, in_flight=frozenset({check.id}))
+        assert fire(graph, state, check.id, conditions={back.id: True}).taken == (back.id,)
 
 
 # ── the decision ──────────────────────────────────────────────────────────────

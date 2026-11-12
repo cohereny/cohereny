@@ -4,8 +4,9 @@ scripts/changelog.py
 
 The changelog of the public snapshots, in English and German, held in step (CHY-226).
 
-Each snapshot of the public repository gets a section in CHANGELOG.md and the
-same section in CHANGELOG.de.md, headed by its date and grouped as
+Each release of the public repository gets a section in CHANGELOG.md and the
+same section in CHANGELOG.de.md, headed by its version and date — `## 0.2.0 —
+2026-11-14` — and grouped as
 
     ### Added / Neu   ### Changed / Geändert   ### Removed / Entfernt
     ### Fixed / Behoben   ### Security / Sicherheit
@@ -16,11 +17,18 @@ dates in the same order, the same groups, the same number of entries per
 group. It cannot judge a translation; it does notice a section, a group or an
 entry that exists in one language only.
 
---release creates the GitHub release of a snapshot: tag `snapshot-<date>` of
-the newest section, the two sections as its text, marked as a pre-release
-(Cohereny has no 1.0 yet). It refuses when that tag already belongs to another
-commit — which is what happens when a snapshot goes out without a section of
-its own, and the previous date would otherwise be reused for new content.
+Versions since CHY-271 (Semantic Versioning, decided by Thomas, 10.11.2026).
+The sections before that are headed by their date alone and stay as they were:
+history is not renumbered. Versioned sections come first, newest version first,
+and the version in pyproject.toml — its one place (core/version.py) — is never
+behind the newest section: equal right after a release, ahead while the next
+one is being built. --check holds all three.
+
+--release creates the GitHub release of the newest section: tag `vX.Y.Z`, the
+two sections as its text, a pre-release while the version is below 1.0. It
+refuses a newest section that is not the version pyproject.toml carries — a
+release without a section of its own — and a tag that already belongs to
+another commit.
 
 Usage:
     python scripts/changelog.py --check
@@ -37,6 +45,7 @@ from http import HTTPStatus
 import os
 import re
 import sys
+import tomllib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -57,17 +66,37 @@ GROUPS: dict[str, str] = {
 
 GITHUB_API = "https://api.github.com"
 
-_SECTION = re.compile(r"^## (\d{4}-\d{2}-\d{2})\s*$")
+_SECTION = re.compile(r"^## (?:(?P<version>\d+\.\d+\.\d+) — )?(?P<date>\d{4}-\d{2}-\d{2})\s*$")
 _GROUP = re.compile(r"^### (.+?)\s*$")
 
 
 @dataclass
 class Section:
-    """One snapshot: its date, its groups with their entries, and its text."""
+    """One release: its version (None before CHY-271), its date, its groups and its text."""
 
     date: str
+    version: str | None = None
     groups: dict[str, list[str]] = field(default_factory=dict)
     text: str = ""
+
+    @property
+    def label(self) -> str:
+        return f"{self.version} — {self.date}" if self.version else self.date
+
+    @property
+    def tag(self) -> str:
+        return f"v{self.version}" if self.version else f"snapshot-{self.date}"
+
+
+def version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def project_version(pyproject: Path = ROOT / "pyproject.toml") -> str:
+    """The version in pyproject.toml. Read here, not imported from core.version:
+    the publish branch runs this script with the standard library alone."""
+    with pyproject.open("rb") as f:
+        return tomllib.load(f)["project"]["version"]
 
 
 def parse(markdown: str) -> list[Section]:
@@ -91,11 +120,12 @@ def parse(markdown: str) -> list[Section]:
         heading = _SECTION.match(line)
         if heading:
             close()
-            current, group, body = Section(heading.group(1)), None, []
+            current, group, body = Section(heading["date"], heading["version"]), None, []
             sections.append(current)
             continue
         if line.startswith("## "):
-            msg = f"a section heading must be a date (## YYYY-MM-DD): {line!r}"
+            msg = (f"a section heading must be a version and a date (## X.Y.Z — YYYY-MM-DD), "
+                   f"or a date alone before versions: {line!r}")
             raise ValueError(msg)
         if current is None:
             continue
@@ -113,17 +143,47 @@ def parse(markdown: str) -> list[Section]:
 def problems(en: list[Section], de: list[Section]) -> list[str]:
     """Everything that keeps the two files from saying the same thing. Empty is good."""
     found: list[str] = []
-    dates_en, dates_de = [s.date for s in en], [s.date for s in de]
+    labels_en, labels_de = [s.label for s in en], [s.label for s in de]
+    dates_en = [s.date for s in en]
     if not en:
         found.append("CHANGELOG.md has no section")
-    if dates_en != dates_de:
-        found.append(f"the sections differ: CHANGELOG.md {dates_en}, CHANGELOG.de.md {dates_de}")
+    if labels_en != labels_de:
+        found.append(f"the sections differ: CHANGELOG.md {labels_en}, CHANGELOG.de.md {labels_de}")
     if dates_en != sorted(set(dates_en), reverse=True):
         found.append(f"sections must be newest first, one per date: {dates_en}")
+    found.extend(_version_order_problems(en))
     for e, d in zip(en, de, strict=False):
-        if e.date == d.date:
+        if e.label == d.label:
             found.extend(_section_problems(e, d))
     return found
+
+
+def _version_order_problems(sections: list[Section]) -> list[str]:
+    """Versioned sections first, each version once, newest first."""
+    flags = [s.version is not None for s in sections]
+    if flags != sorted(flags, reverse=True):
+        return [("a section with a version must not follow one with a date alone: "
+                 f"{[s.label for s in sections]}")]
+    versions = [s.version for s in sections if s.version]
+    if versions != sorted(set(versions), key=version_key, reverse=True):
+        return [f"versions must be newest first, each once: {versions}"]
+    return []
+
+
+def version_problems(sections: list[Section], version: str) -> list[str]:
+    """pyproject.toml may be ahead of the newest section, never behind it."""
+    newest = next((s.version for s in sections if s.version), None)
+    if newest and version_key(version) < version_key(newest):
+        return [f"pyproject.toml says {version}, but CHANGELOG.md already has {newest}"]
+    return []
+
+
+def release_problems(newest: Section, version: str) -> list[str]:
+    """A release is the version pyproject.toml carries, with a section of its own."""
+    if newest.version != version:
+        return [(f"pyproject.toml says {version}; the newest section is {newest.label!r}. "
+                 f"A release needs a section headed '## {version} — YYYY-MM-DD' in both files.")]
+    return []
 
 
 def _section_problems(e: Section, d: Section) -> list[str]:
@@ -150,7 +210,14 @@ def release_body(en: Section, de: Section) -> str:
 
 
 def _github(method: str, url: str, token: str, body: dict | None = None) -> tuple[int, dict]:
-    """One GitHub API call; an HTTP error is an answer, not an exception."""
+    """One GitHub API call; an HTTP error is an answer, not an exception.
+
+    Only `GITHUB_API` is ever asked: every URL here is built from it, and one
+    that is not is refused before anything is opened (CHY-273).
+    """
+    if not url.startswith(f"{GITHUB_API}/"):
+        msg = f"not a GitHub API URL: {url!r}"
+        raise ValueError(msg)
     request = urllib.request.Request(
         url, method=method,
         data=json.dumps(body).encode("utf-8") if body is not None else None,
@@ -159,6 +226,12 @@ def _github(method: str, url: str, token: str, body: dict | None = None) -> tupl
                  "X-GitHub-Api-Version": "2022-11-28"},
     )
     try:
+        # B310 flags every urlopen whose URL is not a literal, because file://
+        # or a custom scheme would be opened as well. Not here: the check above
+        # admits https://api.github.com/ and nothing else, and
+        # tests/test_changelog.py holds it with a file:// URL that is refused.
+        # The suppression must sit on the line directly above the finding.
+        # nosemgrep: bandit.B310-1
         with urllib.request.urlopen(request, timeout=30) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as exc:
@@ -174,12 +247,12 @@ def release(repo: str, commit: str, newest: tuple[Section, Section], token: str,
     that is a snapshot without a section of its own.
     """
     en, de = newest
-    tag = f"snapshot-{en.date}"
+    tag = en.tag
     status, existing = call("GET", f"{GITHUB_API}/repos/{repo}/releases/tags/{tag}", token)
     if status == HTTPStatus.OK:
         if existing.get("target_commitish") == commit:
             return f"release {tag} already exists for {commit[:8]} — nothing to do"
-        msg = (f"release {tag} already exists for another commit. This snapshot needs a "
+        msg = (f"release {tag} already exists for another commit. This release needs a "
                f"section of its own in CHANGELOG.md and CHANGELOG.de.md.")
         raise SystemExit(msg)
     if status != HTTPStatus.NOT_FOUND:
@@ -189,9 +262,10 @@ def release(repo: str, commit: str, newest: tuple[Section, Section], token: str,
     status, created = call("POST", f"{GITHUB_API}/repos/{repo}/releases", token, {
         "tag_name": tag,
         "target_commitish": commit,
-        "name": f"Snapshot {en.date}",
+        "name": f"Cohereny {en.version}" if en.version else f"Snapshot {en.date}",
         "body": release_body(en, de),
-        "prerelease": True,
+        # Below 1.0 every release is a pre-release (Semantic Versioning).
+        "prerelease": en.version is None or version_key(en.version) < (1, 0, 0),
     })
     if status != HTTPStatus.CREATED:
         msg = f"GitHub refused release {tag}: {status} {created}"
@@ -210,12 +284,16 @@ def main() -> int:
 
     en = parse(EN_FILE.read_text(encoding="utf-8"))
     de = parse(DE_FILE.read_text(encoding="utf-8"))
-    found = problems(en, de)
+    version = project_version()
+    found = problems(en, de) + version_problems(en, version)
+    if args.release and not found:
+        found = release_problems(en[0], version)
     if found:
         for p in found:
             print(f"✗ {p}", file=sys.stderr)
         return 1
-    print(f"changelog: {len(en)} sections in both languages, newest {en[0].date}")
+    print(f"changelog: {len(en)} sections in both languages, newest {en[0].label}; "
+          f"pyproject.toml {version}")
 
     if args.release:
         token = os.environ.get("GITHUB_TOKEN", "")

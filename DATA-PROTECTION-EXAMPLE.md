@@ -68,7 +68,11 @@ department does it.
 7. **The content expires.** The scope keeps content for seven days — by then the result is in the
    HIS. The nightly purge then clears input, outputs, reasons and the mapping. Who started the
    run, which model answered and who approved stay 183 days (Art. 26(6) AI Act as the lower
-   bound); then the run is deleted.
+   bound); then the run is deleted. Seven days for the content assume the workflow is
+   classified `limited`, the controller having concluded it is no high-risk system (above,
+   out of scope). Classified `high`, or not at all, Cohereny would require the content too to
+   be kept at least 183 days before activating it (CHY-266), and R6 and R9 would weigh
+   differently.
 
 ### What lies where, and who reads it
 
@@ -136,7 +140,7 @@ carry most of the weight:
 | Scope "internal medicine" with data class `critical`; only the model on the hospital's servers, ceiling `critical` | R1 |
 | The HIS names every name it knows about the case under `identifiers_to_redact`; a `redaction_rule` block names the staff and the format of case numbers | R1, R6 |
 | The scope's members are the department's physicians; approving from role `reviewer`; the HIS account in `chy-service-accounts` | R2, R7 |
-| Content period seven days, trace 183 days; `cc retention purge` nightly, an alert when the last purge is older than 36 hours | R6, R9 |
+| Content period seven days, trace 183 days; `cc oversight expire` and `cc retention purge` nightly, an alert when the last purge is older than 36 hours | R6, R9 |
 | The key for the mappings in the secret store, an offline copy with the data protection office; never in the database backup | R3, R8 |
 | A monthly review of the audit entries `workflow.run_content_resolved` by the data protection officer | R7 |
 | Training: a draft is not a finding; whoever approves checks diagnoses and doses against the letter | R4 |

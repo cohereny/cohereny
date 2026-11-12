@@ -307,3 +307,75 @@ def test_from_the_date_on_it_only_reports():
     for private in (True, False):
         ok, _ = ps.visibility("o/r", _CUTOFF, _CUTOFF, _repo(private))
         assert ok
+
+
+# ── the interim stage: test as `next` (CHY-272) ──────────────────────────────
+
+_ID = ("-c", "user.name=t", "-c", "user.email=t@example.org")
+
+
+def _on_test(tmp_path: Path, *messages: str) -> Path:
+    """A checkout standing on origin/test: one released commit on origin/main, then one
+    commit per message on test."""
+    src = _released(tmp_path)
+    for n, message in enumerate(messages):
+        (src / "README.md").write_text(f"change {n}", encoding="utf-8")
+        _git(src, *_ID, "commit", "-q", "-am", message)
+    _git(src, "update-ref", "refs/remotes/origin/test", "HEAD")
+    return src
+
+
+class TestTheInterimStage:
+    def test_test_goes_to_publish_next(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(ps, "ROOT", _on_test(tmp_path, "feat: something CHY-1"))
+        dst = _target(tmp_path, branch="publish-next")
+        assert ps.main(["--export", str(dst), "--from", "test"]) == 0
+        assert (dst / "README.md").read_text(encoding="utf-8") == "change 0"
+        assert " on test" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(("stage", "branch"), [("test", "publish"), ("main", "publish-next")])
+    def test_a_stage_goes_only_to_its_own_branch(self, tmp_path, monkeypatch, capsys, stage, branch):
+        monkeypatch.setattr(ps, "ROOT", _on_test(tmp_path, "feat: something CHY-1"))
+        dst = _target(tmp_path, branch=branch)
+        assert ps.main(["--export", str(dst), "--from", stage]) == 2
+        assert (dst / "stale.txt").exists(), "the refused export emptied its target"
+
+    def test_a_checkout_behind_test_is_refused(self, tmp_path, monkeypatch, capsys):
+        src = _on_test(tmp_path, "feat: something CHY-1")
+        _git(src, "update-ref", "refs/remotes/origin/test", "refs/remotes/origin/main")
+        monkeypatch.setattr(ps, "ROOT", src)
+        assert ps.main(["--export", str(_target(tmp_path, "publish-next")), "--from", "test"]) == 2
+        assert "origin/test is" in capsys.readouterr().err
+
+
+class TestTheEmbargo:
+    """A fix under embargo keeps `next` where it is until the release brings it to main."""
+
+    def test_an_embargoed_fix_on_test_holds_the_export(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(ps, "ROOT", _on_test(
+            tmp_path, "feat: harmless CHY-1",
+            "fix: close the hole CHY-999\n\nEmbargo: CHY-999\nCo-Authored-By: x <x@example.org>"))
+        dst = _target(tmp_path, branch="publish-next")
+        assert ps.main(["--export", str(dst), "--from", "test"]) == ps.HELD
+        assert (dst / "stale.txt").exists(), "a held export touched its target"
+        assert "Embargo: CHY-999" in capsys.readouterr().err
+
+    def test_once_released_the_same_fix_holds_nothing(self, tmp_path, monkeypatch):
+        """Counter-probe: the trailer is the same, but the commit is on main now."""
+        src = _on_test(tmp_path, "fix: close the hole CHY-999\n\nEmbargo: CHY-999")
+        _git(src, "update-ref", "refs/remotes/origin/main", "HEAD")
+        monkeypatch.setattr(ps, "ROOT", src)
+        assert ps.embargoed(src) == []
+        assert ps.main(["--export", str(_target(tmp_path, "publish-next")), "--from", "test"]) == 0
+
+    def test_the_word_in_a_message_body_is_no_hold(self, tmp_path):
+        """Only the trailer holds; a sentence that mentions it does not."""
+        src = _on_test(tmp_path, "docs: explain the hold CHY-272\n\nEmbargo: is a trailer.\n\n"
+                                 "Co-Authored-By: x <x@example.org>")
+        assert ps.embargoed(src) == []
+
+    def test_every_held_commit_is_named(self, tmp_path):
+        src = _on_test(tmp_path, "fix: a CHY-1\n\nEmbargo: CHY-1", "feat: b CHY-2",
+                       "fix: c CHY-3\n\nEmbargo: CHY-3")
+        held = ps.embargoed(src)
+        assert [line.split(" ", 1)[1] for line in held] == ["Embargo: CHY-3", "Embargo: CHY-1"]

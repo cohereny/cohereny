@@ -114,6 +114,35 @@ class TestContextIsolation:
         assert _rules("from contexts.repository.store import BlockStore") == []
 
 
+class TestImpureStep:
+    """A compute step imports arithmetic and nothing else (ADR-048)."""
+
+    @pytest.mark.parametrize("code", [
+        "import os", "import httpx", "from time import time", "import random",
+        "from kernel.audit import write_audit", "from core.db import get_pool",
+    ])
+    def test_anything_but_arithmetic_is_caught(self, code):
+        assert _rules(code, pkg="steps", rel="steps/banking.py") == ["impure_step"]
+
+    @pytest.mark.parametrize("code", [
+        "import math", "from decimal import Decimal", "from statistics import mean",
+        "from steps.base import Step", "from collections.abc import Mapping",
+    ])
+    def test_arithmetic_and_its_own_package_are_fine(self, code):
+        assert _rules(code, pkg="steps", rel="steps/banking.py") == []
+
+    def test_the_same_import_elsewhere_is_not_this_rule(self):
+        assert "impure_step" not in _rules("import httpx")
+
+    def test_violations_reads_the_steps_package(self, tmp_path, monkeypatch):
+        """The wiring, not only the rule function: a file in steps/ is scanned."""
+        (tmp_path / "steps").mkdir()
+        (tmp_path / "steps" / "probe.py").write_text("import os\n", encoding="utf-8")
+        monkeypatch.setattr(architecture, "ROOT", tmp_path)
+
+        assert architecture.counts()["impure_step"] == 1
+
+
 class TestTheDetectorMatchesReality:
     """Guards against the detector drifting from the codebase it measures."""
 
@@ -128,6 +157,8 @@ class TestTheDetectorMatchesReality:
             "inward_only", "context_isolation", "framework_free", "http_below_transport",
             # new with CHY-101, ADR-030 zones 2 and 3
             "kernel_uses_nothing", "context_encapsulation",
+            # new with ADR-048 (CHY-173)
+            "impure_step",
         }
 
     def test_context_isolation_is_already_at_zero(self):

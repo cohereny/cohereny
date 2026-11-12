@@ -10,6 +10,7 @@ Subcommands:
   cc pilot list [--pilot <name>]     → list available PDFs in the examples directory
   cc actor set-role <idp_sub> <role> → grant a role directly in the database
   cc retention purge [--dry-run]     → clear and delete run data past its period
+  cc oversight expire [--dry-run]    → end or escalate gates nobody decided in time
 
 Environment:
   PILOT_DATA_DIR    holds examples/ (input PDFs) and outputs/ (results);
@@ -55,6 +56,8 @@ actor_app = typer.Typer(help="Actor and role administration", no_args_is_help=Tr
 app.add_typer(actor_app, name="actor")
 retention_app = typer.Typer(help="Retention: apply the configured periods", no_args_is_help=True)
 app.add_typer(retention_app, name="retention")
+oversight_app = typer.Typer(help="Oversight: gates nobody decided", no_args_is_help=True)
+app.add_typer(oversight_app, name="oversight")
 
 # Both locations used to be hard-coded paths of one host. They are read per
 # call rather than at import, so a changed environment (or a test) takes effect
@@ -291,5 +294,34 @@ def retention_purge(
                                          dry_run=dry_run))
     label = "would clear or delete" if dry_run else "cleared or deleted"
     typer.echo(f"retention purge — {label}:")
+    for name, count in counts.items():
+        typer.echo(f"  {name:28} {count}")
+
+
+@oversight_app.command("expire")
+def oversight_expire(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Count what would expire or escalate, change nothing"
+    ),
+    database_url: str | None = typer.Option(
+        None, "--database-url", help="Overrides DATABASE_URL from the environment"
+    ),
+) -> None:
+    """End or escalate the gates nobody decided in time (ADR-050).
+
+    Past the content period of its scope a waiting run ends as `expired`; past
+    a gate's own review_timeout it escalates (on_timeout = escalate) or expires
+    (reject). Started by the operator's timer, with `cc retention purge`. A run
+    past the content period loses its content in the same step. Each expiry and
+    escalation is audited, without a person — none acted.
+    """
+    # Same sources and the same late imports as `retention purge`.
+    from api.config import settings
+    from cli import oversight
+
+    counts = asyncio.run(oversight.expire(database_url or settings.database_url,
+                                          dry_run=dry_run))
+    label = "would expire or escalate" if dry_run else "expired or escalated"
+    typer.echo(f"oversight expire — {label}:")
     for name, count in counts.items():
         typer.echo(f"  {name:28} {count}")

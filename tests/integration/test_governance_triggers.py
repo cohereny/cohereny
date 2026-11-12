@@ -227,3 +227,12 @@ async def test_anonymization_removes_the_person_and_keeps_the_record(pool):
     # The old identity no longer leads back to the person.
     again = await resolve_actor(pool, subject)
     assert again.id != person.id, "the erased identity still resolves to the erased row"
+    # Nor does it lock anyone out (CHY-270): the same login is a new account
+    # with the role its groups carry, and that account is on record — which is
+    # why DATA-PROTECTION.md §6 has a person who leaves locked at the identity
+    # provider first.
+    assert again.role == "contributor"
+    assert await pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action = 'actor.provisioned' AND target_ref = $1",
+        target_ref("actor", again.id),
+    ) == 1

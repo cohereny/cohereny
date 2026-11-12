@@ -5,8 +5,10 @@ Thank you for your interest in Cohereny.
 ## How development works
 
 Development happens on a self-hosted GitLab. This GitHub repository is a **published
-snapshot**: each snapshot is pushed here as a new commit. Its history does not follow
-the development history, and changes made here cannot flow back automatically.
+snapshot**: each release is pushed to `main` as a new commit, and the tested state between
+releases to `next`, after every deployment to the test stage. Neither history follows the
+development history, and changes made here cannot flow back automatically. To report a bug
+against the newest code, `next` is the branch to check first.
 
 ## What helps most right now
 

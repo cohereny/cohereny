@@ -54,6 +54,23 @@ COMBINATORS: tuple[str, ...] = ("all", "any", "not")
 #: gives up, and a workflow definition is user input.
 MAX_DEPTH = 8
 
+#: What a gate's output says when it escalates instead of releasing (ADR-050).
+ESCALATED = "escalated"
+
+#: The guard of an escalation edge: the way a gate goes when it escalates —
+#: on a timeout with `on_timeout = escalate`, and from CHY-180 on when votes
+#: differ. An ordinary condition on the gate's output, so the graph shows the
+#: higher authority and a reviewer releases it with the definition. Exactly this
+#: guard and no other: a broader one would fire on the wrong outcome, and the
+#: validator could no longer tell which edge is the escalation.
+ESCALATION: Mapping[str, Any] = {"op": "eq", "field": "decision", "value": ESCALATED}
+
+
+def is_escalation(condition: Mapping[str, Any] | None) -> bool:
+    """Whether a guard is the escalation guard, exactly."""
+    return condition is not None and dict(condition) == ESCALATION
+
+
 #: Re-exported from dataflow rather than defined twice. "What does `a.b.c`
 #: mean" has to mean one thing: the day a guard and an input mapping read the
 #: same address differently is a bug nobody looks for, because the two features

@@ -436,6 +436,18 @@ components:
           minItems: 1
           title: Block Types
           type: array
+        tags:
+          anyOf:
+          - items:
+              minLength: 1
+              type: string
+            minItems: 1
+            type: array
+          - type: 'null'
+          description: Only blocks that carry every one of these tags — a prompt per step, e.g. ["banking:risiko"]
+            (CHY-178). Checked on the version that would be composed, the newest active one. Omit for
+            no tag filter; an empty list is refused.
+          title: Tags
       required:
       - block_types
       title: ContextRequirements
@@ -468,6 +480,134 @@ components:
       - uncovered_samples
       title: CoverageOut
       type: object
+    DirectCallClassification:
+      description: Whether /v1/complete answers in a scope, and what decides it.
+      properties:
+        data_class:
+          description: The scope's effective data class (ADR-041).
+          enum:
+          - public
+          - internal
+          - confidential
+          - critical
+          title: Data Class
+          type: string
+        direct_calls:
+          description: True only where review_level is sample and a share is set. /v1/complete has no
+            gate, so it answers only there, and a share of its answers is judged afterwards.
+          title: Direct Calls
+          type: boolean
+        effective_risk_class:
+          anyOf:
+          - enum:
+            - minimal
+            - limited
+            - high
+            type: string
+          - type: 'null'
+          description: The strictest along the scope's chain; null when nobody classified direct calls,
+            which counts as high.
+          title: Effective Risk Class
+        effective_sample_rate:
+          anyOf:
+          - type: number
+          - type: 'null'
+          description: The highest share along the chain; null when no scope set one, and then /v1/complete
+            does not answer (CHY-269).
+          title: Effective Sample Rate
+        review_level:
+          description: 'The least review an answer here needs: the stricter of what the data class and
+            the risk class ask (ADR-050).'
+          enum:
+          - sample
+          - approver
+          - four_eyes
+          title: Review Level
+          type: string
+        risk_class:
+          anyOf:
+          - enum:
+            - minimal
+            - limited
+            - high
+            type: string
+          - type: 'null'
+          description: This scope's own setting; null when it inherits.
+          title: Risk Class
+        sample_rate:
+          anyOf:
+          - type: number
+          - type: 'null'
+          description: This scope's own share of direct calls drawn for review; null when it inherits.
+          title: Sample Rate
+        scope_id:
+          format: uuid
+          title: Scope Id
+          type: string
+      required:
+      - scope_id
+      - risk_class
+      - effective_risk_class
+      - data_class
+      - review_level
+      - sample_rate
+      - effective_sample_rate
+      - direct_calls
+      title: DirectCallClassification
+      type: object
+    DirectCallRiskClassSet:
+      description: How risky direct model calls in this scope are.
+      properties:
+        risk_class:
+          anyOf:
+          - enum:
+            - minimal
+            - limited
+            - high
+            type: string
+          - type: 'null'
+          description: minimal, limited or high, as a workflow's risk class. null takes this scope's own
+            setting back, so it inherits from the scopes above. A class looser than theirs is refused.
+          title: Risk Class
+        sample_rate:
+          anyOf:
+          - maximum: 1.0
+            minimum: 0.001
+            type: number
+          - type: 'null'
+          description: 'With minimal, and required there: the share of direct calls drawn into the review
+            queue and judged afterwards (CHY-269), as review_sample_rate at a sample gate. From 0.001
+            to 1, at most three decimal places. Refused with any other class. A share below the one a
+            scope above draws is refused.'
+          title: Sample Rate
+      required:
+      - risk_class
+      title: DirectCallRiskClassSet
+      type: object
+    DocumentFinding:
+      description: 'What the scan of a document found, by kind and rule (CHY-135).
+
+
+        Counted, never quoted: an excerpt would be document text, in the audit log
+
+        kept for good and in a response anyone may log.'
+      properties:
+        count:
+          title: Count
+          type: integer
+        kind:
+          description: fence_break (a fact) or instruction_shape (a suspicion).
+          title: Kind
+          type: string
+        rule:
+          title: Rule
+          type: string
+      required:
+      - kind
+      - rule
+      - count
+      title: DocumentFinding
+      type: object
     ErrorDetail:
       description: 'FastAPI''s HTTPException body. Named so the spec can point at a schema
 
@@ -482,9 +622,37 @@ components:
       - detail
       title: ErrorDetail
       type: object
-    FieldError:
-      description: One entry of FastAPI's request-validation 422.
+    ExhaustedLoopOut:
+      description: A loop of the run that used up its loop_limit (CHY-150).
       properties:
+        from_ref:
+          description: The node the loop goes back from.
+          title: From Ref
+          type: string
+        loop_limit:
+          title: Loop Limit
+          type: integer
+        to_ref:
+          description: The node it goes back to.
+          title: To Ref
+          type: string
+      required:
+      - from_ref
+      - to_ref
+      - loop_limit
+      title: ExhaustedLoopOut
+      type: object
+    FieldError:
+      description: 'One field that failed request validation: where, why, and what was sent.'
+      properties:
+        ctx:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Ctx
+        input:
+          title: Input
         loc:
           items:
             anyOf:
@@ -503,15 +671,6 @@ components:
       - msg
       - type
       title: FieldError
-      type: object
-    HTTPValidationError:
-      properties:
-        detail:
-          items:
-            $ref: '#/components/schemas/ValidationError'
-          title: Detail
-          type: array
-      title: HTTPValidationError
       type: object
     MeOut:
       description: 'Who the caller is to Cohereny (CHY-92).
@@ -576,6 +735,51 @@ components:
           - type: string
           - type: 'null'
           title: Description
+        document_max_bytes:
+          anyOf:
+          - maximum: 2147483647.0
+            minimum: 1.0
+            type: integer
+          - type: 'null'
+          description: 'Only for document: the largest file accepted, in bytes. Omit it for the installation''s
+            ceiling; above that ceiling activation is refused.'
+          title: Document Max Bytes
+        document_max_pages:
+          anyOf:
+          - maximum: 2147483647.0
+            minimum: 1.0
+            type: integer
+          - type: 'null'
+          description: 'Only for document: the most pages a PDF may have. Omit it for the installation''s
+            ceiling.'
+          title: Document Max Pages
+        document_name:
+          anyOf:
+          - pattern: ^[a-z][a-z0-9_]{0,62}$
+            type: string
+          - type: 'null'
+          description: 'Only for document, and required there: the name the run''s starter uploads the
+            document under (PUT /v1/workflows/runs/{run_id}/documents/{name}). One node per name and workflow;
+            the node''s successors are the only steps that see it (ADR-049, CHY-174).'
+          title: Document Name
+        function:
+          anyOf:
+          - pattern: ^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$
+            type: string
+          - type: 'null'
+          description: 'Only for compute, and required there: a pure function registered in the code,
+            e.g. banking.ratios. Checked at activation; its result is the node''s output as `data` (ADR-048,
+            CHY-173).'
+          title: Function
+        function_version:
+          anyOf:
+          - maximum: 2147483647.0
+            minimum: 1.0
+            type: integer
+          - type: 'null'
+          description: 'Only for compute, and required there: the pinned version of the function. A changed
+            calculation is a new version.'
+          title: Function Version
         input_mapping:
           additionalProperties: true
           default: {}
@@ -609,6 +813,8 @@ components:
           - join_gateway
           - human_review
           - sub_workflow
+          - compute
+          - document
           title: Node Type
           type: string
         on_timeout:
@@ -626,14 +832,48 @@ components:
           default: {}
           title: Output Mapping
           type: object
+        output_schema:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          description: 'Only for llm_call. A JSON Schema of type object: the model''s answer is read as
+            one JSON object and checked against it, and the checked object is in the node''s output as
+            `data`. A mismatch fails the node (CHY-175).'
+          title: Output Schema
+        review_areas:
+          anyOf:
+          - items:
+              pattern: ^[a-z][a-z0-9_]{0,62}$
+              type: string
+            maxItems: 16
+            minItems: 1
+            type: array
+          - type: 'null'
+          description: 'Only for human_review: the review areas that each cast one vote, by name, as defined
+            on the workflow''s scope or above (POST /v1/scopes/{id}/review-areas). All approve → released;
+            all reject → rejected; votes differ → escalated along the escalation edge. Two or more count
+            as four_eyes (ADR-050).'
+          title: Review Areas
         review_role:
           anyOf:
           - enum:
+            - sample
             - approver
             - four_eyes
             type: string
           - type: 'null'
           title: Review Role
+        review_sample_rate:
+          anyOf:
+          - maximum: 1.0
+            minimum: 0.001
+            type: number
+          - type: 'null'
+          description: 'Only for human_review with review_role sample, and required there: the share of
+            passes drawn into the review queue, from 0.001 to 1 with at most three decimal places. The
+            run does not wait at a sample gate (ADR-050).'
+          title: Review Sample Rate
         review_timeout:
           anyOf:
           - format: duration
@@ -704,6 +944,8 @@ components:
           - join_gateway
           - human_review
           - sub_workflow
+          - compute
+          - document
           title: Node Type
           type: string
         output:
@@ -729,6 +971,7 @@ components:
           - failed
           - skipped
           - cancelled
+          - expired
           title: Status
           type: string
       required:
@@ -758,6 +1001,14 @@ components:
       type: object
     OversightDecision:
       properties:
+        area:
+          anyOf:
+          - pattern: ^[a-z][a-z0-9_]{0,62}$
+            type: string
+          - type: 'null'
+          description: 'At a gate with review_areas: the area this vote is cast for. Needed only by someone
+            who belongs to more than one of the gate''s areas; otherwise it is their area (CHY-180).'
+          title: Area
         decision:
           enum:
           - approved
@@ -894,6 +1145,319 @@ components:
       - input_file
       title: PilotRunRequest
       type: object
+    ReviewArea:
+      description: A review area of a scope, with its members, revoked ones included.
+      properties:
+        created_at:
+          format: date-time
+          title: Created At
+          type: string
+        created_by:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Created By
+        id:
+          format: uuid
+          title: Id
+          type: string
+        members:
+          default: []
+          items:
+            $ref: '#/components/schemas/ReviewAreaMember'
+          title: Members
+          type: array
+        name:
+          title: Name
+          type: string
+        scope_id:
+          format: uuid
+          title: Scope Id
+          type: string
+      required:
+      - id
+      - scope_id
+      - name
+      - created_at
+      title: ReviewArea
+      type: object
+    ReviewAreaCreate:
+      description: 'An area that votes at a gate, defined on a scope and valid below it.
+
+
+        Front office, back office, credit committee: the names are the
+
+        organisation''s. A gate names the areas whose vote it needs; each casts one.'
+      properties:
+        name:
+          examples:
+          - marktfolge
+          pattern: ^[a-z][a-z0-9_]{0,62}$
+          title: Name
+          type: string
+      required:
+      - name
+      title: ReviewAreaCreate
+      type: object
+    ReviewAreaMember:
+      description: 'One person in a review area. A revoked membership keeps its row and its
+
+        date: a vote cast under it stays provable, and no new vote is accepted.'
+      properties:
+        actor_id:
+          format: uuid
+          title: Actor Id
+          type: string
+        granted_at:
+          format: date-time
+          title: Granted At
+          type: string
+        granted_by:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Granted By
+        revoked_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          title: Revoked At
+        revoked_by:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Revoked By
+      required:
+      - actor_id
+      - granted_at
+      title: ReviewAreaMember
+      type: object
+    ReviewAreaMemberCreate:
+      description: Add an actor to a review area. The id comes from `GET /v1/me`.
+      properties:
+        actor_id:
+          format: uuid
+          title: Actor Id
+          type: string
+      required:
+      - actor_id
+      title: ReviewAreaMemberCreate
+      type: object
+    ReviewSampleDetail:
+      description: 'One entry of the review queue with what there is to judge.
+
+
+        For a direct call the prompt and the answer as the model saw and gave them:
+
+        placeholders where an identifier was replaced, never the value (CHY-63). The
+
+        context is named by its block versions. Both are cleared when the scope''s
+
+        content period ends. For a workflow pass the output is the run''s.'
+      properties:
+        answer:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Answer
+        block_versions:
+          additionalProperties:
+            type: integer
+          title: Block Versions
+          type: object
+        content_purged_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          title: Content Purged At
+        drawn_at:
+          format: date-time
+          title: Drawn At
+          type: string
+        model_used:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'A direct call: the model that answered.'
+          title: Model Used
+        node_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'A workflow pass: its gate.'
+          title: Node Ref
+        prompt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Prompt
+        reviewed_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          title: Reviewed At
+        reviewed_by:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Reviewed By
+        run_id:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          description: 'A workflow pass: its run. The output to judge is the run''s: GET /v1/workflows/runs/{run_id}/nodes.'
+          title: Run Id
+        sample_id:
+          description: 'A workflow pass: the gate''s execution id. A direct call: its id, as /v1/complete
+            returned it in sample_id.'
+          format: uuid
+          title: Sample Id
+          type: string
+        scope_id:
+          description: 'Where it belongs: the workflow''s scope, or the scope of the call.'
+          format: uuid
+          title: Scope Id
+          type: string
+        source:
+          enum:
+          - workflow
+          - direct_call
+          title: Source
+          type: string
+        task_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'A direct call: its task type.'
+          title: Task Type
+        verdict:
+          anyOf:
+          - enum:
+            - confirmed
+            - objected
+            type: string
+          - type: 'null'
+          title: Verdict
+      required:
+      - sample_id
+      - source
+      - scope_id
+      - drawn_at
+      title: ReviewSampleDetail
+      type: object
+    ReviewSampleOut:
+      description: 'Something drawn for a check afterwards, and the verdict on it (ADR-050).
+
+
+        One queue, two sources (decided by Thomas, 10.11.2026): a pass of a sample
+
+        gate in a workflow (CHY-223), and a direct call answered in a scope whose
+
+        minimum review is `sample` (CHY-269). The verdict means the same for both:
+
+        the output went on, and a person judges it afterwards.'
+      properties:
+        drawn_at:
+          format: date-time
+          title: Drawn At
+          type: string
+        model_used:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'A direct call: the model that answered.'
+          title: Model Used
+        node_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'A workflow pass: its gate.'
+          title: Node Ref
+        reviewed_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          title: Reviewed At
+        reviewed_by:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          title: Reviewed By
+        run_id:
+          anyOf:
+          - format: uuid
+            type: string
+          - type: 'null'
+          description: 'A workflow pass: its run. The output to judge is the run''s: GET /v1/workflows/runs/{run_id}/nodes.'
+          title: Run Id
+        sample_id:
+          description: 'A workflow pass: the gate''s execution id. A direct call: its id, as /v1/complete
+            returned it in sample_id.'
+          format: uuid
+          title: Sample Id
+          type: string
+        scope_id:
+          description: 'Where it belongs: the workflow''s scope, or the scope of the call.'
+          format: uuid
+          title: Scope Id
+          type: string
+        source:
+          enum:
+          - workflow
+          - direct_call
+          title: Source
+          type: string
+        task_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'A direct call: its task type.'
+          title: Task Type
+        verdict:
+          anyOf:
+          - enum:
+            - confirmed
+            - objected
+            type: string
+          - type: 'null'
+          title: Verdict
+      required:
+      - sample_id
+      - source
+      - scope_id
+      - drawn_at
+      title: ReviewSampleOut
+      type: object
+    ReviewSampleVerdict:
+      properties:
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Why. Stored with placeholders — a workflow pass's by its run's mapping, a direct
+            call's by its scope's rules — and cleared with the content. An objection recalls nothing —
+            the output is out — and is counted (ADR-050).
+          title: Reason
+        verdict:
+          enum:
+          - confirmed
+          - objected
+          title: Verdict
+          type: string
+      required:
+      - verdict
+      title: ReviewSampleVerdict
+      type: object
     Role:
       description: The five roles, least privileged first. Order is meaning.
       enum:
@@ -919,6 +1483,98 @@ components:
           title: Reason
       title: RunCancelRequest
       type: object
+    RunDocumentOut:
+      description: One document a run expects, and what arrived for it (ADR-049).
+      properties:
+        bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Size of the file as it arrived.
+          title: Bytes
+        characters:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Length of the text read from it.
+          title: Characters
+        findings:
+          default: []
+          description: 'Empty for a document that was scanned and showed nothing. A finding does not stop
+            the run: the text reaches every step fenced, as foreign data (CHY-135).'
+          items:
+            $ref: '#/components/schemas/DocumentFinding'
+          title: Findings
+          type: array
+        media_type:
+          anyOf:
+          - enum:
+            - application/pdf
+            - text/plain
+            type: string
+          - type: 'null'
+          title: Media Type
+        name:
+          title: Name
+          type: string
+        pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: PDF only.
+          title: Pages
+        received:
+          title: Received
+          type: boolean
+        received_at:
+          anyOf:
+          - format: date-time
+            type: string
+          - type: 'null'
+          title: Received At
+      required:
+      - name
+      - received
+      title: RunDocumentOut
+      type: object
+    RunDocumentsOut:
+      description: 'The documents of a run: which it expects, which have arrived (ADR-049).
+
+
+        A run whose definition has `document` nodes waits in `awaiting_documents`
+
+        until each has arrived, and starts with the last one — the status here is
+
+        the run''s after that.'
+      properties:
+        documents:
+          items:
+            $ref: '#/components/schemas/RunDocumentOut'
+          title: Documents
+          type: array
+        run_id:
+          format: uuid
+          title: Run Id
+          type: string
+        status:
+          enum:
+          - pending
+          - running
+          - awaiting_oversight
+          - awaiting_documents
+          - complete
+          - failed
+          - rejected
+          - cancelled
+          - expired
+          title: Status
+          type: string
+      required:
+      - run_id
+      - status
+      - documents
+      title: RunDocumentsOut
+      type: object
     RunNodesOut:
       description: 'What each node of a run produced, in the order it ran (CHY-229).
 
@@ -937,6 +1593,14 @@ components:
 
         (CHY-17) has to know only that one.'
       properties:
+        exhausted_loops:
+          description: 'Loops that ran until their loop_limit (CHY-150). Read this at a gate: an output
+            that arrives here after its loop ran out has not met the loop''s criterion — only its budget
+            was spent.'
+          items:
+            $ref: '#/components/schemas/ExhaustedLoopOut'
+          title: Exhausted Loops
+          type: array
         nodes:
           items:
             $ref: '#/components/schemas/NodeExecutionOut'
@@ -951,10 +1615,12 @@ components:
           - pending
           - running
           - awaiting_oversight
+          - awaiting_documents
           - complete
           - failed
           - rejected
           - cancelled
+          - expired
           title: Status
           type: string
       required:
@@ -1014,10 +1680,12 @@ components:
           - pending
           - running
           - awaiting_oversight
+          - awaiting_documents
           - complete
           - failed
           - rejected
           - cancelled
+          - expired
           title: Status
           type: string
       required:
@@ -1225,32 +1893,6 @@ components:
       - detail
       title: UnprocessableDetail
       type: object
-    ValidationError:
-      properties:
-        ctx:
-          title: Context
-          type: object
-        input:
-          title: Input
-        loc:
-          items:
-            anyOf:
-            - type: string
-            - type: integer
-          title: Location
-          type: array
-        msg:
-          title: Message
-          type: string
-        type:
-          title: Error Type
-          type: string
-      required:
-      - loc
-      - msg
-      - type
-      title: ValidationError
-      type: object
     ValidationOut:
       properties:
         valid:
@@ -1428,9 +2070,23 @@ components:
           minLength: 1
           title: Name
           type: string
+        risk_class:
+          anyOf:
+          - enum:
+            - minimal
+            - limited
+            - high
+            type: string
+          - type: 'null'
+          description: 'How much harm a wrong output of this workflow can do. At least: minimal → the
+            gate as drawn, limited → one approver, high → four eyes. The stricter of this and the data
+            class of the scope is the minimum of every gate; leave it out and it counts as high (ADR-050).'
+          title: Risk Class
         risk_classification:
           additionalProperties: true
           default: {}
+          deprecated: true
+          description: Deprecated, stored and read by nothing. Use risk_class (CHY-223).
           title: Risk Classification
           type: object
         scope_id:
@@ -1486,9 +2142,22 @@ components:
             $ref: '#/components/schemas/WorkflowNode'
           title: Nodes
           type: array
+        risk_class:
+          anyOf:
+          - enum:
+            - minimal
+            - limited
+            - high
+            type: string
+          - type: 'null'
+          description: 'How much harm a wrong output can do: minimal, limited, high. None counts as high.
+            With the data class of the scope it sets the minimum review level of the gates (ADR-050).'
+          title: Risk Class
         risk_classification:
           additionalProperties: true
           default: {}
+          deprecated: true
+          description: Deprecated, read by nothing. Use risk_class (CHY-223).
           title: Risk Classification
           type: object
         scope_id:
@@ -1554,6 +2223,31 @@ components:
           - type: string
           - type: 'null'
           title: Description
+        document_max_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Document Max Bytes
+        document_max_pages:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Document Max Pages
+        document_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Document Name
+        function:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Function
+        function_version:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Function Version
         id:
           format: uuid
           title: Id
@@ -1589,6 +2283,8 @@ components:
           - join_gateway
           - human_review
           - sub_workflow
+          - compute
+          - document
           title: Node Type
           type: string
         on_timeout:
@@ -1604,14 +2300,33 @@ components:
           default: {}
           title: Output Mapping
           type: object
+        output_schema:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Output Schema
+        review_areas:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Review Areas
         review_role:
           anyOf:
           - enum:
+            - sample
             - approver
             - four_eyes
             type: string
           - type: 'null'
           title: Review Role
+        review_sample_rate:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Review Sample Rate
         review_timeout:
           anyOf:
           - format: duration
@@ -1716,10 +2431,12 @@ components:
           - pending
           - running
           - awaiting_oversight
+          - awaiting_documents
           - complete
           - failed
           - rejected
           - cancelled
+          - expired
           title: Status
           type: string
         workflow_id:
@@ -1749,7 +2466,9 @@ components:
             rules before the run begins, and every step reads and writes placeholders (CHY-234). The key
             `identifiers_to_redact` names further values that identify someone, by category, e.g. {"PERSON":
             ["Erika Mustermann"]}. It is not stored with the input: its values go into the run''s encrypted
-            mapping and are searched for in every step, found in the input or not.'
+            mapping and are searched for in every step, found in the input or not. Documents are not sent
+            here: a workflow with document nodes starts as `awaiting_documents`, and each document is
+            uploaded on its own (ADR-049).'
           title: Input Data
           type: object
       title: WorkflowRunStart
@@ -1778,7 +2497,7 @@ info:
 
     Generated from the application — see scripts/export_openapi.py.'
   title: Cohereny API — author
-  version: 0.1.0
+  version: 0.2.0
 openapi: 3.1.0
 paths:
   /v1/blocks:
@@ -1847,8 +2566,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: List Blocks
@@ -1948,8 +2669,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Delete Block
@@ -1982,8 +2705,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Block
@@ -2182,8 +2907,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Block History
@@ -2307,8 +3034,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Reject Block
@@ -2365,8 +3094,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Submit Block
@@ -2428,8 +3159,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Withdraw Block
@@ -2450,8 +3183,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
         '501':
           content:
             application/json:
@@ -2497,8 +3232,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
         '501':
           content:
             application/json:
@@ -2527,8 +3264,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
         '501':
           content:
             application/json:
@@ -2615,8 +3354,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Pilot Config
@@ -2678,8 +3419,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Put Pilot Config
@@ -2713,8 +3456,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: List Files
@@ -2765,8 +3510,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Start Run
@@ -2819,8 +3566,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Cancel Or Delete Run
@@ -2854,8 +3603,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Run
@@ -2896,8 +3647,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Run Coverage
@@ -2952,8 +3705,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Submit Oversight
@@ -2994,13 +3749,166 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Stream Run
       tags:
       - pilots
+  /v1/samples:
+    get:
+      description: 'Everything drawn for a check afterwards that the caller may see, oldest first.
+
+
+        Workflow passes (`source=workflow`) of runs the caller may see, and direct
+
+        calls (`source=direct_call`) the caller made or that belong to a scope they
+
+        are a member of. `open_only=false` lists judged ones too.'
+      operationId: list_samples_v1_samples_get
+      parameters:
+      - in: query
+        name: open_only
+        required: false
+        schema:
+          default: true
+          title: Open Only
+          type: boolean
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ReviewSampleOut'
+                title: Response List Samples V1 Samples Get
+                type: array
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: List Samples
+      tags:
+      - samples
+  /v1/samples/{sample_id}:
+    get:
+      description: 'One sample with what there is to judge.
+
+
+        A direct call: the prompt and the answer as the model saw and gave them —
+
+        placeholders, never the values — and the block versions of its context,
+
+        until the scope''s content period clears them. A workflow pass: its output is
+
+        the run''s, `GET /v1/workflows/runs/{run_id}/nodes`.'
+      operationId: get_sample_v1_samples__sample_id__get
+      parameters:
+      - in: path
+        name: sample_id
+        required: true
+        schema:
+          format: uuid
+          title: Sample Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewSampleDetail'
+          description: Successful Response
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: Get Sample
+      tags:
+      - samples
+  /v1/samples/{sample_id}/verdict:
+    post:
+      description: 'Judge a sample: `confirmed` or `objected`, with a reason. Requires `reviewer`.
+
+
+        Once per sample, audited as `workflow.sample_reviewed` or
+
+        `direct_call.sample_reviewed`. An objection recalls nothing — the output
+
+        went on — it is counted.'
+      operationId: judge_sample_v1_samples__sample_id__verdict_post
+      parameters:
+      - in: path
+        name: sample_id
+        required: true
+        schema:
+          format: uuid
+          title: Sample Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewSampleVerdict'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewSampleOut'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '409':
+          description: 'The sample has its verdict already: one per sample.'
+        '410':
+          description: 'The content was cleared at the end of its period (CHY-17): there is nothing left
+            to judge.'
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: Judge Sample
+      tags:
+      - samples
   /v1/scopes:
     get:
       description: Every scope, ordered by path so the tree reads top-down.
@@ -3052,11 +3960,113 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Create Scope
+      tags:
+      - scopes
+  /v1/scopes/{scope_id}/direct-call-risk-class:
+    get:
+      description: Whether /v1/complete answers in this scope, and what decides it.
+      operationId: get_direct_call_risk_class_v1_scopes__scope_id__direct_call_risk_class_get
+      parameters:
+      - in: path
+        name: scope_id
+        required: true
+        schema:
+          format: uuid
+          title: Scope Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DirectCallClassification'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: Get Direct Call Risk Class
+      tags:
+      - scopes
+    put:
+      description: 'Classify direct model calls in this scope. Architect and above.
+
+
+        Recorded with who and when, and in the audit log. The answer says whether
+
+        /v1/complete now answers here: that depends on the data class as well.
+
+        With minimal goes the share of direct calls judged afterwards (CHY-269).'
+      operationId: set_direct_call_risk_class_v1_scopes__scope_id__direct_call_risk_class_put
+      parameters:
+      - in: path
+        name: scope_id
+        required: true
+        schema:
+          format: uuid
+          title: Scope Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DirectCallRiskClassSet'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DirectCallClassification'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: Set Direct Call Risk Class
       tags:
       - scopes
   /v1/scopes/{scope_id}/members:
@@ -3092,8 +4102,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: List Members
@@ -3151,11 +4163,241 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Add Member
+      tags:
+      - scopes
+  /v1/scopes/{scope_id}/review-areas:
+    get:
+      description: 'The areas this scope defines and their members, revoked ones with the date.
+
+
+        Inherited areas are listed where they are defined.'
+      operationId: list_review_areas_v1_scopes__scope_id__review_areas_get
+      parameters:
+      - in: path
+        name: scope_id
+        required: true
+        schema:
+          format: uuid
+          title: Scope Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ReviewArea'
+                title: Response List Review Areas V1 Scopes  Scope Id  Review Areas Get
+                type: array
+          description: Successful Response
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: List Review Areas
+      tags:
+      - scopes
+    post:
+      description: Define an area that votes at a gate, for this scope and every scope below. Admin only.
+      operationId: create_review_area_v1_scopes__scope_id__review_areas_post
+      parameters:
+      - in: path
+        name: scope_id
+        required: true
+        schema:
+          format: uuid
+          title: Scope Id
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewAreaCreate'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewArea'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The transition is not allowed from the block's current status, or the version in
+            the body is not the current one (CHY-32) — or approving the block would loosen a privacy rule
+            stated further up the scope tree, which is refused outright and is not resolved by retrying
+            (ADR-017, CHY-62). In a direct scope a create or an edit approves the block itself, so it
+            can meet the second refusal too (ADR-042).
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: Create Review Area
+      tags:
+      - scopes
+  /v1/scopes/{scope_id}/review-areas/{name}/members:
+    post:
+      description: Add an actor to an area of this scope, or again after a revocation. Admin only.
+      operationId: add_review_area_member_v1_scopes__scope_id__review_areas__name__members_post
+      parameters:
+      - in: path
+        name: scope_id
+        required: true
+        schema:
+          format: uuid
+          title: Scope Id
+          type: string
+      - in: path
+        name: name
+        required: true
+        schema:
+          title: Name
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewAreaMemberCreate'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewAreaMember'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The transition is not allowed from the block's current status, or the version in
+            the body is not the current one (CHY-32) — or approving the block would loosen a privacy rule
+            stated further up the scope tree, which is refused outright and is not resolved by retrying
+            (ADR-017, CHY-62). In a direct scope a create or an edit approves the block itself, so it
+            can meet the second refusal too (ADR-042).
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: Add Review Area Member
+      tags:
+      - scopes
+  /v1/scopes/{scope_id}/review-areas/{name}/members/{actor_id}:
+    delete:
+      description: 'Revoke a membership, effective at once. The row stays with the date, so a
+
+        vote cast before stays provable; a new one is refused. Admin only.'
+      operationId: revoke_review_area_member_v1_scopes__scope_id__review_areas__name__members__actor_id__delete
+      parameters:
+      - in: path
+        name: scope_id
+        required: true
+        schema:
+          format: uuid
+          title: Scope Id
+          type: string
+      - in: path
+        name: name
+        required: true
+        schema:
+          title: Name
+          type: string
+      - in: path
+        name: actor_id
+        required: true
+        schema:
+          format: uuid
+          title: Actor Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewAreaMember'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: Revoke Review Area Member
       tags:
       - scopes
   /v1/workflows:
@@ -3182,8 +4424,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: List Workflows
@@ -3214,8 +4458,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Create Workflow
@@ -3249,8 +4495,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Run
@@ -3317,11 +4565,154 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Cancel Run
+      tags:
+      - workflows
+  /v1/workflows/runs/{run_id}/documents:
+    get:
+      description: 'Which documents the run expects, and what arrived for each (ADR-049).
+
+
+        Without their text. A run whose workflow has `document` nodes waits as
+
+        `awaiting_documents` until every one has arrived; this says which are
+
+        still missing.'
+      operationId: get_run_documents_v1_workflows_runs__run_id__documents_get
+      parameters:
+      - in: path
+        name: run_id
+        required: true
+        schema:
+          format: uuid
+          title: Run Id
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDocumentsOut'
+          description: Successful Response
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
+      security:
+      - HTTPBearer: []
+      summary: Get Run Documents
+      tags:
+      - workflows
+  /v1/workflows/runs/{run_id}/documents/{name}:
+    put:
+      description: 'Upload one document of a run; the last one starts the run (ADR-049).
+
+
+        The file is the body, its type the `Content-Type`: `application/pdf` or
+
+        `text/plain`, e.g. `curl -T statement.pdf -H ''Content-Type: application/pdf''`.
+
+
+        **Only whoever started the run**, only while it is `awaiting_documents`,
+
+        only a name its workflow has a `document` node for, and each name once.
+
+        There is no upload token: the run is the binding.
+
+
+        A PDF is read to text here — one without a text layer is refused, there is
+
+        no text recognition —, the text is scanned for instruction-shaped content
+
+        and stored with the run''s placeholders. The file is not kept. The scan''s
+
+        findings, counted by kind and rule, are in the answer and in the audit
+
+        entry `workflow.run_document_received`; they do not stop the run.
+
+
+        With the last document the run starts in this call, and the status in the
+
+        answer is where it got to: `awaiting_oversight`, `complete`, `failed`.'
+      operationId: upload_document_v1_workflows_runs__run_id__documents__name__put
+      parameters:
+      - in: path
+        name: run_id
+        required: true
+        schema:
+          format: uuid
+          title: Run Id
+          type: string
+      - in: path
+        name: name
+        required: true
+        schema:
+          pattern: ^[a-z][a-z0-9_]{0,62}$
+          title: Name
+          type: string
+      requestBody:
+        content:
+          application/pdf:
+            schema:
+              format: binary
+              type: string
+          text/plain:
+            schema:
+              format: binary
+              type: string
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDocumentsOut'
+          description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The requested object does not exist.
+        '409':
+          description: The run no longer waits for documents, or this one has arrived before (ADR-049).
+        '410':
+          description: The run's content was cleared at the end of its period.
+        '413':
+          description: Larger than the node's limit or the installation's.
+        '415':
+          description: Not application/pdf or text/plain.
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: Too many pages, no text layer, encrypted, not parseable or not UTF-8 text.
+      security:
+      - HTTPBearer: []
+      summary: Upload Document
       tags:
       - workflows
   /v1/workflows/runs/{run_id}/nodes:
@@ -3360,8 +4751,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Run Nodes
@@ -3428,13 +4821,17 @@ paths:
                 $ref: '#/components/schemas/ErrorDetail'
           description: The requested object does not exist.
         '409':
-          description: The workflow is not a draft, or its graph does not validate. See CHY-82.
+          description: The workflow is not a draft, or its graph does not validate (CHY-82) — or, on activation,
+            it counts as high-risk and its scope keeps logs for less than six months (AI Act Art. 26(6),
+            CHY-266).
         '422':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Decide Oversight
@@ -3499,8 +4896,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Resolve Run
@@ -3538,8 +4937,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Workflow
@@ -3599,13 +5000,17 @@ paths:
                 $ref: '#/components/schemas/ErrorDetail'
           description: The requested object does not exist.
         '409':
-          description: The workflow is not a draft, or its graph does not validate. See CHY-82.
+          description: The workflow is not a draft, or its graph does not validate (CHY-82) — or, on activation,
+            it counts as high-risk and its scope keeps logs for less than six months (AI Act Art. 26(6),
+            CHY-266).
         '422':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Set Workflow Status
@@ -3656,13 +5061,17 @@ paths:
                 $ref: '#/components/schemas/ErrorDetail'
           description: The requested object does not exist.
         '409':
-          description: The workflow is not a draft, or its graph does not validate. See CHY-82.
+          description: The workflow is not a draft, or its graph does not validate (CHY-82) — or, on activation,
+            it counts as high-risk and its scope keeps logs for less than six months (AI Act Art. 26(6),
+            CHY-266).
         '422':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Add Connection
@@ -3702,13 +5111,17 @@ paths:
                 $ref: '#/components/schemas/ErrorDetail'
           description: The requested object does not exist.
         '409':
-          description: The workflow is not a draft, or its graph does not validate. See CHY-82.
+          description: The workflow is not a draft, or its graph does not validate (CHY-82) — or, on activation,
+            it counts as high-risk and its scope keeps logs for less than six months (AI Act Art. 26(6),
+            CHY-266).
         '422':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Delete Connection
@@ -3742,8 +5155,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Get Graph
@@ -3786,13 +5201,17 @@ paths:
                 $ref: '#/components/schemas/ErrorDetail'
           description: The requested object does not exist.
         '409':
-          description: The workflow is not a draft, or its graph does not validate. See CHY-82.
+          description: The workflow is not a draft, or its graph does not validate (CHY-82) — or, on activation,
+            it counts as high-risk and its scope keeps logs for less than six months (AI Act Art. 26(6),
+            CHY-266).
         '422':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Add Node
@@ -3819,8 +5238,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
         '501':
           content:
             application/json:
@@ -3852,7 +5273,16 @@ paths:
 
         validator, and the validator is what guarantees the mandatory nodes and a
 
-        limit on every back edge (ADR-004, CHY-82).'
+        limit on every back edge (ADR-004, CHY-82).
+
+
+        A workflow with **`document` nodes** answers `awaiting_documents`: nothing
+
+        has run yet. Its documents are uploaded one by one
+
+        (`PUT /runs/{run_id}/documents/{name}`), and the last one starts the run
+
+        (ADR-049).'
       operationId: start_run_v1_workflows__workflow_id__runs_post
       parameters:
       - in: path
@@ -3888,13 +5318,17 @@ paths:
                 $ref: '#/components/schemas/ErrorDetail'
           description: The requested object does not exist.
         '409':
-          description: The workflow is not a draft, or its graph does not validate. See CHY-82.
+          description: The workflow is not a draft, or its graph does not validate (CHY-82) — or, on activation,
+            it counts as high-risk and its scope keeps logs for less than six months (AI Act Art. 26(6),
+            CHY-266).
         '422':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Start Run
@@ -3936,8 +5370,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
       security:
       - HTTPBearer: []
       summary: Validate Workflow
@@ -3958,8 +5394,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-          description: Validation Error
+                $ref: '#/components/schemas/UnprocessableDetail'
+          description: 'The request is invalid: a field failed validation (detail is a list), or a rule
+            or the database refused a value in it (detail is a sentence) — a NUL character in any text
+            field is refused that way on every operation.'
         '501':
           content:
             application/json:

@@ -28,7 +28,18 @@ COPY router/ ./router/
 COPY contexts/ ./contexts/
 COPY kernel/ ./kernel/
 COPY core/ ./core/
+COPY steps/ ./steps/
 COPY migrations/ ./migrations/
+
+# `cc` finds its packages here (CHY-257). `pip install .` above runs before the
+# sources are copied, so it installs the dependencies and the console script
+# `cc`, but none of the packages: they live in /app, and a console script does
+# not look there. uvicorn did, because it starts in /app, and so the API ran
+# while every `cc` command in the image failed with "No module named 'cli'" —
+# among them `cc retention purge` and `cc oversight expire`, which the
+# operator's timer starts. Installing after the copy would rebuild the
+# dependency layer on every change of a source file; one path is cheaper.
+ENV PYTHONPATH=/app
 
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 

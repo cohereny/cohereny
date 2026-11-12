@@ -66,8 +66,14 @@ BASELINE = ROOT / "quality-baseline.json"
 # that shrank each time a context was extracted. A refactor that moved code out
 # of api/ therefore improved the numbers by measuring less, which is the exact
 # failure this script exists to prevent.
-SRC = ["api", "core", "cli", "router", "scripts", "pilots",
-       "kernel", "contexts"]
+#
+# `pilots` left again on 09.11.2026 (CHY-262): deprecated since 08.11., going
+# with CHY-179. They held 97 of the 234 ruff findings counted here, a debt that
+# disappears with them rather than by being paid. codespell had already left
+# them out for the same reason (`_is_specimen` below). The strict families in
+# pyproject.toml still apply to them through `ruff check .`.
+SRC = ["api", "core", "cli", "router", "scripts",
+       "kernel", "contexts", "steps"]
 
 #: Paths excluded from every count. Tests live inside the pilot packages rather
 #: than in a single tests/ directory, so the exclusion has to be a rule about

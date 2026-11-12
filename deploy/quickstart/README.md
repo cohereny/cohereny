@@ -9,6 +9,10 @@ which model drafts replies; a project, *Order inquiries*, adds this week's carri
 delay. A workflow lets the model draft a reply to a customer and stops for a person to
 approve it.
 
+Next to it, a *Help Center* holds texts written for customers anyway. There the model
+may be asked directly, without a workflow; in Example Corp, which holds customer data,
+it may not.
+
 This is for trying Cohereny out, not for running it: the identity provider issues a
 token to anyone who asks. For a real installation see
 [DEPENDENCIES.md](../../DEPENDENCIES.md).
@@ -65,12 +69,13 @@ without the membership `reviewer` would not find the run you start in step 4.
 `GET /v1/me` shows a user's id and memberships — the id is what an admin passes
 to `POST /v1/scopes/{id}/members`.
 
-**1. Find the example.** Note the id of the project *Order inquiries* and of its
-workflow.
+**1. Find the example.** Note the id of the project *Order inquiries*, of its
+workflow and of the *Help Center*.
 
 ```bash
 curl -s $API/v1/scopes -H "Authorization: Bearer $AUTHOR"
 PROJECT=<id of "Order inquiries">
+HELP=<id of "Help Center">
 curl -s "$API/v1/workflows?scope_id=$PROJECT" -H "Authorization: Bearer $AUTHOR"
 WORKFLOW=<id of "Draft a reply to a customer">
 ```
@@ -84,9 +89,21 @@ curl -s $API/v1/compose -H "Authorization: Bearer $SERVE" \
   -H 'Content-Type: application/json' -d "{\"scope_id\": \"$PROJECT\"}"
 ```
 
-**3. Ask the model.** You name a *task type*, not a model. A routing rule of the team
-decides which model serves `summarize` — here the local one — and how long the answer
-may be.
+**3. Ask the model directly.** You name a *task type*, not a model. A routing rule of
+the help center decides which model serves `summarize` — here the local one — and how
+long the answer may be.
+
+```bash
+curl -s $API/v1/complete -H "Authorization: Bearer $SERVE" \
+  -H 'Content-Type: application/json' -d "{\"scope_id\": \"$HELP\",
+  \"task_type\": \"summarize\",
+  \"prompt\": \"Summarise our shipping and returns policy in two sentences.\"}"
+```
+
+A `502` right after the first start means the model is still downloading:
+`docker compose logs model-pull`.
+
+Now the same question in the project, where customer data lives:
 
 ```bash
 curl -s $API/v1/complete -H "Authorization: Bearer $SERVE" \
@@ -95,8 +112,13 @@ curl -s $API/v1/complete -H "Authorization: Bearer $SERVE" \
   \"prompt\": \"Summarise our shipping and returns policy in two sentences.\"}"
 ```
 
-A `502` right after the first start means the model is still downloading:
-`docker compose logs model-pull`.
+`409`: Example Corp's data class is `confidential`, so an answer there needs a person
+before it is used, and a direct call returns it unchecked. That is what the workflow
+in the next step is for. Where a direct call answers is decided per scope, from its
+data class and from how risky direct calls in it are — the help center's were
+classified `minimal`; `GET /v1/scopes/$HELP/direct-call-risk-class` shows it. There one
+call in ten is drawn for a check afterwards: its answer carries a `sample_id`, and the
+call waits in `GET /v1/samples` for a reviewer.
 
 **4. Start the workflow** with a customer's message. The run composes the context,
 lets the model draft a reply and stops at the review: `"status": "awaiting_oversight"`.

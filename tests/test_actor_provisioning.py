@@ -223,18 +223,36 @@ class TestBlockWriteGates:
         with client_for(self._pool("consumer")) as client:
             assert client.patch(f"/v1/blocks/{uuid4()}", json={"content": "x"}).status_code == 403
 
-    def test_contributor_cannot_delete(self):
-        """Retiring a block takes it out of every composition — reviewer."""
-        with client_for(self._pool("contributor")) as client:
-            assert client.delete(f"/v1/blocks/{uuid4()}").status_code == 403
-
-    def test_reviewer_may_delete(self):
+    @staticmethod
+    def _retire_as(role: str, scope_type: str) -> int:
         pool = make_pool(
-            actor=actor_row(_ACTOR_ID, "reviewer"),
+            actor=actor_row(_ACTOR_ID, role),
             conn_fetch=[{"id": uuid4(), "version": 1, "status": "active", "scope_id": uuid4()}],
+            conn_fetchval=scope_type,
         )
         with client_for(pool) as client:
-            assert client.delete(f"/v1/blocks/{uuid4()}").status_code == 204
+            return client.delete(f"/v1/blocks/{uuid4()}").status_code
+
+    def test_contributor_cannot_delete_in_a_strict_scope(self):
+        """Retiring a block takes it out of every composition — reviewer."""
+        assert self._retire_as("contributor", "org") == 403
+
+    def test_contributor_may_delete_in_a_direct_scope(self):
+        """CHY-170 (Thomas, 06.11.2026): whoever may activate there may take back."""
+        assert self._retire_as("contributor", "personal") == 204
+
+    def test_reviewer_may_delete(self):
+        assert self._retire_as("reviewer", "org") == 204
+
+    def test_consumer_cannot_delete_anywhere(self):
+        """Refused before the block is read, so the answer says nothing about it."""
+        pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"),
+                         conn_fetch=[{"id": uuid4(), "version": 1, "status": "active",
+                                      "scope_id": uuid4()}],
+                         conn_fetchval="personal")
+        with client_for(pool) as client:
+            assert client.delete(f"/v1/blocks/{uuid4()}").status_code == 403
+        pool.conn.fetch.assert_not_called()
 
     def test_reads_stay_open_to_any_authenticated_caller(self):
         pool = make_pool(actor=actor_row(_ACTOR_ID, "consumer"), fetch=[], fetchval=0)

@@ -18,8 +18,7 @@ def _file(covered: int, statements: int) -> dict:
     return {"summary": {"covered_lines": covered, "num_statements": statements}}
 
 
-#: Small enough to add up by hand: outside the pilots 180 of 200 lines (90 %),
-#: with the pilots 200 of 300 (66.7 %).
+#: Small enough to add up by hand: 180 of 200 lines (90 %).
 COVERAGE = {
     "files": {
         "router/rules.py": _file(10, 10),
@@ -28,11 +27,8 @@ COVERAGE = {
         "contexts/orchestration/service.py": _file(80, 90),
         "core/db.py": _file(15, 15),
         "cli/main.py": _file(5, 5),
-        "pilots/banking/banking/nodes.py": _file(15, 50),
-        "pilots/study/study/graph.py": _file(4, 40),
-        "pilots/study/scripts/ingest_questions.py": _file(1, 10),
     },
-    "totals": {"covered_lines": 200, "num_statements": 300},
+    "totals": {"covered_lines": 180, "num_statements": 200},
 }
 VERSIONS = {"python": "3.14", "pytest": "9.2", "coverage": "7.17"}
 
@@ -47,11 +43,16 @@ class TestPercent:
 
 
 class TestByDirectory:
-    def test_pilots_are_kept_apart_and_a_pilot_keeps_its_scripts(self):
-        dirs = rt.by_directory(COVERAGE)
-        assert dirs["pilots/study"] == (5, 50)
-        assert dirs["pilots/banking"] == (15, 50)
-        assert dirs["api"] == (30, 40)
+    def test_lines_are_summed_per_top_level_directory(self):
+        assert rt.by_directory(COVERAGE)["api"] == (30, 40)
+
+    def test_a_pilot_in_the_report_stops_it(self):
+        """Out of the measurement since CHY-262; back in, it would need a row."""
+        coverage = {"files": {**COVERAGE["files"],
+                              "pilots/banking/banking/nodes.py": _file(15, 50)},
+                    "totals": COVERAGE["totals"]}
+        with pytest.raises(ValueError, match="pilots"):
+            rt.by_directory(coverage)
 
     def test_a_directory_without_a_row_stops_it(self):
         coverage = {"files": {**COVERAGE["files"], "newzone/x.py": _file(1, 1)},
@@ -88,25 +89,25 @@ class TestCounts:
 class TestRender:
     block = rt.render(2020, 169, COVERAGE, datetime.date(2026, 11, 8), VERSIONS)
 
-    def test_counts_and_the_figure_outside_the_pilots(self):
+    def test_counts_and_the_figure(self):
         assert "2,020 unit tests need no services; another 169 run against" in self.block
-        assert "cover **90 %** of the lines outside the two pilots" in self.block
+        assert "cover **90 %** of the lines:" in self.block
         assert "| **All of the above** | | **90 %** |" in self.block
 
-    def test_the_figure_with_the_pilots_comes_from_the_totals(self):
-        assert "| **Including the pilots** | | **67 %** |" in self.block
-        assert "| The two original pilots | 30 %, 10 % |" in self.block
+    def test_no_pilot_row(self):
+        assert "pilots" not in self.block
 
     def test_rows_best_covered_first(self):
         rows = [line.split("`")[1] for line in self.block.splitlines()
-                if line.startswith("| `") and "pilots" not in line]
-        # 100 % four times (by name), then contexts 89 %, api 75 %
-        assert rows == ["cli/", "core/", "kernel/", "router/", "contexts/", "api/"]
+                if line.startswith("| `")]
+        # 100 % four times (by name), then contexts 89 %, api 75 %, and steps/
+        # last: a directory with no file in the report counts as 0 %, not as absent
+        assert rows == ["cli/", "core/", "kernel/", "router/", "contexts/", "api/", "steps/"]
 
     def test_date_tools_and_command(self):
         assert ("Measured on 2026-11-08 with Python 3.14, pytest 9.2 and coverage 7.17:"
                 in self.block)
-        assert "`pytest tests/ pilots/banking/tests pilots/study/tests --cov`" in self.block
+        assert "`pytest tests/ --cov`" in self.block
 
     def test_framed_by_the_markers(self):
         assert self.block.startswith(rt.BEGIN)

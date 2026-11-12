@@ -50,7 +50,7 @@ table.
 from __future__ import annotations
 
 import enum
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 from uuid import UUID
@@ -66,7 +66,7 @@ from kernel.audit import (
     target_ref,
     write_audit,
 )
-from kernel.errors import RetentionOverrideNotFound, ScopeNotFound
+from kernel.errors import HighRiskPeriodTooShort, RetentionOverrideNotFound, ScopeNotFound
 from kernel.identity import Caller, resolve_actor
 from kernel.schema import (
     ExternalStoreOut,
@@ -192,6 +192,16 @@ INVENTORY: dict[str, TableEntry] = {
                                   access=("SELECT", "INSERT", "UPDATE")),
     "loop_counters": TableEntry("orchestration", RetentionClass.RUN_TRACE,
                                 access=("SELECT", "INSERT", "UPDATE")),
+    # Drawn passes of sample gates and their verdict (CHY-223). DELETE: they go
+    # with their run, leaf first, as the votes do.
+    "review_samples": TableEntry("orchestration", RetentionClass.RUN_TRACE, ("reason",),
+                                 access=("SELECT", "INSERT", "UPDATE", "DELETE")),
+    # Direct calls drawn for review (CHY-269): prompt, answer and reason are
+    # content, cleared after the scope's run_content period; the row, with its
+    # verdict, goes after the run_trace period. Placeholders only — no mapping.
+    "direct_call_samples": TableEntry("orchestration", RetentionClass.RUN_TRACE,
+                                      ("prompt", "answer", "reason"),
+                                      access=("SELECT", "INSERT", "UPDATE", "DELETE")),
     "review_votes": TableEntry("orchestration", RetentionClass.RUN_TRACE, ("reason",),
                                access=("SELECT", "INSERT", "UPDATE", "DELETE")),
     # What each placeholder of a run stands for, sealed (CHY-234). UPDATE: a step
@@ -199,6 +209,10 @@ INVENTORY: dict[str, TableEntry] = {
     "pii_mappings": TableEntry("orchestration", RetentionClass.RUN_TRACE,
                                ("nonce", "ciphertext"),
                                access=("SELECT", "INSERT", "UPDATE")),
+    # A run's documents as text (CHY-174, ADR-049). The text is content; name,
+    # size, pages and the counted findings are the trace. UPDATE: the purge.
+    "workflow_run_documents": TableEntry("orchestration", RetentionClass.RUN_TRACE, ("text",),
+                                         access=("SELECT", "INSERT", "UPDATE")),
     "workflow_definitions": TableEntry("orchestration", RetentionClass.STRUCTURE,
                                        access=("SELECT", "INSERT", "UPDATE")),
     "workflow_nodes": TableEntry("orchestration", RetentionClass.STRUCTURE, access=APPEND),
@@ -242,7 +256,16 @@ INVENTORY: dict[str, TableEntry] = {
     "actors": TableEntry("kernel", RetentionClass.ACCOUNTS,
                          access=("SELECT", "INSERT", "UPDATE")),
     "scope_memberships": TableEntry("kernel", RetentionClass.ACCOUNTS, access=APPEND),
+    # The competence order of a scope (CHY-180): which areas vote at a gate, and
+    # who belongs to them. UPDATE on the members revokes and grants again; a
+    # revoked row stays, so a vote cast under it stays provable.
+    "review_areas": TableEntry("kernel", RetentionClass.STRUCTURE, access=APPEND),
+    "review_area_members": TableEntry("kernel", RetentionClass.ACCOUNTS,
+                                      access=("SELECT", "INSERT", "UPDATE")),
     "scope_nodes": TableEntry("kernel", RetentionClass.STRUCTURE, access=APPEND),
+    # Each classification of direct model calls is a row; the newest applies
+    # (CHY-199). Append-only like the scopes it classifies.
+    "direct_call_risk_classes": TableEntry("kernel", RetentionClass.STRUCTURE, access=APPEND),
     "retention_policies": TableEntry("kernel", RetentionClass.STRUCTURE,
                                      access=("SELECT", "INSERT", "UPDATE", "DELETE")),
     # created by migrations/runner.py, not by a migration; the application
@@ -410,6 +433,82 @@ def effective_keep_days(policies: Iterable, chain_root_first: list[UUID],
     return declared.get(None), None
 
 
+# ── high-risk workflows keep their logs six months (CHY-266, Art. 26(6) AI Act) ──
+
+#: Six months. Art. 26(6) asks a deployer of a high-risk AI system to keep the
+#: logs it generates "for a period appropriate to the intended purpose ... of
+#: at least six months"; the run trace's default (183 days) was chosen for it.
+HIGH_RISK_MIN_KEEP_DAYS = 183
+
+#: Both, decided by Thomas, 10.11.2026: the trace is the log, and the content
+#: is what a reviewer of a high-risk run has to be able to read back.
+HIGH_RISK_CLASSES: tuple[RetentionClass, ...] = (RetentionClass.RUN_TRACE,
+                                                 RetentionClass.RUN_CONTENT)
+
+#: The scopes that hold an active workflow counting as high-risk. Read by the
+#: orchestration context, which owns workflows; the kernel imports no context,
+#: so the transport hands the reader in (as the purge gets workflow_scopes).
+HighRiskScopes = Callable[[asyncpg.Connection], Awaitable[set[UUID]]]
+
+
+def _too_short(days: int | None) -> bool:
+    """None keeps without limit, which is long enough."""
+    return days is not None and days < HIGH_RISK_MIN_KEEP_DAYS
+
+
+async def lock_high_risk_rule(conn) -> None:
+    """One lock for both sides of the rule, held to the end of the transaction.
+
+    A period being shortened and a high-risk workflow being activated each
+    check the other's state; run at the same moment, each would pass against
+    the state before the other. The lock makes them take turns.
+    """
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtext('cohereny:high-risk-retention'))")
+
+
+async def require_high_risk_periods(conn, scope_id: UUID) -> None:
+    """Before a high-risk workflow becomes active in `scope_id`: both periods
+    there are at least six months, or HighRiskPeriodTooShort. Takes the lock."""
+    await lock_high_risk_rule(conn)
+    policies = await _policies(conn)
+    chain_ids = [row["id"] for row in await scopes.ancestor_chain(conn, scope_id)]
+    short = {c.value: days for c in HIGH_RISK_CLASSES
+             if _too_short(days := effective_keep_days(policies, chain_ids, c.value)[0])}
+    if short:
+        raise HighRiskPeriodTooShort({scope_id: short}, HIGH_RISK_MIN_KEEP_DAYS,
+                                     activating=True)
+
+
+def shortened_below_minimum(retention_class: str, before: Periods, after: Periods,
+                            high_risk: set[UUID]) -> dict[UUID, dict[str, int]]:
+    """High-risk scopes where a change makes the period shorter and under six months.
+
+    Only shorter: a scope already under the minimum — activated before this
+    rule, or configured by hand — must not block an unrelated change, nor the
+    one that lengthens its own period towards the minimum.
+    """
+    if retention_class not in {c.value for c in HIGH_RISK_CLASSES}:
+        return {}
+    found: dict[UUID, dict[str, int]] = {}
+    for scope_id in high_risk:
+        old = before.by_scope.get(scope_id, before.installation).get(retention_class)
+        new = after.by_scope.get(scope_id, after.installation).get(retention_class)
+        if _too_short(new) and (old is None or new < old):
+            found[scope_id] = {retention_class: new}
+    return found
+
+
+async def _refuse_shortening(conn, retention_class: str, before: Periods,
+                             high_risk_scopes: HighRiskScopes) -> None:
+    """After a change, inside its transaction: refuse it if it shortened a
+    high-risk scope below six months. Raising rolls the change back."""
+    after = periods_from(await _policies(conn), await scopes.all_paths(conn))
+    found = shortened_below_minimum(retention_class, before, after,
+                                    await high_risk_scopes(conn))
+    if found:
+        raise HighRiskPeriodTooShort(found, HIGH_RISK_MIN_KEEP_DAYS, activating=False)
+
+
 async def _policies(conn) -> list:
     return await conn.fetch(
         "SELECT retention_class, scope_id, keep_days, set_by, set_at "
@@ -467,17 +566,24 @@ async def overview(pool, caller: Caller, scope_id: UUID | None = None) -> Retent
 
 
 async def set_policy(pool, caller: Caller, retention_class: str,
-                     body: RetentionPolicySet) -> RetentionPolicy:
+                     body: RetentionPolicySet, *,
+                     high_risk_scopes: HighRiskScopes) -> RetentionPolicy:
     """Set a period, installation-wide or for one scope, audited. `admin`.
 
     The old value is read under lock and written into the entry next to the
     new one: a period that changes without saying from what is a change nobody
     can judge afterwards — the same reasoning as for a role change.
+
+    Refused if it shortens the run trace or content below six months in a
+    scope with an active high-risk workflow, also from further up the chain
+    (CHY-266).
     """
     performer = await resolve_actor(pool, caller)
     require(performer, "admin")
 
     async with pool.acquire() as conn, conn.transaction():
+        await lock_high_risk_rule(conn)
+        before = periods_from(await _policies(conn), await scopes.all_paths(conn))
         previous = await conn.fetchrow(
             "SELECT keep_days FROM retention_policies "
             "WHERE retention_class = $1 AND scope_id IS NOT DISTINCT FROM $2 FOR UPDATE",
@@ -504,20 +610,27 @@ async def set_policy(pool, caller: Caller, retention_class: str,
                      "had_policy": previous is not None,
                      "to_keep_days": body.keep_days},
         )
+        await _refuse_shortening(conn, retention_class, before, high_risk_scopes)
     return RetentionPolicy(**dict(row))
 
 
-async def remove_override(pool, caller: Caller, retention_class: str, scope_id: UUID) -> None:
+async def remove_override(pool, caller: Caller, retention_class: str, scope_id: UUID, *,
+                          high_risk_scopes: HighRiskScopes) -> None:
     """Take a scope's own period away, so the inherited one applies again. `admin`.
 
     Only for a scope. The installation-wide period can be changed, not
     removed: without it, a scope nobody configured would keep without limit
     because a row was missing, not because anyone decided so.
+
+    Refused like set_policy if the inherited period is shorter and under six
+    months in a scope with an active high-risk workflow (CHY-266).
     """
     performer = await resolve_actor(pool, caller)
     require(performer, "admin")
 
     async with pool.acquire() as conn, conn.transaction():
+        await lock_high_risk_rule(conn)
+        before = periods_from(await _policies(conn), await scopes.all_paths(conn))
         removed = await conn.fetchrow(
             "DELETE FROM retention_policies WHERE retention_class = $1 AND scope_id = $2 "
             "RETURNING keep_days",
@@ -532,3 +645,4 @@ async def remove_override(pool, caller: Caller, retention_class: str, scope_id: 
                      "from_keep_days": removed["keep_days"], "had_policy": True,
                      "removed": True},
         )
+        await _refuse_shortening(conn, retention_class, before, high_risk_scopes)

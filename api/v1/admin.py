@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, Query, status
 
 from api.deps import CurrentUser, require_auth
 from api.v1._responses import FORBIDDEN, NOT_FOUND, UNPROCESSABLE
+from contexts.orchestration import service as orchestration
 from core.db import get_pool
 from kernel import identity, retention
 from kernel.schema import (
@@ -75,9 +76,18 @@ async def get_retention(
     return await retention.overview(pool, actor, scope_id)
 
 
+#: Art. 26(6) AI Act (CHY-266): a change that would shorten the logs of a
+#: high-risk workflow below six months.
+_HIGH_RISK_PERIOD = {
+    409: {"description": "The change would keep the run trace or content of an active "
+                         "high-risk workflow (risk_class high, or none) for less than six "
+                         "months (AI Act Art. 26(6), CHY-266)."},
+}
+
+
 @router.put(
     "/retention/{retention_class}",
-    responses={**FORBIDDEN, **NOT_FOUND, **UNPROCESSABLE},
+    responses={**FORBIDDEN, **NOT_FOUND, **UNPROCESSABLE, **_HIGH_RISK_PERIOD},
 )
 async def set_retention(
     retention_class: ConfigurableRetentionClass,
@@ -90,12 +100,13 @@ async def set_retention(
     `keep_days: null` keeps without limit. Only `run_content` and `run_trace`
     take a period; the other classes say in GET why they do not.
     """
-    return await retention.set_policy(pool, actor, retention_class, body)
+    return await retention.set_policy(pool, actor, retention_class, body,
+                                      high_risk_scopes=orchestration.high_risk_scopes)
 
 
 @router.delete(
     "/retention/{retention_class}", status_code=status.HTTP_204_NO_CONTENT,
-    responses={**FORBIDDEN, **NOT_FOUND},
+    responses={**FORBIDDEN, **NOT_FOUND, **_HIGH_RISK_PERIOD},
 )
 async def remove_retention_override(
     retention_class: ConfigurableRetentionClass,
@@ -107,4 +118,5 @@ async def remove_retention_override(
 
     The installation-wide period can be changed, not removed.
     """
-    await retention.remove_override(pool, actor, retention_class, scope_id)
+    await retention.remove_override(pool, actor, retention_class, scope_id,
+                                    high_risk_scopes=orchestration.high_risk_scopes)

@@ -68,12 +68,13 @@ class Outcome(enum.Enum):
     `awaiting_oversight` — not a blocked thread (ADR-028 point 2)."""
 
     COMPLETE = "complete"
-    """No tokens left and nothing ready. The run is over."""
+    """No tokens left and nothing ready. The run is over.
 
-    FAILED = "failed"
-    """A rule was broken in a way the run cannot recover from — an XOR branch
-    with nothing to take, or a loop that has used up its limit with no other
-    way forward."""
+    There is no FAILED here. A run fails from `fire`, at the node where the
+    rule broke — an XOR branch with nothing to take, a loop that used up its
+    limit with nothing else under way — because that is where the reason is
+    known. Until CHY-150 a FAILED member stood here, promised exactly the
+    second case, and nothing ever returned it: the run ended as COMPLETE."""
 
 
 @dataclass(frozen=True)
@@ -189,7 +190,8 @@ def consume(graph: Graph, state: RunState, node_id: UUID) -> tuple[UUID, ...]:
 
 
 def fire(
-    graph: Graph, state: RunState, node_id: UUID, *, conditions: Mapping[UUID, bool]
+    graph: Graph, state: RunState, node_id: UUID, *, conditions: Mapping[UUID, bool],
+    excluding: frozenset[UUID] = frozenset(),
 ) -> Firing:
     """Where the run goes after this node completes.
 
@@ -200,10 +202,12 @@ def fire(
 
     Rules, in order:
 
-    1. An edge whose loop_limit is used up is not taken. Reported rather than
-       dropped: a loop that has run its course is a normal end, and a loop that
-       ends while nothing else can proceed is a failure — the caller can only
-       tell the two apart if it hears about the refusal.
+    1. An edge whose loop_limit is used up is not taken, and reported as
+       `exhausted`. A guarded one counts as a guard that did not hold, so a
+       `default` edge takes over: the loop has used its budget, the run goes
+       the way it goes when the criterion is not met (CHY-150). A loop that has
+       run out while nothing else in the run is ready or running is a failure,
+       decided here because only here is the edge known (rule 6).
     2. Unguarded edges without a `default` label are always taken. That is a
        fork.
     3. Guarded edges are taken when their guard held.
@@ -212,8 +216,16 @@ def fire(
        arc42 §5.6: an XOR branch where no condition matches and no default
        exists ends the run with an error, because quietly going nowhere is
        indistinguishable from having finished.
+    6. The same for a loop that has run out with nothing else to go on
+       (Thomas, 09.11.2026). Until CHY-150 it ended as `complete` — the budget
+       used up looked like the work done.
+
+    `excluding` names edges that do not belong to this firing at all: a gate's
+    escalation edges when it releases (ADR-050). Left in, a gate whose only
+    outgoing edge is its escalation would fail on every approval — no guard
+    held, no default — when on approval it is simply the end.
     """
-    outgoing = graph.successors(node_id)
+    outgoing = [e for e in graph.successors(node_id) if e.id not in excluding]
     if not outgoing:
         return Firing()
 
@@ -221,7 +233,7 @@ def fire(
     for edge in outgoing:
         limit = edge.loop_limit
         if limit is not None and state.traversals.get(edge.id, 0) >= limit:
-            exhausted.append(edge.id)
+            exhausted.append(edge)
         else:
             open_edges.append(edge)
 
@@ -241,23 +253,75 @@ def fire(
 
     matched = [e for e in guarded if conditions.get(e.id, False)]
     taken = [*plain, *matched]
-    if guarded and not matched:
+    # An exhausted guard is a guard that did not hold (CHY-150). Without it in
+    # this test the default stayed shut whenever the loop's own guard was the
+    # only one, and a run that never met its criterion ended without a review.
+    guards_existed = bool(guarded) or any(e.has_condition for e in exhausted)
+    if guards_existed and not matched:
         taken.extend(defaults)
 
+    spent = tuple(e.id for e in exhausted)
     if taken:
-        return Firing(taken=tuple(e.id for e in taken), exhausted=tuple(exhausted))
+        return Firing(taken=tuple(e.id for e in taken), exhausted=spent)
 
     if exhausted:
-        # Every way on is a loop that has run out. That is how a bounded loop
-        # ends, and it is not an error by itself — whether the run is finished
-        # depends on the tokens elsewhere, which `plan` sees and this does not.
-        return Firing(exhausted=tuple(exhausted))
+        if _nothing_else_under_way(graph, state, node_id):
+            return Firing(exhausted=spent, failure=_ran_out(graph, node_id, exhausted))
+        # Something else is still under way: this branch has run its course,
+        # the run has not.
+        return Firing(exhausted=spent)
 
     return Firing(failure=(
         f"{graph.ref(node_id)} has outgoing connections but none of them can be "
         f"taken: no condition matched and there is no default edge. A branch "
         f"that leads nowhere ends the run rather than looking finished."
     ))
+
+
+def _nothing_else_under_way(graph: Graph, state: RunState, node_id: UUID) -> bool:
+    """Whether the run stops once `node_id` has finished taking nothing.
+
+    The node itself is in flight while its completion is recorded, so it does
+    not count; anything else running, or ready to run, does.
+    """
+    if state.in_flight - {node_id}:
+        return False
+    return not any(step.node_id != node_id for step in ready(graph, state))
+
+
+def _ran_out(graph: Graph, node_id: UUID, exhausted: list[Edge]) -> str:
+    """The reason a run ends on a loop that has used up its limit."""
+    edges = ", ".join(f"{graph.ref(e.source)} → {graph.ref(e.target)} "
+                      f"(loop_limit of {e.loop_limit})" for e in exhausted)
+    return (f"{graph.ref(node_id)} has used up its loop: {edges}, and nothing else in "
+            f"the run can go on. A loop that only ran out of passes has not met its "
+            f"criterion; the run ends as failed rather than looking finished.")
+
+
+def escalate(graph: Graph, state: RunState, node_id: UUID, *,
+             escalation_edges: frozenset[UUID]) -> Firing:
+    """Where a gate goes when it escalates instead of releasing (ADR-050).
+
+    Only its escalation edges are taken, never the plain ones: those are the way
+    on after a release. Which edges escalate is decided by the caller from their
+    guards — this module reads no condition, as with `fire`. Loop limits apply
+    as there.
+
+    No escalation edge to take is a failure, not a quiet end: activation refuses
+    a gate that can escalate without one (`escalation_without_edge`), so
+    reaching it means the definition changed underneath a run.
+    """
+    edges = [e for e in graph.successors(node_id) if e.id in escalation_edges]
+    open_edges = [e for e in edges
+                  if e.loop_limit is None or state.traversals.get(e.id, 0) < e.loop_limit]
+    if open_edges:
+        return Firing(taken=tuple(e.id for e in open_edges),
+                      exhausted=tuple(e.id for e in edges if e not in open_edges))
+    return Firing(
+        exhausted=tuple(e.id for e in edges),
+        failure=(f"{graph.ref(node_id)} escalates, but it has no escalation edge it can "
+                 f"take. Escalation goes along an edge to a further gate (ADR-050)."),
+    )
 
 
 def plan(graph: Graph, state: RunState) -> Plan:

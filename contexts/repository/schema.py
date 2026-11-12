@@ -36,7 +36,7 @@ Published interface of a context is service, schema, errors — this is `schema`
 from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 from pydantic import BaseModel, Field
 from kernel.schema import PG_INT_MAX
@@ -326,6 +326,12 @@ class ComposeRequest(BaseModel):
     )
     block_types: list[str] | None = Field(
         default=None, description="Restrict to these block types. None = all."
+    )
+    tags: list[Annotated[str, Field(min_length=1)]] | None = Field(
+        default=None, min_length=1,
+        description="Only blocks that carry every one of these tags, on the "
+                    "version that would be composed (CHY-178). Omit for no tag "
+                    "filter; an empty list is refused, as it would read as none.",
     )
     refresh: bool = Field(
         default=False, description="Skip the cache read and recompile."

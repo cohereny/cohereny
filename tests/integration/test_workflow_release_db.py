@@ -40,7 +40,8 @@ async def test_an_active_workflow_with_runs_is_not_reopened_and_its_graph_stays(
 
     with pytest.raises(WorkflowNotEditable):
         await orchestration.set_workflow_status(
-            pool, caller("reviewer"), workflow_id, WorkflowStatusPut(status="draft"))
+            pool, caller("reviewer"), workflow_id, WorkflowStatusPut(status="draft"),
+            limits=orchestration.DocumentLimits(max_bytes=10 * 1024 * 1024, max_pages=200))
     # What the fuzzer did next: delete an edge the run had counted.
     with pytest.raises(WorkflowNotEditable):
         await orchestration.remove_connection(

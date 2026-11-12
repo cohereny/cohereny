@@ -36,7 +36,8 @@ def _node(**kw) -> NodeCreate:
     defaults = {
         "node_ref": "n", "node_type": "tool_call", "name": None, "description": None,
         "join_policy": None, "config": {}, "context_requirements": None,
-        "task_type": None, "target_workflow_id": None, "target_workflow_version": None,
+        "task_type": None, "output_schema": None, "function": None, "function_version": None,
+        "target_workflow_id": None, "target_workflow_version": None,
         "input_mapping": {}, "output_mapping": {}, "review_role": None,
         "review_timeout": None, "on_timeout": None,
     }
@@ -57,6 +58,13 @@ async def _insert(pool, workflow, node):
     _node(node_ref="ask", node_type="llm_call", task_type="summarize",
           config={"prompt": "hi"}),
     _node(node_ref="tool", node_type="tool_call"),
+    _node(node_ref="shaped", node_type="llm_call", task_type="classify",
+          output_schema={"type": "object", "required": ["risk_level"]}),
+    _node(node_ref="calc", node_type="compute", function="banking.ratios", function_version=1),
+    # 046, CHY-178: a step that asks for its own prompt by tag
+    _node(node_ref="tagged", node_type="context_compose",
+          context_requirements=ContextRequirements(block_types=["system_prompt"],
+                                                   tags=["banking:risiko", "v2"])),
 ], ids=lambda n: n.node_ref)
 async def test_a_valid_node_is_stored(pool, workflow, node):
     """Counter-probe to everything below: the table must not refuse the
@@ -93,6 +101,36 @@ async def test_a_valid_node_is_stored(pool, workflow, node):
     (_node(node_ref="i", node_type="llm_call", task_type="summarize",
            config={"task_type": "x"}),
      "workflow_nodes_config_without_task_type"),
+    # 039, CHY-175
+    (_node(node_ref="j", node_type="tool_call", output_schema={"type": "object"}),
+     "workflow_nodes_output_schema_only_on_llm_call"),
+    (_node(node_ref="k", node_type="llm_call", task_type="classify",
+           output_schema={"type": "array"}),
+     "workflow_nodes_output_schema_is_object"),
+    (_node(node_ref="l", node_type="llm_call", task_type="classify",
+           config={"output_schema": {"type": "object"}}),
+     "workflow_nodes_config_without_output_schema"),
+    # 040, CHY-173
+    (_node(node_ref="m", node_type="tool_call", function="banking.ratios", function_version=1),
+     "workflow_nodes_function_only_on_compute"),
+    (_node(node_ref="n", node_type="compute"),
+     "workflow_nodes_compute_names_function"),
+    (_node(node_ref="o", node_type="compute", function="banking.ratios", function_version=0),
+     "workflow_nodes_compute_names_function"),
+    (_node(node_ref="p", node_type="compute", function="banking.ratios", function_version=1,
+           config={"function": "banking.ratios"}),
+     "workflow_nodes_config_without_function"),
+    # 046, CHY-178 — and 028 still holds: 046 redefined the constraint, and a
+    # copy of the older list would have let calibration_anchor back in.
+    *((_node(node_ref=f"tags-{name}", node_type="context_compose",
+             context_requirements=ContextRequirements.model_construct(
+                 block_types=["system_prompt"], tags=tags)),
+       "workflow_nodes_requirements_shape")
+      for name, tags in (("empty", []), ("blank", [""]))),
+    (_node(node_ref="anchor", node_type="context_compose",
+           context_requirements=ContextRequirements.model_construct(
+               block_types=["calibration_anchor"])),
+     "workflow_nodes_requirements_shape"),
 ], ids=lambda v: v if isinstance(v, str) else v.node_ref)
 async def test_the_table_refuses_and_the_refusal_is_a_sentence(pool, workflow, node, constraint):
     with pytest.raises(NodeNotStorable) as refused:

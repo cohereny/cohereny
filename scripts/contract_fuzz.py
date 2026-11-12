@@ -17,11 +17,20 @@ first run on 2026-09-24 found five classes of 500 for client mistakes, the
 first run with everything merged two more (CHY-165). The CI job runs with
 `--strict` since 2026-09-25, after all four surfaces ran clean.
 
+Two checks since CHY-168. Until then only `not_a_server_error` ran, and the
+shapes named above went unchecked: on 58 operations a 422 could answer with
+a sentence where the contract promised a list, and no check would have said
+so. `response_schema_conformance` holds every documented answer's body to its
+schema.
+
 The counter-probe is always strict. A fuzzer that reports nothing is only
 worth something if it would have reported a broken contract, so a copy of the
-serve contract is broken on purpose — `HTTPValidationError.detail` becomes a
-string — and the run against it must fail while the run against the real
-contract passes. Both directions, or the probe could pass for the wrong reason.
+serve contract is broken on purpose — `UnprocessableDetail.detail` may only be
+a string, so the list a validation 422 carries no longer fits — and the run
+against it must fail while the run against the real contract passes. Both
+directions, or the probe could pass for the wrong reason. Until CHY-168 the
+broken schema was FastAPI's `HTTPValidationError`, which the contract no longer
+contains.
 
 Planned endpoints (`x-cohereny-status: planned`) are excluded: they are meant
 to answer 501, and that is not a finding.
@@ -173,7 +182,7 @@ def counter_probe(url: str, bearer: str) -> bool:
     """
     real = ROOT / "contracts" / "openapi-serve.yaml"
     spec = yaml.safe_load(real.read_text(encoding="utf-8"))
-    spec["components"]["schemas"]["HTTPValidationError"]["properties"]["detail"] = {"type": "string"}
+    spec["components"]["schemas"]["UnprocessableDetail"]["properties"]["detail"] = {"type": "string"}
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as broken:
         yaml.safe_dump(spec, broken)
     probe = ("--include-path", "/v1/route", "--checks", "response_schema_conformance",
@@ -196,7 +205,7 @@ def main() -> int:
     ap.add_argument("--user", default="admin",
                     help="Account the tokens are issued for; admin reaches every operation.")
     ap.add_argument("--reports", default="reports", type=Path)
-    ap.add_argument("--checks", default="not_a_server_error")
+    ap.add_argument("--checks", default="not_a_server_error,response_schema_conformance")
     ap.add_argument("--strict", action="store_true",
                     help="fail when any surface has findings (default: report only)")
     args = ap.parse_args()

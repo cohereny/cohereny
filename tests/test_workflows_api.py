@@ -31,7 +31,8 @@ def _workflow_row(status: str = "draft", **kw) -> dict:
     return {
         "id": _WF, "scope_id": _SCOPE, "name": "study", "description": None,
         "version": 1, "superseded_by_version": None, "status": status,
-        "risk_classification": {}, "created_by": uuid4(), "created_at": _NOW,
+        "risk_classification": {}, "risk_class": "limited",
+        "created_by": uuid4(), "created_at": _NOW,
         **kw,
     }
 
@@ -77,6 +78,12 @@ def _graph_answers(nodes: list[dict], conns: list[dict], calls: list[dict] | Non
             return nodes
         if "FROM workflow_connections" in sql:
             return conns
+        if "FROM scope_nodes" in sql:
+            # The workflow's scope, classified `internal`: with the workflow's
+            # `limited` risk the minimum is one approver, which the valid graph
+            # has. Unclassified, it would count as critical (CHY-223).
+            return [{"id": _SCOPE, "scope_path": "org", "node_type": "org", "name": "it",
+                     "privacy_level": "internal", "depth": 1}]
         return []
     return answer
 
@@ -156,7 +163,7 @@ def test_activating_a_valid_workflow_succeeds():
     nodes, conns = _valid_graph()
     pool = make_pool(
         actor=actor_row(role="reviewer"),
-        conn_fetchrow=[_workflow_row(), _workflow_row(status="active")],
+        conn_fetchrow=[_workflow_row(), _workflow_row(), _workflow_row(status="active")],
     )
     pool.conn.fetch.side_effect = _graph_answers(nodes, conns)
     with client_for(pool) as client:
@@ -171,7 +178,7 @@ def test_activating_an_invalid_workflow_is_409_and_names_every_reason():
     call = _node_row("summarize", "llm_call")
     pool = make_pool(
         actor=actor_row(role="reviewer"),
-        conn_fetchrow=[_workflow_row(), _workflow_row(status="active")],
+        conn_fetchrow=[_workflow_row(), _workflow_row(), _workflow_row(status="active")],
     )
     pool.conn.fetch.side_effect = _graph_answers([ctx, call], [_conn_row(ctx, call)])
     with client_for(pool) as client:
@@ -318,7 +325,7 @@ def test_a_malformed_guard_blocks_activation():
     broken = _conn_row(call, review, condition={"op": "eq"})  # no field
     pool = make_pool(
         actor=actor_row(role="reviewer"),
-        conn_fetchrow=[_workflow_row(), _workflow_row(status="active")],
+        conn_fetchrow=[_workflow_row(), _workflow_row(), _workflow_row(status="active")],
     )
     pool.conn.fetch.side_effect = _graph_answers(
         [ctx, call, review], [_conn_row(ctx, call), broken]
@@ -341,7 +348,7 @@ def test_a_well_formed_guard_does_not_block_activation():
     )
     pool = make_pool(
         actor=actor_row(role="reviewer"),
-        conn_fetchrow=[_workflow_row(), _workflow_row(status="active")],
+        conn_fetchrow=[_workflow_row(), _workflow_row(), _workflow_row(status="active")],
     )
     pool.conn.fetch.side_effect = _graph_answers(
         [ctx, call, review], [_conn_row(ctx, call), guarded]

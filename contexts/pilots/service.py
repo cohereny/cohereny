@@ -15,8 +15,9 @@ speak HTTP to it, which made the control untestable and unautomatable at once.
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import contextvars
 import json
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -67,6 +68,8 @@ from kernel.access import require
 from kernel.identity import Caller, resolve_actor
 from kernel.retention import Periods, RetentionClass
 
+_log = logging.getLogger(__name__)
+
 
 # ── reading ───────────────────────────────────────────────────────────────────
 
@@ -100,6 +103,15 @@ async def get_run(pool, caller: Caller, run_id: UUID) -> PilotRunOut:
     if row is None:
         raise RunNotFound
     return _run_out(row)
+
+
+async def run_visible(pool, actor_id: UUID, run_id: UUID) -> bool:
+    """Whether this actor sees the pilot run — its starter and admin (CHY-92).
+
+    For the audit log, which hands a run's history to the same people (CHY-303).
+    """
+    async with acting.acting_as(pool, actor_id) as conn:
+        return await store.run_exists(conn, run_id)
 
 
 async def get_coverage(pool, caller: Caller, run_id: UUID) -> CoverageOut:
@@ -204,10 +216,17 @@ async def get_workflow_config(pool, redis, pilot_name: str,
     if caller is not None:
         require(await resolve_actor(pool, caller), "contributor")
 
-    with contextlib.suppress(Exception):
+    # A Redis that does not answer and an entry that does not parse both cost
+    # a database read, as before; now each also leaves a line (CHY-97).
+    try:
         cached = await redis.get(_config_key(pilot_name))
-        if cached:
-            return WorkflowConfigOut(**json.loads(cached))
+        hit = WorkflowConfigOut(**json.loads(cached)) if cached else None
+    except Exception:
+        _log.warning("pilot config cache not read", exc_info=True,
+                     extra={"pilot": pilot_name})
+        hit = None
+    if hit is not None:
+        return hit
 
     row = await store.workflow_config(pool, pilot_name)
     if row is None:
@@ -217,8 +236,11 @@ async def get_workflow_config(pool, redis, pilot_name: str,
         raise UnknownPilotConfig(pilot_name, ())
     out = _config_out(row)
 
-    with contextlib.suppress(Exception):
+    try:
         await redis.set(_config_key(pilot_name), out.model_dump_json())
+    except Exception:
+        _log.warning("pilot config not cached", exc_info=True,
+                     extra={"pilot": pilot_name})
     return out
 
 
@@ -356,8 +378,11 @@ async def start_run(
         model_used=model_used, model_map=model_map, node_metrics=env.node_metrics,
     )
     main_loop = asyncio.get_running_loop()
+    # With a copy of the context: run_in_executor does not take one, and the
+    # thread would write its log lines without the request that started it.
     main_loop.run_in_executor(
-        executor, run_in_thread, spec, main_loop, cancel_event, registry, gate,
+        executor, contextvars.copy_context().run,
+        run_in_thread, spec, main_loop, cancel_event, registry, gate,
     )
     return started
 

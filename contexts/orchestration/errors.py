@@ -147,7 +147,9 @@ class NodeNotStorable(OrchestrationError):
             "context_requirements may only name block types that can actually "
             "be composed (ADR-037), and must name at least one. A "
             "non-composable type such as routing_rule would compose nothing "
-            "and report success.",
+            "and report success. `tags`, if given, is a non-empty list of "
+            "non-empty strings (CHY-178): an empty list would read as no "
+            "filter at all.",
         "workflow_nodes_requirements_only_on_compose":
             "only a context_compose node has context_requirements. On any "
             "other type the field would be stored and never read.",
@@ -167,6 +169,41 @@ class NodeNotStorable(OrchestrationError):
             "approval and the privacy ratchet.",
         "workflow_nodes_config_without_task_type":
             "config['task_type'] has moved to the task_type field (CHY-145).",
+        "workflow_nodes_output_schema_only_on_llm_call":
+            "only an llm_call node has an output_schema. On any other type it "
+            "would be stored and never read (CHY-175).",
+        "workflow_nodes_output_schema_is_object":
+            'output_schema describes an object ("type": "object"): the answer '
+            "is read as one JSON object, and its fields are what edges and "
+            "successors address (CHY-175).",
+        "workflow_nodes_config_without_output_schema":
+            "config['output_schema'] is not read (CHY-175). Send it as the "
+            "node's output_schema field.",
+        "workflow_nodes_function_only_on_compute":
+            "only a compute node has a function and function_version. On any "
+            "other type they would be stored and never run (CHY-173).",
+        "workflow_nodes_compute_names_function":
+            "a compute node needs a function and a function_version from 1: "
+            "without them there is nothing to run, and the version keeps a "
+            "definition computing what it was reviewed against (ADR-048).",
+        "workflow_nodes_config_without_function":
+            "config['function'] and config['function_version'] are not read "
+            "(CHY-173). Send them as the node's fields.",
+        "workflow_nodes_document_only_on_document":
+            "only a document node has document_name, document_max_bytes and "
+            "document_max_pages. On any other type they would be stored and "
+            "never read (CHY-174).",
+        "workflow_nodes_document_names_document":
+            "a document node needs a document_name — lower case letters, digits "
+            "and underscores, starting with a letter. It is what the document is "
+            "uploaded under (ADR-049).",
+        "workflow_nodes_document_limits_positive":
+            "document_max_bytes and document_max_pages are at least 1. Omit "
+            "them for the installation's limits.",
+        "workflow_nodes_config_without_document":
+            "config['document_name'], config['document_max_bytes'] and "
+            "config['document_max_pages'] are not read (CHY-174). Send them as "
+            "the node's fields.",
         "workflow_nodes_sub_workflow_complete":
             "a sub_workflow node needs target_workflow_id and a pinned "
             "target_workflow_version — 'always the newest' would change "
@@ -179,6 +216,14 @@ class NodeNotStorable(OrchestrationError):
             "approves on silence is not a gate (ADR-004).",
         "workflow_nodes_review_role_check":
             "review_role is approver or four_eyes.",
+        "workflow_nodes_sample_gate":
+            "review_sample_rate belongs to a gate with review_role sample, and that "
+            "gate needs one, from 0.001 to 1. A sample gate has no review "
+            "areas and no time limit: it decides nothing and waits for nothing "
+            "(CHY-223).",
+        "workflow_nodes_review_areas_gate":
+            "review_areas belong to a human_review node: one to sixteen names "
+            "of the form lower_case (CHY-180).",
     }
 
     def __init__(self, constraint: str) -> None:
@@ -359,6 +404,130 @@ class OversightGateMissing(OrchestrationError):
         )
 
 
+class NotInReviewArea(OrchestrationError):
+    """The reviewer belongs to none of the areas this gate asks (CHY-180).
+
+    Checked by the service for a readable answer, and by the database as well:
+    a vote for an area needs a current membership there (migration 043), so a
+    path around this check is refused too.
+    """
+
+    def __init__(self, area: str | None = None) -> None:
+        self.area = area
+        super().__init__(
+            f"You are not a current member of the review area {area!r}."
+            if area else
+            "You belong to none of the review areas this gate asks for."
+        )
+
+
+class ReviewAreaNotAtGate(OrchestrationError):
+    """The vote names an area this gate does not ask for."""
+
+    def __init__(self, area: str, areas: list[str]) -> None:
+        self.area = area
+        super().__init__(f"This gate asks for {areas}, not for {area!r}.")
+
+
+class ReviewAreaAmbiguous(OrchestrationError):
+    """The reviewer belongs to several of the gate's areas and named none.
+
+    Not guessed: which area a vote counts for is the decision, and one person
+    still casts one vote at one gate (027).
+    """
+
+    def __init__(self, areas: list[str]) -> None:
+        self.areas = areas
+        super().__init__(f"You belong to {areas} at this gate. Say which area you vote for (area).")
+
+
+class AreaAlreadyVoted(OrchestrationError):
+    """Another member of this area has voted at this gate (CHY-180).
+
+    One vote per area, refused by UNIQUE (execution_id, area_id) and translated
+    here — also when two members of one area send theirs at the same moment.
+    """
+
+    def __init__(self, area: str) -> None:
+        self.area = area
+        super().__init__(f"The review area {area!r} has already voted at this gate.")
+
+
+class ReviewAreaUnresolved(OrchestrationError):
+    """A review area the gate names applies nowhere on the workflow's scope chain.
+
+    Activation refuses this (`unknown_review_area`); reaching it means the
+    definition and the competence order no longer agree — not something the
+    reviewer did or can fix.
+    """
+
+    def __init__(self, areas: list[str]) -> None:
+        self.areas = areas
+        super().__init__(f"The review areas {areas} are defined nowhere above this workflow.")
+
+
+class SampleNotFound(OrchestrationError):
+    """Nothing drawn with this id that the caller may see (CHY-223, CHY-269)."""
+
+    def __init__(self, sample_id: UUID) -> None:
+        self.sample_id = sample_id
+        super().__init__(f"No sample {sample_id} in the review queue.")
+
+
+class ServiceAccountMayNotDecide(OrchestrationError):
+    """A technical account tried to decide at a gate or judge a sample (CHY-275).
+
+    A CI account holds the role its jobs need, and it is still not a person. A
+    decision at a gate, or the verdict on a drawn sample, is human oversight
+    (Art. 14 AI Act) — someone has to answer for it. The same rule the
+    repository context applies to data-flow blocks (CHY-163, ADR-045), here for
+    every gate and every sample.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A technical account (group chy-service-accounts) cannot decide at a gate "
+            "or judge a sample. A person has to."
+        )
+
+
+class SampleAlreadyJudged(OrchestrationError):
+    """The sample has its verdict. One verdict per sample, like one decision per gate."""
+
+    def __init__(self, sample_id: UUID) -> None:
+        self.sample_id = sample_id
+        super().__init__(f"Sample {sample_id} has been judged already.")
+
+
+class SampleContentPurged(OrchestrationError):
+    """A drawn direct call whose prompt and answer were cleared when the scope's
+    content period ended (CHY-269): there is nothing left to judge."""
+
+    def __init__(self, sample_id: UUID) -> None:
+        self.sample_id = sample_id
+        super().__init__(
+            f"The content of sample {sample_id} was cleared at the end of its period")
+
+
+class GateBelowMinimum(OrchestrationError):
+    """A gate with areas asks for fewer people than its scope now requires (CHY-223).
+
+    Activation refuses such a gate; this is the case after it — the scope was
+    classified stricter while the workflow stayed released. A gate without
+    areas then simply asks for more people. A gate with areas cannot: each area
+    casts one vote, and adding a vote nobody drew would be a decision about who
+    decides that nobody made. It is not decided until a stricter definition is
+    released; the run can be stopped meanwhile, or expires.
+    """
+
+    def __init__(self, level: str) -> None:
+        self.level = level
+        super().__init__(
+            f"This gate's areas ask for fewer people than its scope requires now "
+            f"({level}). Release the workflow again with a stricter gate."
+        )
+
+
 class ReviewerAlreadyDecided(OrchestrationError):
     """The same person decided at this gate before (CHY-176).
 
@@ -374,6 +543,149 @@ class ReviewerAlreadyDecided(OrchestrationError):
             "This person has already decided at this gate. A four-eyes gate "
             "needs a second, different person."
         )
+
+
+class DocumentNodeExists(OrchestrationError):
+    """A second document node for the same name (CHY-174).
+
+    The node *is* the document, with one limit. Two nodes for one name would
+    expect it twice under different limits; two steps that need it get two
+    edges from the one node. Refused by a unique index, translated here.
+    """
+
+    def __init__(self, document_name: str) -> None:
+        self.document_name = document_name
+        super().__init__(
+            f"This workflow already has a document node for {document_name!r}. "
+            f"Connect further steps to that node instead."
+        )
+
+
+# ── documents of a run (CHY-174, ADR-049) ─────────────────────────────────────
+
+class RunNotAwaitingDocuments(OrchestrationError):
+    """A document arrived for a run that is not waiting for one.
+
+    A run takes its documents before its first step and not after: a document
+    that arrived once the run was under way would reach some steps and not
+    others, and nobody could say afterwards which steps saw what.
+    """
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+        super().__init__(
+            f"The run is {status}, not awaiting documents. Documents are taken "
+            f"before the first step only."
+        )
+
+
+class DocumentNotFromStarter(OrchestrationError):
+    """Someone other than the run's starter tried to upload a document.
+
+    The binding of a document is its run, and the run is the starter's: they
+    sent its input, they send its documents. Whoever else sees the run reads
+    it; supplying what it works on is not theirs to do (ADR-049, decided
+    08.11.2026 — no upload token of its own).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Only the person who started this run can upload its documents."
+        )
+
+
+class DocumentNotExpected(OrchestrationError):
+    """The run's definition has no document node for this name."""
+
+    def __init__(self, name: str, expected: list[str]) -> None:
+        self.name = name
+        self.expected = expected
+        listed = ", ".join(expected) if expected else "none"
+        super().__init__(
+            f"This run expects no document named {name!r}. Expected: {listed}."
+        )
+
+
+class DocumentAlreadyReceived(OrchestrationError):
+    """The document arrived before. What arrived stays as it arrived: the
+    audit entry and the scan describe that file, not a later one."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(
+            f"Document {name!r} has already been received for this run. Cancel "
+            f"the run and start a new one to send a different file."
+        )
+
+
+class DocumentRefused(OrchestrationError):
+    """A document that cannot be taken as it is. The subclasses say why; the
+    message names the limit or the problem, never the content."""
+
+
+class DocumentTooLarge(DocumentRefused):
+    """Larger than the node's limit or the installation's ceiling, whichever is
+    smaller. `size` is None when reading stopped at the ceiling: the body is
+    never read further than that."""
+
+    def __init__(self, limit: int, *, installation_limit: int,
+                 node_limit: int | None = None, size: int | None = None) -> None:
+        self.size = size
+        self.limit = limit
+        has = f"has {size} bytes" if size is not None else f"is larger than {limit} bytes"
+        node = f"the node allows {node_limit}, " if node_limit is not None else ""
+        super().__init__(
+            f"The document {has}; at most {limit} are accepted "
+            f"({node}the installation {installation_limit})."
+        )
+
+
+class DocumentMediaTypeUnsupported(DocumentRefused):
+    def __init__(self, media_type: str, supported: tuple[str, ...]) -> None:
+        self.media_type = media_type
+        super().__init__(
+            f"Content-Type {media_type!r} is not accepted. Send one of: "
+            f"{', '.join(supported)}."
+        )
+
+
+class DocumentUnreadable(DocumentRefused):
+    """The file is of an accepted type and cannot be taken: too many pages,
+    no text to read, encrypted, broken. One class with named constructors,
+    as `MalformedCondition` has — the reasons are the rule."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"The document cannot be read: {reason}.")
+
+    @classmethod
+    def too_many_pages(cls, pages: int, limit: int) -> DocumentUnreadable:
+        return cls(f"it has {pages} pages, at most {limit} are accepted")
+
+    @classmethod
+    def no_text(cls) -> DocumentUnreadable:
+        return cls("it has no text layer — a scanned page is an image, and there is "
+                   "no text recognition here. Recognise the text first and send that")
+
+    @classmethod
+    def empty(cls) -> DocumentUnreadable:
+        return cls("it is empty")
+
+    @classmethod
+    def encrypted(cls) -> DocumentUnreadable:
+        return cls("the PDF is encrypted")
+
+    @classmethod
+    def not_a_pdf(cls) -> DocumentUnreadable:
+        return cls("it is not a PDF that can be parsed")
+
+    @classmethod
+    def not_utf8_text(cls) -> DocumentUnreadable:
+        return cls("it is not UTF-8 text")
+
+    @classmethod
+    def contains_nul(cls) -> DocumentUnreadable:
+        return cls("it contains NUL characters, which text does not")
 
 
 class MalformedCondition(OrchestrationError):

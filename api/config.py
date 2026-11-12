@@ -20,7 +20,7 @@ Dependencies:
 """
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import PositiveInt, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    # The installation's ceiling for one document of a workflow run (ADR-049,
+    # CHY-174). It protects the service: an upload is read up to this and no
+    # further. A document node may narrow it, never widen it — activation
+    # refuses a node above it. Pages count for PDFs only.
+    document_max_bytes: PositiveInt = 10 * 1024 * 1024
+    document_max_pages: PositiveInt = 200
 
     # PostgreSQL connection string including DB name (dev/test/prod use separate DBs).
     # The runtime role, never the superuser or the owner: core.db refuses both (CHY-85).
@@ -71,6 +78,11 @@ class Settings(BaseSettings):
     # authentication, so there was nothing to check it against.
     environment: Literal["dev", "test", "prod"] = "prod"
 
+    # How much the application log writes (CHY-97). INFO is a line per request
+    # and every warning; DEBUG adds the health checks. Each line names a request
+    # by id and an actor by UUID, never what was asked or answered.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
     # There used to be a `dev_mode` here: skip JWT validation and answer every
     # request as a static admin. CHY-91 fenced it in with this `environment`
     # and the database name; CHY-192 removed it. A switch that turns off
@@ -102,7 +114,10 @@ class Settings(BaseSettings):
     # indirection is not how you keep an option open. If an override is ever
     # needed it becomes a parameter of role_from_groups().
 
-    api_version: str = "0.1.0"
+    # No api_version any more: the version describes the code, not the stage,
+    # and lives in pyproject.toml (core/version.py, CHY-271). An environment
+    # that still sets API_VERSION is ignored; a local .env file that does is
+    # refused at start, like any unknown key there.
 
     # LiteLLM gateway URL — OpenAI-compatible API endpoint.
     # Returned in /v1/route responses so clients do not need to hardcode infra URLs.

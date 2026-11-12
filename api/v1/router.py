@@ -46,6 +46,7 @@ from api.v1 import (
     pilots,
     questions,
     route,
+    samples,
     scopes,
     workflows,
 )
@@ -74,6 +75,9 @@ _ASSIGNMENT: list[tuple[APIRouter, str, str, Surface | None]] = [
     (me.router, "", "scopes", Surface.AUTHOR),
     (blocks.router, "/blocks", "blocks", Surface.AUTHOR),
     (workflows.router, "/workflows", "workflows", Surface.AUTHOR),
+    # One review queue for workflow passes and direct calls (CHY-269), where
+    # reviewers work; /v1/complete on serve only draws into it.
+    (samples.router, "/samples", "samples", Surface.AUTHOR),
     (compose.router, "", "runtime", Surface.SERVE),
     (complete.router, "", "runtime", Surface.SERVE),
     (pilots.router, "/pilots", "pilots", Surface.AUTHOR),

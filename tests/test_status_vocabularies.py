@@ -74,6 +74,16 @@ VOCABULARIES: dict[tuple[str, str], str | None] = {
     ("workflow_nodes", "on_timeout"): "contexts.orchestration.schema:ReviewTimeout",
     ("workflow_runs", "status"): "contexts.orchestration.schema:RunStatus",
     ("node_executions", "status"): "contexts.orchestration.schema:NodeExecutionStatus",
+    # 044/045, CHY-223 (ADR-050): how strict a gate is, and what a workflow risks.
+    ("node_executions", "review_level"): "contexts.orchestration.schema:ReviewLevel",
+    ("workflow_definitions", "risk_class"): "contexts.orchestration.schema:RiskClass",
+    # 047, CHY-199: direct model calls, classified like a workflow. One symbol on
+    # purpose, unlike the run statuses above: both feed votes.minimum, so they
+    # may not diverge (contexts/orchestration/schema.py imports the kernel's).
+    ("direct_call_risk_classes", "risk_class"): "kernel.schema:RiskClass",
+    ("review_samples", "verdict"): "contexts.orchestration.schema:SampleVerdict",
+    # 048, CHY-269: the verdict on a drawn direct call, the same as on a pass.
+    ("direct_call_samples", "verdict"): "contexts.orchestration.schema:SampleVerdict",
     # 028, CHY-67 (ADR-043): benchmark runs and their measurements.
     ("benchmark_runs", "mode"): "contexts.learning.schema:BenchmarkMode",
     ("benchmark_runs", "status"): "contexts.learning.schema:BenchmarkRunStatus",
@@ -109,8 +119,23 @@ def _sql_vocabularies() -> dict[tuple[str, str], list[str]]:
                 if values:
                     found[(table, m.group(1))] = values
 
+        # A column added with its CHECK inline (044, CHY-223). Not seen until
+        # then: `risk_class` slipped past this guard for one migration.
         for m in re.finditer(
-            r"ALTER TABLE (\w+)\s+ADD CONSTRAINT \w+\s+CHECK\s*\((.*?)\);", sql, re.S
+            r"ALTER TABLE (\w+)\s+ADD COLUMN (?:IF NOT EXISTS )?(\w+)\s+[A-Z]\w*\s+"
+            r"CHECK\s*\((.*?)\);", sql, re.S
+        ):
+            for clause in re.finditer(r"(\w+)\s+IN\s*\(([^)]*)\)", m.group(3)):
+                values = sorted(set(re.findall(r"'([a-z_]+)'", clause.group(2))))
+                if values and clause.group(1) == m.group(2):
+                    found[(m.group(1), m.group(2))] = values
+
+        for m in re.finditer(
+            # NOT VALID may follow (048); without it in the pattern the lazy
+            # match ran on to the next statement's `);` and gave this table the
+            # vocabularies of the one after it.
+            r"ALTER TABLE (\w+)\s+ADD CONSTRAINT \w+\s+CHECK\s*\((.*?)\)\s*(?:NOT VALID\s*)?;",
+            sql, re.S
         ):
             table = m.group(1)
             for clause in re.finditer(r"(\w+)\s+IN\s*\(([^)]*)\)", m.group(2)):

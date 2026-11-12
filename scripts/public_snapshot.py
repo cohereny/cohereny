@@ -11,6 +11,29 @@ the `publish` branch as one commit — never merged, since a merge would bring t
 internal history along. Only released state goes public: the export runs from a clean
 checkout of origin/main and refuses anything else (CHY-191).
 
+Since CHY-272 a second stage goes public as well: the state of `test`, which has passed
+verify:test, as the branch `next` on GitHub — the interim versions between releases that
+the OpenSSF Best Practices criterion `repo_interim` asks for (decided by Thomas,
+10.11.2026). The CI job publish:next exports it after every deployment to test into the
+branch `publish-next`, whose CI scans it and pushes it to GitHub `next`. `dev` never goes
+public.
+
+A fix that must not be seen before its release carries the trailer `Embargo: CHY-…`. While
+such a commit is on origin/test but not yet on origin/main, `--export --from test` refuses
+with exit code 3 and names it; the job shows a warning, nothing is published. The release
+brings the commit to main, and the hold ends by itself.
+
+A release, in order (CHY-271, Semantic Versioning since 0.2.0):
+
+  1. On dev: raise `version` in pyproject.toml — its one place (core/version.py). A new
+     minor version for new or changed behaviour, a patch version for corrections only
+  2. On dev: the section `## X.Y.Z — YYYY-MM-DD` in CHANGELOG.md and CHANGELOG.de.md
+  3. dev → test → main, each through a merge request
+  4. Tag the merge commit on main `vX.Y.Z` in GitLab
+  5. --export from a clean checkout of origin/main, commit, push `publish`. Its CI creates
+     the GitHub pre-release `vX.Y.Z` (scripts/changelog.py --release), and refuses when
+     the newest section is not the version pyproject.toml carries
+
 Every tracked file is either PUBLIC or INTERNAL. A file in neither stops the check: a new
 top-level file must be classified on purpose, not slip into the snapshot or out of it by
 default.
@@ -24,11 +47,13 @@ The patterns come in two kinds:
 Usage:
     python scripts/public_snapshot.py --check
         Scan the public files of this checkout. Exit 1 on a finding or an unclassified file.
-    python scripts/public_snapshot.py --export DIR [--docs DOCS_CHECKOUT]
+    python scripts/public_snapshot.py --export DIR [--from main|test] [--docs DOCS_CHECKOUT]
         Replace the contents of DIR (a checkout of `publish`, `.git` kept) with the public
         files, the publish CI definition and, with --docs, the whitepaper and arc42 under
         docs/. Then scan DIR. Exit 1 on a finding. DIR must be a checkout of `publish`, and
         this checkout must stand on origin/main with no tracked file changed (fetch first).
+        With --from test: DIR a checkout of `publish-next`, this checkout on origin/test;
+        exit 3 while a commit with an `Embargo:` trailer is on test but not on main.
     python scripts/public_snapshot.py --scan DIR
         Scan every tracked file of DIR — the publish branch's CI runs this before the push.
         Internal patterns come from the environment variable LEAK_PATTERNS there. Exit 1
@@ -64,7 +89,7 @@ PUBLIC: tuple[str, ...] = (
     "MODEL-DRIFT.md",
     "README.md", "SECURITY.md", "openapi.yaml", "pyproject.toml", "quality-baseline.json",
     "api/", "assets/", "cli/", "contexts/", "contracts/", "core/", "deploy/", "docker/",
-    "kernel/", "migrations/", "pilots/", "router/", "scripts/", "tests/",
+    "kernel/", "migrations/", "pilots/", "router/", "scripts/", "steps/", "tests/",
     # Not in this repository: --export --docs copies the whitepaper and arc42 there
     # from the documentation repository. Listed so the snapshot classifies them.
     "docs/",
@@ -184,6 +209,16 @@ def scan(root: Path, files: list[str], patterns: list[tuple[str, re.Pattern[str]
     return findings
 
 
+#: Each stage that goes public, and the publish branch it is exported to (CHY-272).
+STAGES: dict[str, str] = {"main": "publish", "test": "publish-next"}
+
+#: The trailer that keeps a commit off `next` until its release (CHY-272).
+EMBARGO = "Embargo"
+
+#: The exit code of a held export: a warning in CI, not a failure.
+HELD = 3
+
+
 def _branch(path: Path) -> str | None:
     if not (path / ".git").exists():
         return None
@@ -199,28 +234,46 @@ def _commit(path: Path, ref: str) -> str | None:
     return out.stdout.strip() or None
 
 
-def source_problem(source: Path) -> str | None:
-    """Why `source` may not be exported, or None (CHY-191).
+def source_problem(source: Path, stage: str = "main") -> str | None:
+    """Why `source` may not be exported as `stage`, or None (CHY-191, CHY-272).
 
-    Only released state goes public (decided 29.10.2026, CHY-188). A checkout of
-    `dev` would publish whatever is being worked on, and a tracked file edited but
-    not committed would go out as it lies on disk — under a commit message that
-    names a sha which does not contain it. There is no switch around this:
-    exporting anything else is a change to this script, reviewed like any other.
+    Only released state goes public (decided 29.10.2026, CHY-188), and since CHY-272
+    the tested state of `test` as `next`. A checkout of `dev` would publish whatever is
+    being worked on, and a tracked file edited but not committed would go out as it
+    lies on disk — under a commit message that names a sha which does not contain it.
+    There is no switch around this: exporting anything else is a change to this
+    script, reviewed like any other.
     """
-    main = _commit(source, "origin/main")
-    if main is None:
-        return "this checkout has no origin/main — run `git fetch origin` first"
+    ref = f"origin/{stage}"
+    tip = _commit(source, ref)
+    if tip is None:
+        return f"this checkout has no {ref} — run `git fetch origin` first"
     head = _commit(source, "HEAD")
-    if head != main:
-        return (f"HEAD is {head[:12] if head else 'not a commit'}, origin/main is "
-                f"{main[:12]} — export from a checkout of origin/main "
-                f"(`git worktree add <dir> origin/main`)")
+    if head != tip:
+        return (f"HEAD is {head[:12] if head else 'not a commit'}, {ref} is "
+                f"{tip[:12]} — export from a checkout of {ref} "
+                f"(`git worktree add <dir> {ref}`)")
     changed = _run_git(source, "status", "--porcelain", "--untracked-files=no").stdout.splitlines()
     if changed:
         return (f"{len(changed)} tracked file(s) changed and not committed, "
                 f"e.g. `{changed[0].strip()}`")
     return None
+
+
+def embargoed(source: Path) -> list[str]:
+    """Commits on origin/test, not yet on origin/main, that carry an `Embargo:` trailer.
+
+    Read from git's own trailer parser, so a mention of the word in a message body is
+    not a hold — only the trailer is. Each entry names the commit and the trailer's value.
+    """
+    out = _run_git(source, "log", "origin/main..origin/test",
+                   f"--format=%H%x1f%(trailers:key={EMBARGO},valueonly,separator=%x2C)")
+    held = []
+    for line in out.stdout.splitlines():
+        sha, _, value = line.partition("\x1f")
+        if value.strip():
+            held.append(f"{sha[:12]} {EMBARGO}: {value.strip()}")
+    return held
 
 
 def export(source: Path, target: Path, docs: Path | None) -> list[str]:
@@ -336,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--scan", type=Path, metavar="DIR")
     mode.add_argument("--visibility", metavar="OWNER/NAME")
     ap.add_argument("--docs", type=Path, metavar="DOCS_CHECKOUT")
+    ap.add_argument("--from", dest="stage", choices=sorted(STAGES), default="main",
+                    help="the stage to export: main (releases) or test (next, CHY-272)")
     ap.add_argument("--private-until", type=datetime.date.fromisoformat)
     args = ap.parse_args(argv)
 
@@ -358,23 +413,37 @@ def main(argv: list[str] | None = None) -> int:
         if code == 0:
             print(f"{len(public)} public files, no finding.")
         return code
+    return _export(args, patterns)
 
+
+def _export(args: argparse.Namespace, patterns: list[tuple[str, re.Pattern[str]]]) -> int:
+    """--export: refuse what may not go out, hold what must wait, then copy and scan."""
     target = args.export.resolve()
-    # The export empties its target. Only a checkout of `publish` may be one — not this
-    # repository, and not a directory that merely happens to contain a .git.
-    if target == ROOT.resolve() or _branch(target) != "publish":
-        print(f"{target} is not a checkout of the publish branch — refusing to empty it",
+    branch = STAGES[args.stage]
+    # The export empties its target. Only a checkout of the stage's publish branch may
+    # be one — not this repository, and not a directory that merely contains a .git.
+    if target == ROOT.resolve() or _branch(target) != branch:
+        print(f"{target} is not a checkout of the {branch} branch — refusing to empty it",
               file=sys.stderr)
         return 2
-    problem = source_problem(ROOT)
+    problem = source_problem(ROOT, args.stage)
     if problem is not None:
         print(f"refusing to export: {problem}", file=sys.stderr)
         return 2
+    if args.stage == "test":
+        held = embargoed(ROOT)
+        if held:
+            print("held: a fix under embargo is on test and not yet released — nothing "
+                  "is published until it reaches main:", file=sys.stderr)
+            for line in held:
+                print(f"  {line}", file=sys.stderr)
+            return HELD
     written = export(ROOT, target, args.docs)
     code = _report(scan(target, written, patterns), [])
     if code == 0:
+        name = "snapshot" if args.stage == "main" else "next"
         print(f"{len(written)} files exported to {target}, no finding.")
-        print(f"Commit it there as: snapshot from {_commit(ROOT, 'HEAD')} on main")
+        print(f"Commit it there as: {name} from {_commit(ROOT, 'HEAD')} on {args.stage}")
     return code
 
 

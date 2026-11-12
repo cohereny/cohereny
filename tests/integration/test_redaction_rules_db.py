@@ -16,11 +16,9 @@ and the real approval path can show:
 """
 from __future__ import annotations
 
-import os
 from uuid import UUID, uuid4
 
 import pytest
-import redis.asyncio as aioredis
 
 from api.v1._activation import HOOKS
 from api.v1._redaction import redaction_policy_for
@@ -61,19 +59,6 @@ async def _submitted(pool, redis, author, block: BlockCreate) -> UUID:
     await repository.transition(pool, redis, author, created.block_id, "submit",
                                 expected_version=1)
     return created.block_id
-
-
-@pytest.fixture
-async def cache():
-    """A real Redis for the one test that composes.
-
-    The `redis` fixture counts scope generations and nothing else; composition
-    reads and writes its cache, and the claim here is about the real
-    composition query -- that it never hands a redaction rule over.
-    """
-    client = aioredis.from_url(os.environ["REDIS_URL"])
-    yield client
-    await client.aclose()
 
 
 async def test_a_rule_is_stored_read_for_the_call_and_never_composed(

@@ -37,12 +37,14 @@ import pytest
 
 from contexts.orchestration import runner, service
 from contexts.orchestration.errors import (
+    DocumentAlreadyReceived,
     NodeExecutionFailed,
     NodeTypeNotExecutable,
     OversightGateMissing,
     ReviewerAlreadyDecided,
     RunAlreadyFinished,
     RunNotAwaitingOversight,
+    ServiceAccountMayNotDecide,
 )
 from contexts.orchestration.execution import ExecutorRegistry, NodeContext, NodeResult
 from contexts.orchestration.schema import OversightDecision, RunCancelRequest, RunStatus
@@ -70,6 +72,18 @@ class FakeDb:
     #: Sealed mappings per run, as `pii_mappings` (036, CHY-234). A run with
     #: no entry is one started before CHY-234: it advances without keys.
     mappings: dict[UUID, dict] = field(default_factory=dict)
+    #: What arrived for each run, as `workflow_run_documents` (041, ADR-049).
+    documents: list[dict] = field(default_factory=list)
+    #: The data class of the workflow's scope and the workflow's risk class
+    #: (CHY-223). Classified so the minimum is `approver` and every gate asks
+    #: for what it was drawn with; the tests of the minimum set them otherwise.
+    data_class: str = "internal"
+    risk_class: str | None = "limited"
+    #: Audit entries, as `audit_log` — the engine writes one when a run
+    #: reaches a gate (CHY-223).
+    audits: list[dict] = field(default_factory=list)
+    #: Passes of sample gates drawn for review, as `review_samples` (045).
+    samples: list[dict] = field(default_factory=list)
 
     def install(self, monkeypatch) -> None:
         """Replace the store module's functions, keeping their signatures."""
@@ -131,6 +145,11 @@ class FakeDb:
                 {"id": n["id"], "config": n["config"],
                  "context_requirements": n["context_requirements"],
                  "task_type": n["task_type"],
+                 "output_schema": n["output_schema"],
+                 "function": n["function"], "function_version": n["function_version"],
+                 "document_name": n["document_name"],
+                 "document_max_bytes": n["document_max_bytes"],
+                 "document_max_pages": n["document_max_pages"],
                  "input_mapping": n["input_mapping"]}
                 for n in self.nodes if n["workflow_id"] == workflow_id
             ]
@@ -157,7 +176,25 @@ class FakeDb:
 
         async def workflow(_conn, workflow_id):
             return {"id": workflow_id, "scope_id": self.scope_id,
-                    "status": "active", "version": 1}
+                    "status": "active", "version": 1, "risk_class": self.risk_class}
+
+        async def data_class(_conn, _scope_id):
+            return self.data_class
+
+        async def set_review_level(_conn, execution_id, level):
+            next(e for e in self.executions if e["id"] == execution_id)["review_level"] = level
+
+        async def review_level(_conn, execution_id):
+            return next(e for e in self.executions if e["id"] == execution_id).get("review_level")
+
+        async def write_audit(_conn, **entry):
+            self.audits.append(entry)
+
+        async def review_sample_rate(_conn, node_id):
+            return next(n for n in self.nodes if n["id"] == node_id).get("review_sample_rate")
+
+        async def insert_sample(_conn, execution_id, run_id):
+            self.samples.append({"execution_id": execution_id, "run_id": run_id})
 
         async def set_run_status(_conn, run_id, status, *, result=None, error=None):
             row = self.runs[run_id]
@@ -167,13 +204,19 @@ class FakeDb:
         async def review_role(_conn, node_id):
             return next(n["review_role"] for n in self.nodes if n["id"] == node_id)
 
-        async def record_vote(_conn, execution_id, actor_id, decision, reason):
+        async def review_areas(_conn, node_id):
+            # Gates without areas only: those with areas need the competence
+            # order of migration 043, and their tests run against PostgreSQL
+            # (tests/integration/test_review_areas_db.py).
+            return next(n.get("review_areas") for n in self.nodes if n["id"] == node_id)
+
+        async def record_vote(_conn, execution_id, vote):
             """The primary key of 027, in a list: one decision per person."""
-            if any(v["execution_id"] == execution_id and v["actor_id"] == actor_id
+            if any(v["execution_id"] == execution_id and v["actor_id"] == vote.actor_id
                    for v in self.votes):
-                raise ReviewerAlreadyDecided(actor_id)
-            self.votes.append({"execution_id": execution_id, "actor_id": actor_id,
-                               "decision": decision, "reason": reason})
+                raise ReviewerAlreadyDecided(vote.actor_id)
+            self.votes.append({"execution_id": execution_id, "actor_id": vote.actor_id,
+                               "decision": vote.decision, "reason": vote.reason})
 
         async def approvals(_conn, execution_id):
             return sum(1 for v in self.votes
@@ -185,8 +228,37 @@ class FakeDb:
         async def write_pii_mapping(_conn, run_id, *, key_id, nonce, ciphertext):
             self.mappings[run_id] = {"key_id": key_id, "nonce": nonce, "ciphertext": ciphertext}
 
+        async def document_nodes(_conn, workflow_id):
+            return [{"document_name": n["document_name"],
+                     "document_max_bytes": n["document_max_bytes"],
+                     "document_max_pages": n["document_max_pages"]}
+                    for n in sorted(self.nodes, key=lambda n: n["document_name"] or "")
+                    if n["workflow_id"] == workflow_id and n["node_type"] == "document"]
+
+        async def run_documents(_conn, run_id):
+            return sorted((d for d in self.documents if d["run_id"] == run_id),
+                          key=lambda d: d["name"])
+
+        async def run_document(_conn, run_id, name):
+            return next((d for d in self.documents
+                         if d["run_id"] == run_id and d["name"] == name), None)
+
+        async def insert_document(_conn, new):
+            """The primary key of 041, in a list: one document per name and run."""
+            if any(d["run_id"] == new.run_id and d["name"] == new.name for d in self.documents):
+                raise DocumentAlreadyReceived(new.name)
+            self.documents.append({**new.__dict__, "received_at": datetime.now(UTC)})
+
+        async def start_waiting_run(_conn, run_id):
+            row = self.runs[run_id]
+            if row["status"] != "awaiting_documents":
+                return None
+            row.update(status="running")
+            return row
+
         for name, fn in (
-            ("review_role", review_role), ("record_vote", record_vote),
+            ("review_role", review_role), ("review_areas", review_areas),
+            ("record_vote", record_vote),
             ("approvals", approvals),
             ("nodes", nodes), ("connections", connections), ("lock_run", lock_run),
             ("executions", executions), ("traversals", traversal_rows),
@@ -195,13 +267,21 @@ class FakeDb:
             ("cancel_open_executions", cancel_open_executions),
             ("record_traversals", record_traversals), ("set_run_status", set_run_status),
             ("node_details", node_details), ("predecessor_outputs", predecessor_outputs),
-            ("workflow", workflow),
+            ("workflow", workflow), ("data_class", data_class),
+            ("set_review_level", set_review_level), ("review_level", review_level),
+            ("review_sample_rate", review_sample_rate), ("insert_sample", insert_sample),
             # No SQL, so no lock to take: a lock is shown against PostgreSQL
             # (tests/integration/test_run_placeholders_db.py).
             ("pii_mapping", pii_mapping), ("lock_pii_mapping", pii_mapping),
             ("insert_pii_mapping", write_pii_mapping), ("update_pii_mapping", write_pii_mapping),
+            ("document_nodes", document_nodes), ("run_documents", run_documents),
+            ("run_document", run_document), ("insert_document", insert_document),
+            ("start_waiting_run", start_waiting_run),
+            # Reading without the lock reads the same rows.
+            ("run", lock_run),
         ):
             monkeypatch.setattr(service.store, name, fn)
+        monkeypatch.setattr(service, "write_audit", write_audit)
 
 
 class _NullTx:
@@ -256,6 +336,9 @@ def _node(ref: str, node_type: str = "tool_call", join_policy: str | None = None
         "name": None, "description": None, "join_policy": join_policy, "config": {},
         "context_requirements": None,
         "task_type": "summarize" if node_type == "llm_call" else None,
+        "output_schema": None,
+        "function": None, "function_version": None,
+        "document_name": None, "document_max_bytes": None, "document_max_pages": None,
         "target_workflow_id": None, "target_workflow_version": None,
         "input_mapping": {}, "output_mapping": {},
         "review_role": None, "review_timeout": None, "on_timeout": None,
@@ -370,12 +453,20 @@ async def test_a_foreign_exception_ends_the_run_instead_of_leaving_it_running(mo
     async def refused(_ctx: NodeContext) -> NodeResult:
         raise ModelRefused(400, "unknown model")
 
+    from kernel import current_call
+
+    current_call.begin("abc123")
     with pytest.raises(ModelRefused):
         await service.advance_run(
             _NullPool(), run_id, registry=ExecutorRegistry({"llm_call": refused})
         )
     assert db.runs[run_id]["status"] == "failed"
-    assert "ModelRefused" in db.runs[run_id]["error_message"]
+    message = db.runs[run_id]["error_message"]
+    assert "ModelRefused" in message
+    # Not the exception's own text: a library's can name an address or a
+    # value, and the run is read by everyone who may read it (CHY-97).
+    assert "unknown model" not in message and "status 400" not in message
+    assert message.endswith("(request ID abc123)")
     assert [e["status"] for e in db.executions] == ["failed"], (
         "the claimed execution is still running — nothing will ever end it"
     )
@@ -584,13 +675,17 @@ class TestRebuildState:
 
 # ── the decision at the gate ──────────────────────────────────────────────────
 
-async def _at_the_gate(monkeypatch, review_role: str | None = None) -> tuple[FakeDb, UUID, dict]:
-    """A run stopped at a human_review, with the gate claimed."""
+async def _at_the_gate(monkeypatch, review_role: str | None = None,
+                       **classification) -> tuple[FakeDb, UUID, dict]:
+    """A run stopped at a human_review, with the gate claimed.
+
+    `classification` sets the FakeDb's `data_class` and `risk_class` (CHY-223).
+    """
     a = _node("a")
     gate = {**_node("approve", "human_review"), "review_role": review_role}
     after = _node("after")
     db = FakeDb(nodes=[a, gate, after],
-                connections=[_conn_row(a, gate), _conn_row(gate, after)])
+                connections=[_conn_row(a, gate), _conn_row(gate, after)], **classification)
     db.install(monkeypatch)
     run_id = _run(db)
 
@@ -603,7 +698,7 @@ async def _at_the_gate(monkeypatch, review_role: str | None = None) -> tuple[Fak
     # this one was missing `scope_id` and hid it behind whichever was installed
     # last.
     monkeypatch.setattr(service.store, "running_execution", running_execution)
-    monkeypatch.setattr(service, "write_audit", _no_audit)
+    # The audit entries go to `db.audits`, installed with the rest.
     # The role lookup belongs to the kernel and has its own tests; reproducing
     # it here would test kernel twice and the decision path once.
     monkeypatch.setattr(service, "resolve_actor", _stub_actor)
@@ -613,12 +708,8 @@ async def _at_the_gate(monkeypatch, review_role: str | None = None) -> tuple[Fak
     return db, run_id, gate
 
 
-async def _no_audit(_conn, **_kw):
-    return None
-
-
 async def _stub_actor(_pool, _caller):
-    return SimpleNamespace(id=uuid4(), role="reviewer")
+    return SimpleNamespace(id=uuid4(), role="reviewer", is_service_account=False)
 
 
 class TestOversight:
@@ -762,15 +853,55 @@ def test_every_end_is_an_end_everywhere():
     """Three places decide that a run is over, and they must agree (CHY-200).
 
     The runner stops advancing it, the purge clears it at the end of its period
-    (`store._FINISHED_RUN_STATES`), and every state is either one of those ends
-    or one of the three a run passes through. `cancelled` missing from the
-    purge list would keep a stopped run's content for good — no error, no
-    warning, just a run that never expires.
+    (`store._RETAINED_RUN_STATES`), and every state is either one of those ends
+    or one of those a run passes through. `cancelled` missing from the purge
+    list would keep a stopped run's content for good — no error, no warning,
+    just a run that never expires.
+
+    One state the run passes through is in the purge list too, and only one:
+    `awaiting_documents`. Such a run does no work, and one whose documents
+    never come would otherwise keep what did arrive for good (ADR-049). A run
+    at a gate is not in it — its content is what the reviewer reads (CHY-254).
     """
-    passing_through = {"pending", "running", "awaiting_oversight"}
-    assert set(service.store._FINISHED_RUN_STATES) == service._TERMINAL_RUN_STATES
+    passing_through = {"pending", "running", "awaiting_oversight", "awaiting_documents"}
+    retained = set(service.store._RETAINED_RUN_STATES)
+    assert retained == service._TERMINAL_RUN_STATES | {"awaiting_documents"}
     assert service._TERMINAL_RUN_STATES | passing_through == set(typing.get_args(RunStatus))
     assert not service._TERMINAL_RUN_STATES & passing_through
+
+
+class TestTechnicalAccountsDoNotDecide:
+    """A technical account never decides at a gate (CHY-275).
+
+    Its role may suffice — cohereny-ci is architect — and it is still not a
+    person. Refused before the run is read, so the answer is the same whether
+    the run exists or not, and nothing is recorded.
+    """
+
+    async def test_it_is_refused_and_the_gate_stays_as_it_was(self, monkeypatch):
+        db, run_id, gate = await _at_the_gate(monkeypatch)
+        account = SimpleNamespace(id=uuid4(), role="architect", is_service_account=True)
+        monkeypatch.setattr(service, "resolve_actor", lambda _pool, _caller: _resolved(account))
+        with pytest.raises(ServiceAccountMayNotDecide):
+            await service.record_oversight(_NullPool(), _caller(), run_id,
+                                           OversightDecision(decision="approved"), engine=_engine())
+        claimed = [e for e in db.executions if e["node_id"] == gate["id"]]
+        assert claimed[0]["status"] == "running", "the gate is still waiting"
+        assert db.runs[run_id]["status"] == "awaiting_oversight"
+
+    async def test_a_person_with_the_same_role_decides(self, monkeypatch):
+        """Counter-check: the mark refuses, not the role."""
+        _db, run_id, _gate = await _at_the_gate(monkeypatch)
+        person = SimpleNamespace(id=uuid4(), role="architect", is_service_account=False)
+        monkeypatch.setattr(service, "resolve_actor", lambda _pool, _caller: _resolved(person))
+        result = await service.record_oversight(_NullPool(), _caller(), run_id,
+                                                OversightDecision(decision="approved"),
+                                                engine=_engine())
+        assert result.run.status == "complete"
+
+
+async def _resolved(actor):
+    return actor
 
 
 class TestFourEyes:
@@ -790,7 +921,7 @@ class TestFourEyes:
 
     @staticmethod
     def _person():
-        return SimpleNamespace(id=uuid4(), role="reviewer")
+        return SimpleNamespace(id=uuid4(), role="reviewer", is_service_account=False)
 
     async def _decide(self, run_id, decision="approved"):
         return await service.record_oversight(
@@ -1055,6 +1186,130 @@ class TestWhatANodeReceives:
         assert received == {"run": {}}
 
 
+class TestALoopThatRunsOut:
+    """A bounded loop that never meets its criterion (CHY-150, Thomas 09.11.2026).
+
+    `draft → check`, back to `draft` while the check wants more work, at most
+    twice; the default leads to the review. Until CHY-150 the run ended as
+    `complete` once the loop ran out — without the review, and with nothing
+    recorded but a counter. Driven through the service, because the runner's
+    own tests passed throughout: they built the firing and never asked what
+    the run did with it.
+    """
+
+    #: The check's output is `{"node": "check", ...}`; this guard always holds,
+    #: so the check always wants another lap.
+    WANTS_MORE = {"field": "node", "op": "eq", "value": "check"}
+
+    def _loop(self, monkeypatch, *, with_review: bool) -> tuple[FakeDb, UUID]:
+        start, draft, check = _node("start"), _node("draft"), _node("check")
+        nodes = [start, draft, check]
+        edges = [_conn_row(start, draft), _conn_row(draft, check),
+                 _conn_row(check, draft, loop_limit=2,
+                           condition=self.WANTS_MORE if with_review else None)]
+        if with_review:
+            review = _node("review", "human_review")
+            nodes.append(review)
+            edges.append(_conn_row(check, review, label="default"))
+        db = FakeDb(nodes=nodes, connections=edges)
+        db.install(monkeypatch)
+        return db, _run(db)
+
+    def _exhausted(self, db: FakeDb) -> list[dict]:
+        return [a["payload"] for a in db.audits if a["action"] == "workflow.loop_exhausted"]
+
+    async def test_it_goes_on_to_the_review_and_says_the_budget_ran_out(self, monkeypatch):
+        db, run_id = self._loop(monkeypatch, with_review=True)
+
+        result = await service.advance_run(_NullPool(), run_id, registry=_registry())
+
+        assert result.run.status == "awaiting_oversight"
+        assert result.executed.count("check") == _THREE_LAPS
+        assert self._exhausted(db) == [{
+            "node_ref": "check", "to": "draft", "loop_limit": 2,
+            "went_on_to": ["review"], "run_failed": False}]
+
+    async def test_with_no_way_on_the_run_fails_saying_why(self, monkeypatch):
+        db, run_id = self._loop(monkeypatch, with_review=False)
+
+        result = await service.advance_run(_NullPool(), run_id, registry=_registry())
+
+        assert result.run.status == "failed"
+        assert "loop_limit of 2" in db.runs[run_id]["error_message"]
+        assert self._exhausted(db) == [{
+            "node_ref": "check", "to": "draft", "loop_limit": 2,
+            "went_on_to": [], "run_failed": True}]
+
+    async def test_a_check_that_passes_leaves_nothing_in_the_log(self, monkeypatch):
+        """Counter-probe: the entry is about running out, not about looping."""
+        db, run_id = self._loop(monkeypatch, with_review=True)
+        passes = {**self.WANTS_MORE, "value": "never"}
+        db.connections[2]["condition"] = passes
+
+        result = await service.advance_run(_NullPool(), run_id, registry=_registry())
+
+        assert result.run.status == "awaiting_oversight"
+        assert result.executed.count("check") == 1
+        assert self._exhausted(db) == []
+
+
+class TestJoinsOfAStoredWorkflow:
+    """The join policy of a node as the table holds it (CHY-260).
+
+    tests/test_workflow_runner.py proves `wait_all` and `first_wins` on graphs
+    built by hand. The graph a run is advanced on is loaded from the table, and
+    until 09.11.2026 the load dropped `join_policy`: every join behaved as
+    `wait_any`. The credit workflow (CHY-178) is where it showed — a step with
+    its prompt and three upstream results started as soon as the prompt was
+    composed, read the rest as missing, and failed.
+
+    The shape is the one that tells the policies apart: one branch is ready at
+    once, the other needs a step more. A join that fires on the first token
+    runs before the second branch has finished.
+    """
+
+    def _fork(self, monkeypatch, policy: str):
+        prompt, doc, figures = _node("prompt"), _node("doc"), _node("figures")
+        step = _node("step", join_policy=policy)
+        db = FakeDb(nodes=[prompt, doc, figures, step], connections=[
+            _conn_row(prompt, step), _conn_row(doc, figures), _conn_row(figures, step)])
+        db.install(monkeypatch)
+        return _run(db)
+
+    async def test_wait_all_runs_once_and_reads_every_branch(self, monkeypatch):
+        run_id = self._fork(monkeypatch, "wait_all")
+        rec = _Recorder()
+
+        result = await service.advance_run(
+            _NullPool(), run_id, registry=ExecutorRegistry({"tool_call": rec}))
+
+        assert result.run.status == "complete"
+        assert sorted(k for k in rec.seen if k.startswith("step#")) == ["step#1"]
+        assert {"prompt", "figures"} <= set(rec.seen["step#1"].input_data)
+
+    async def test_first_wins_runs_once_and_drops_the_straggler(self, monkeypatch):
+        run_id = self._fork(monkeypatch, "first_wins")
+        rec = _Recorder()
+
+        await service.advance_run(
+            _NullPool(), run_id, registry=ExecutorRegistry({"tool_call": rec}))
+
+        assert sorted(k for k in rec.seen if k.startswith("step#")) == ["step#1"]
+
+    async def test_without_a_policy_a_second_arrival_fires_again(self, monkeypatch):
+        """Counter-probe: the shape does tell them apart. With no policy (and
+        so `wait_any`) the step runs on each arrival — the behaviour every
+        stored join had until the fix."""
+        run_id = self._fork(monkeypatch, None)
+        rec = _Recorder()
+
+        await service.advance_run(
+            _NullPool(), run_id, registry=ExecutorRegistry({"tool_call": rec}))
+
+        assert sorted(k for k in rec.seen if k.startswith("step#")) == ["step#1", "step#2"]
+        assert "figures" not in rec.seen["step#1"].input_data
+
+
 # ── the mandatory core, end to end (CHY-133) ──────────────────────────────────
 
 class TestTheMandatoryCoreRuns:
@@ -1155,3 +1410,186 @@ class TestTheMandatoryCoreRuns:
         assert result.run.status == "failed"
         assert "prompt" not in seen, "the model was called without a prompt"
         assert "answer" in db.runs[run_id]["error_message"]
+
+
+# ── an llm_call's answer, checked against its schema (CHY-175) ────────────────
+
+_RISK = {
+    "type": "object",
+    "required": ["risk_level"],
+    "properties": {"risk_level": {"enum": ["low", "high"]}},
+}
+
+
+def _answering(text: str):
+    """An executor that returns the model's answer as it came, unchecked.
+
+    It does not check anything itself, and that is the point: the check is the
+    service's, so an injected executor cannot skip it (ADR-028 point 3).
+    """
+    async def call(_ctx: NodeContext) -> NodeResult:
+        return NodeResult(output={"content": text})
+    return call
+
+
+class TestOutputSchema:
+    async def test_a_matching_answer_is_in_the_output_as_data(self, monkeypatch):
+        ask = {**_node("ask", "llm_call"), "output_schema": _RISK}
+        db = FakeDb(nodes=[ask], connections=[])
+        db.install(monkeypatch)
+        run_id = _run(db)
+
+        await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry(
+            {"llm_call": _answering('```json\n{"risk_level": "high"}\n```')}))
+
+        [execution] = db.executions
+        assert execution["status"] == "complete"
+        assert execution["output_data"]["data"] == {"risk_level": "high"}
+
+    async def test_a_mismatch_fails_the_run_and_says_where_not_what(self, monkeypatch):
+        ask = {**_node("ask", "llm_call"), "output_schema": _RISK}
+        db = FakeDb(nodes=[ask], connections=[])
+        db.install(monkeypatch)
+        run_id = _run(db)
+
+        result = await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry(
+            {"llm_call": _answering('{"risk_level": "erika.mustermann@example.de"}')}))
+
+        assert result.run.status == "failed"
+        [execution] = db.executions
+        assert execution["status"] == "failed"
+        for message in (execution["error_message"], db.runs[run_id]["error_message"]):
+            assert "at $.risk_level: enum" in message
+            assert "erika" not in message
+
+    async def test_without_a_schema_the_same_answer_passes(self, monkeypatch):
+        """The counter-probe of the acceptance: the check is the schema's doing."""
+        ask = _node("ask", "llm_call")
+        db = FakeDb(nodes=[ask], connections=[])
+        db.install(monkeypatch)
+        run_id = _run(db)
+
+        result = await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry(
+            {"llm_call": _answering('{"risk_level": "erika.mustermann@example.de"}')}))
+
+        assert result.run.status == "complete"
+        assert "data" not in db.executions[0]["output_data"]
+
+    async def test_an_edge_reads_what_was_checked(self, monkeypatch):
+        ask = {**_node("ask", "llm_call"), "output_schema": _RISK}
+        high, low = _node("high"), _node("low")
+        guard = {"field": "data.risk_level", "op": "eq"}
+        db = FakeDb(nodes=[ask, high, low], connections=[
+            _conn_row(ask, high, condition={**guard, "value": "high"}),
+            _conn_row(ask, low, condition={**guard, "value": "low"}),
+        ])
+        db.install(monkeypatch)
+        run_id = _run(db)
+
+        result = await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry(
+            {"llm_call": _answering('{"risk_level": "high"}'), "tool_call": _ok}))
+
+        assert result.run.status == "complete"
+        assert result.executed == ("ask", "high")
+
+    async def test_the_executor_learns_that_a_shape_was_asked_for(self, monkeypatch):
+        """So it can ask the gateway for JSON; checking stays with the service."""
+        ask = {**_node("ask", "llm_call"), "output_schema": _RISK}
+        db = FakeDb(nodes=[ask], connections=[])
+        db.install(monkeypatch)
+        run_id = _run(db)
+        seen = []
+
+        async def call(ctx: NodeContext) -> NodeResult:
+            seen.append(ctx.output_schema)
+            return NodeResult(output={"content": '{"risk_level": "low"}'})
+
+        await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry({"llm_call": call}))
+        assert seen == [_RISK]
+
+
+# ── compute steps (ADR-048, CHY-173) ──────────────────────────────────────────
+
+_FIGURES = {
+    "bilanzsumme_current": 5_000_000, "eigenkapital_current": 1_250_000,
+    "umlaufvermoegen_current": 1_500_000, "kurzfristige_verbindlichkeiten_current": 2_200_000,
+    "kurzfristige_verbindlichkeiten_prior": 1_400_000, "umsatz_current": 6_000_000,
+    "ebit_current": 150_000, "abschreibungen_current": 200_000,
+}
+
+
+def _reading(figures: dict):
+    """Stands for an llm_call whose answer was checked into `data` (CHY-175)."""
+    async def read(_ctx: NodeContext) -> NodeResult:
+        return NodeResult(output={"data": figures})
+    return read
+
+
+def _compute_node(ref: str, function: str, version: int, mapping: dict) -> dict:
+    return {**_node(ref, "compute"), "function": function, "function_version": version,
+            "input_mapping": mapping}
+
+
+class TestCompute:
+    """The executor is built in: the registry needs no entry for it."""
+
+    async def test_a_step_computes_from_what_its_mapping_hands_it(self, monkeypatch):
+        read = _node("extract", "llm_call")
+        calc = _compute_node("ratios", "banking.ratios", 1, {"kpis": "extract.data"})
+        db = FakeDb(nodes=[read, calc], connections=[_conn_row(read, calc)])
+        db.install(monkeypatch)
+        run_id = _run(db)
+
+        result = await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry(
+            {"llm_call": _reading(_FIGURES)}))
+
+        assert result.run.status == "complete"
+        out = next(e for e in db.executions if e["node_id"] == calc["id"])["output_data"]
+        assert out["function"] == "banking.ratios@1"
+        assert out["data"]["current_ratio"] == pytest.approx(1_500_000 / 2_200_000)
+
+    async def test_a_missing_figure_fails_the_run_with_the_field(self, monkeypatch):
+        read = _node("extract", "llm_call")
+        calc = _compute_node("ratios", "banking.ratios", 1, {"kpis": "extract.data"})
+        db = FakeDb(nodes=[read, calc], connections=[_conn_row(read, calc)])
+        db.install(monkeypatch)
+        run_id = _run(db)
+        figures = {k: v for k, v in _FIGURES.items() if k != "umsatz_current"}
+
+        result = await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry(
+            {"llm_call": _reading(figures)}))
+
+        assert result.run.status == "failed"
+        assert ("Node ratios failed: banking.ratios@1: kpis.umsatz_current is missing"
+                in db.runs[run_id]["error_message"])
+
+    async def test_an_edge_reads_what_a_step_computed(self, monkeypatch):
+        read = _node("extract", "llm_call")
+        calc = _compute_node("ratios", "banking.ratios", 1, {"kpis": "extract.data"})
+        flag = _compute_node("anomalies", "banking.anomalies", 1, {"ratios": "ratios.data"})
+        look, done = _node("look_closer"), _node("done")
+        db = FakeDb(nodes=[read, calc, flag, look, done], connections=[
+            _conn_row(read, calc), _conn_row(calc, flag),
+            _conn_row(flag, look, condition={"field": "data.count", "op": "gt", "value": 0}),
+            _conn_row(flag, done, condition={"field": "data.count", "op": "eq", "value": 0}),
+        ])
+        db.install(monkeypatch)
+        run_id = _run(db)
+
+        result = await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry(
+            {"llm_call": _reading(_FIGURES), "tool_call": _ok}))
+
+        assert result.run.status == "complete"
+        assert result.executed == ("extract", "ratios", "anomalies", "look_closer")
+
+    async def test_a_step_the_code_does_not_have_fails_the_node(self, monkeypatch):
+        """Activation refuses it (integration test); this is the run-time backstop."""
+        calc = _compute_node("ratios", "banking.ratios", 99, {})
+        db = FakeDb(nodes=[calc], connections=[])
+        db.install(monkeypatch)
+        run_id = _run(db)
+
+        result = await service.advance_run(_NullPool(), run_id, registry=ExecutorRegistry({}))
+
+        assert result.run.status == "failed"
+        assert "banking.ratios@99 is not a registered step" in db.runs[run_id]["error_message"]

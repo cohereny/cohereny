@@ -10,8 +10,10 @@ Flow:
   3. Build messages: system (the composed context) + user (prompt)
   4. POST to LiteLLM /chat/completions -- identifiers replaced on the way out
      and put back on the way in, by core.completion (CHY-63)
-  5. Return content + model_used + token counts + latency + blocks_used +
-     how many identifiers were replaced
+  5. Draw a share for a check afterwards, at the scope's sample_rate, and keep
+     a drawn call with placeholders only (CHY-269, ADR-050)
+  6. Return content + model_used + token counts + latency + blocks_used +
+     how many identifiers were replaced + the sample id if drawn
 
 Why this calls contexts.repository.compose instead of querying blocks itself (CHY-24):
   It used to run its own SELECT, and that SELECT had drifted into something
@@ -47,13 +49,17 @@ from pydantic import BaseModel, Field, field_validator
 
 from api.config import settings
 from api.deps import CurrentUser, require_auth
-from api.v1._responses import FORBIDDEN, GATEWAY, NOT_FOUND, ROUTING_CONFLICT, UNPROCESSABLE
+from api.v1 import _direct_calls
+from api.v1._responses import COMPLETE_CONFLICT, FORBIDDEN, GATEWAY, NOT_FOUND, UNPROCESSABLE
 from kernel.audit import ACTION_ROUTING_FELL_BACK, target_ref, write_audit
 from kernel.identity import resolve_actor
 from kernel.redaction import identifiers_from, merged
+from contexts.orchestration import service as orchestration
 from contexts.repository import service as repository
+from kernel import scopes
 from kernel.errors import ScopeNotFound
 from core.db import get_pool
+from core.cooldown import ModelCooldown
 from core.redis import get_redis
 from core import completion as core_completion
 from contexts.repository.schema import ComposeRequest
@@ -118,6 +124,12 @@ class CompleteResponse(BaseModel):
         description="Placeholders in the answer that could not be put back "
                     "because the model changed them. They are left as written.",
     )
+    sample_id: UUID | None = Field(
+        default=None,
+        description="Set when this call was drawn for a check afterwards: the share "
+                    "the scope's classification sets is judged by a person later "
+                    "(GET /v1/samples/{sample_id}, CHY-269). Null when it was not.",
+    )
 
 
 async def _load_explicit_blocks(
@@ -147,11 +159,15 @@ async def _load_explicit_blocks(
     return await repository.active_blocks(pool, block_ids, scope_id)
 
 
-# 403 is new since CHY-29: the endpoint resolves the caller to an actor row so
-# the trace can name one, and resolve_actor refuses an anonymised actor.
+# 403 comes from the surface check (a token issued for another surface,
+# api/surfaces.py) or, rarely, from ActorGone: the actor row deleted between
+# resolving and locking it. Not from erasure: an anonymised actor has no
+# idp_sub, so the same login resolves to a *new* actor row (kernel/identity.py,
+# "Anonymized actors and re-provisioning"). Until CHY-270 this comment said
+# resolve_actor refuses an anonymised actor; it never did.
 @router.post(
     "/complete", response_model=CompleteResponse,
-    responses={**FORBIDDEN, **NOT_FOUND, **ROUTING_CONFLICT, **GATEWAY, **UNPROCESSABLE},
+    responses={**FORBIDDEN, **NOT_FOUND, **COMPLETE_CONFLICT, **GATEWAY, **UNPROCESSABLE},
 )
 async def complete(
     body: CompleteRequest,
@@ -176,6 +192,12 @@ async def complete(
                 "default to fall back to"
             ),
         )
+    # Before routing: an answer the scope may not receive unchecked should not
+    # cost a routing decision first (CHY-199, ADR-050).
+    risk = await scopes.direct_call_risk_of(pool, body.scope_id)
+    refused = _direct_calls.refusal(risk)
+    if refused is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=refused)
     rule = await route_for(pool, router_config, body.scope_id, body.task_type)
     candidates = rule.candidates
     # The scope's own rules on top of the shipped ones and the caller's list
@@ -237,6 +259,7 @@ async def complete(
         candidates,
         base_url=settings.litellm_base_url,
         api_key=settings.litellm_api_key,
+        cooldown=ModelCooldown(redis),
     )
 
     if result.model_used != candidates[0]:
@@ -259,6 +282,21 @@ async def complete(
             },
         )
 
+    # A share is drawn for a check afterwards (CHY-269): at sample review the
+    # answer goes out and a person judges some of them later. Kept before the
+    # answer leaves, with placeholders only, and not caught: a call drawn but
+    # not kept would be a check that never happens. refusal() let the call
+    # through only with a share set.
+    sample_id = await orchestration.draw_direct_call(
+        pool,
+        orchestration.DirectCall(
+            scope_id=body.scope_id, called_by=performer.id, task_type=body.task_type,
+            model_used=result.model_used, block_versions=block_versions,
+            prompt=result.sent_prompt, answer=result.redacted_answer,
+        ),
+        risk.sample_rate,
+    )
+
     return CompleteResponse(
         content=result.content,
         model_used=result.model_used,
@@ -269,4 +307,5 @@ async def complete(
         trace_id=result.trace_id,
         redactions=dict(result.redactions),
         unresolved_placeholders=result.unresolved_placeholders,
+        sample_id=sample_id,
     )

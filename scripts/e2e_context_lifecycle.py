@@ -266,9 +266,13 @@ def _ensure_scope(c: httpx.Client) -> str:
     and the gap it papered over was real: the system could not be put into
     service through its own interface.
     """
+    # `internal`: the one data class besides `public` under which /v1/complete may
+    # answer at all (CHY-199). Unclassified, a scope counts as `critical`, and no
+    # classification of direct calls would let section 7 reach a model.
     resp = c.post("/v1/scopes", json={
         "name": "e2e", "node_type": "org",
         "description": "created by e2e_context_lifecycle.py",
+        "privacy_level": "internal",
     })
     if resp.status_code == 403:
         print("POST /v1/scopes refused: the caller needs the architect role. "
@@ -356,6 +360,34 @@ def _check_a_direct_scope(c: httpx.Client, parent_id: str) -> None:
     original = c.get(f"/v1/blocks/{bid}").json()
     check("and leaves the original as it was",
           (original.get("status"), original.get("version")) == ("active", 1), str(original)[:160])
+
+
+def _check_the_call_was_drawn(c: httpx.Client, sample_id: str | None) -> None:
+    """At share 1 the call is drawn (CHY-269): the answer names it, and the review
+    queue holds it with what the model saw and gave.
+
+    The verdict is a person's (CHY-275). This run is cohereny-ci, a technical
+    account, so it shows the refusal and that the sample stays open; one verdict
+    per sample is shown by the integration tests, which have people.
+    """
+    check("the answer names the sample it was drawn as", sample_id is not None,
+          "sample_id is null at share 1")
+    if sample_id is None:
+        return
+    r = c.get(f"/v1/samples/{sample_id}")
+    body = r.json() if r.status_code == httpx.codes.OK else {}
+    check("the review queue holds the call with its prompt and answer",
+          body.get("source") == "direct_call" and body.get("prompt") == "ping"
+          and bool(body.get("answer")),
+          f"HTTP {r.status_code}: {r.text[:160]}")
+    r = c.post(f"/v1/samples/{sample_id}/verdict",
+               json={"verdict": "confirmed", "reason": "E2E: the gateway answered"})
+    check("a technical account may not judge it", r.status_code == httpx.codes.FORBIDDEN
+          and "technical account" in r.text, f"HTTP {r.status_code}: {r.text[:160]}")
+    r = c.get(f"/v1/samples/{sample_id}")
+    check("and the sample stays open for a person",
+          r.status_code == httpx.codes.OK and r.json().get("verdict") is None,
+          f"HTTP {r.status_code}: {r.text[:160]}")
 
 
 def _check_calibration_anchors(c: httpx.Client, scope_id: str) -> None:
@@ -496,9 +528,34 @@ def run(base_url: str, scope_id: str, tokens: SurfaceTokens) -> int:
     #
     # The 409 is kept, as the counter-probe: without a decision, no model.
     complete = {"task_type": "summarize", "prompt": "ping", "scope_id": scope_id}
+
+    # Since CHY-199 there is a decision before that one: whether an answer in
+    # this scope may be used unchecked. Nobody classified direct calls in the
+    # fresh scope, which counts as high — so the first 409 is that one, and it
+    # has to say so. Without the reason checked, the routing check below would
+    # pass on this refusal and test nothing.
+    r = c.post("/v1/complete", json=complete)
+    check("without a classification, complete refuses — and says why",
+          r.status_code == httpx.codes.CONFLICT and "nobody classified direct calls" in r.text,
+          f"HTTP {r.status_code}: {r.text[:160]}")
+    classification = f"/v1/scopes/{scope_id}/direct-call-risk-class"
+    # Since CHY-269 minimal comes with the share judged afterwards; without one
+    # it is refused, so `sample` cannot quietly mean "no check".
+    r = c.put(classification, json={"risk_class": "minimal"})
+    check("minimal without a sample_rate is refused",
+          r.status_code == httpx.codes.UNPROCESSABLE_ENTITY and "sample_rate" in r.text,
+          f"HTTP {r.status_code}: {r.text[:160]}")
+    # Share 1: every call of this run is drawn, so the queue can be walked
+    # end to end below. A real scope draws a share.
+    r = c.put(classification, json={"risk_class": "minimal", "sample_rate": 1})
+    check("classified minimal, direct calls answer in this scope",
+          r.status_code == httpx.codes.OK and r.json().get("direct_calls") is True
+          and r.json().get("effective_sample_rate") == 1,
+          f"HTTP {r.status_code}: {r.text[:160]}")
+
     r = c.post("/v1/complete", json=complete)
     check("without a routing rule, complete refuses",
-          r.status_code == httpx.codes.CONFLICT,
+          r.status_code == httpx.codes.CONFLICT and "no routing rule for task type" in r.text,
           f"HTTP {r.status_code}: {r.text[:160]}")
 
     # Local models only. Since CHY-157 the router knows hosted ones, and until
@@ -556,6 +613,7 @@ def run(base_url: str, scope_id: str, tokens: SurfaceTokens) -> int:
               used is None or used <= requested, f"output_tokens={used}")
         check("complete used the composed context", r.json()["blocks_used"] == 1,
               f"blocks_used={r.json()['blocks_used']}")
+        _check_the_call_was_drawn(c, r.json().get("sample_id"))
     else:
         # LiteLLM may be unreachable from wherever this runs; the composition
         # still happened, and a routing failure is not what this check is about.

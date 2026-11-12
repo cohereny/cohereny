@@ -32,7 +32,9 @@ encryption does not help against a dump taken by someone with database access.
   HS256 — and requires `exp`, `iss`, `aud` and `sub`. The issuer must be one of the
   installation's known issuers and the audience must be the surface called (ADR-031). The
   public keys come from that issuer's JWKS over `https`; plain `http` is accepted only with
-  `ENVIRONMENT=dev`. Keys are cached for 30 minutes per issuer.
+  `ENVIRONMENT=dev`. Keys are cached for 30 minutes per issuer. An RSA key shorter than
+  2048 bits is never used: a token signed with one is refused with `503` and the key id in
+  the application log — the identity provider has to rotate, not the caller (CHY-273).
 - **One key of its own: the run mappings** (CHY-234, `kernel/mapping_cipher.py`). A workflow
   run is stored with placeholders, and the mapping back to the values is sealed per run with
   AES-256-GCM (`cryptography`), under a key from `PII_MAPPING_KEYS` that the database never
@@ -64,7 +66,7 @@ stored. Where it is stored is listed by retention class (ADR-046);
 
 | Retention class | What it holds | Personal data |
 |---|---|---|
-| `run_content` | Inputs and outputs of runs, free-text reasons and comments — a workflow run's with placeholders, its mapping sealed (above); a pilot run's with the values | Likely — this is what the models read and write |
+| `run_content` | Inputs and outputs of runs, free-text reasons and comments — a workflow run's with placeholders, its mapping sealed (above); a pilot run's with the values; a direct call drawn for review, with placeholders and no mapping (CHY-269) | Likely — this is what the models read and write |
 | `run_trace` | Who started a run, which model answered, who decided at the gate | Pseudonymous actor references |
 | `audit` | Every governance action | Pseudonymous actor references, decision reasons |
 | `accounts` | Actors and scope memberships | Display name and identity-provider subject, until anonymized |

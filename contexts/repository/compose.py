@@ -32,8 +32,8 @@ Dependencies:
 """
 from __future__ import annotations
 
-import contextlib
 import json
+import logging
 from datetime import datetime, UTC
 from uuid import UUID
 
@@ -51,6 +51,8 @@ from contexts.repository.schema import ComposedBlock, ComposedContext, ComposeRe
 # entries unreachable rather than wrong, so the TTL is only there to reclaim
 # memory from keys nobody will ask for again.
 CACHE_TTL_SECONDS = 3600
+
+_log = logging.getLogger(__name__)
 
 _KEY_PREFIX = "cc:compiled"
 _GEN_PREFIX = "cc:scope_gen"
@@ -77,6 +79,9 @@ def compiled_key(req: ComposeRequest, generations: dict[str, int]) -> str:
             str(req.scope_id),
             req.model_id or "-",
             ",".join(sorted(req.block_types)) if req.block_types else "-",
+            # Two nodes of one workflow asking for different tags compose
+            # different context; one key would hand each the other's (CHY-178).
+            ",".join(sorted(req.tags)) if req.tags else "-",
             gen_part or "0",
         ]
     )
@@ -146,7 +151,8 @@ async def compose_from_db(
         return []
 
     by_scope = {r["id"]: (str(r["scope_path"]), r["depth"]) for r in chain}
-    rows = await store.active_blocks_in_scopes(pool, list(by_scope), req.block_types)
+    rows = await store.active_blocks_in_scopes(pool, list(by_scope), req.block_types,
+                                               tags=req.tags)
 
     # Sorted here, on the rows, because created_at is a tie-breaker and not part
     # of a ComposedBlock — the model carries what a consumer needs, not what
@@ -229,7 +235,11 @@ async def compose(
     # The cache is optional — see the docstring. A failed write costs another
     # miss; refusing to answer because a cache could not be updated would turn
     # an optimisation into a dependency.
-    with contextlib.suppress(Exception):
+    # Logged all the same: a Redis that stopped answering otherwise shows only
+    # as everything getting slower (CHY-97).
+    try:
         await redis.set(key, json.dumps(ctx.to_cache()), ex=CACHE_TTL_SECONDS)
+    except Exception:
+        _log.warning("composed context not cached", exc_info=True)
 
     return ctx

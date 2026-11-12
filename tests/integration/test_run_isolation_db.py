@@ -23,7 +23,7 @@ import pytest
 
 from api.v1._redaction import mapping_keys, policy_or_shipped
 from contexts.orchestration import service as orchestration
-from contexts.orchestration.errors import RunNotFound
+from contexts.orchestration.errors import RunNotFound, ServiceAccountMayNotDecide
 from contexts.orchestration.schema import OversightDecision
 from contexts.pilots import service as pilots
 from contexts.pilots import store as pilot_store
@@ -32,7 +32,7 @@ from contexts.pilots.errors import RunNotFound as PilotRunNotFound
 from kernel import acting
 from kernel.identity import resolve_actor
 from kernel.retention import INVENTORY
-from tests.integration._callers import caller
+from tests.integration._callers import Caller, caller
 from tests.integration.conftest import _database_url
 
 pytestmark = pytest.mark.integration
@@ -113,6 +113,18 @@ class TestWhoSeesAWorkflowRun:
         with pytest.raises(RunNotFound):
             await orchestration.get_run(pool, world.people["stranger"], world.run_id)
 
+    async def test_its_history_follows_the_run(self, pool, world):
+        """The audit log asks this before it hands out a run's entries (CHY-303).
+
+        Before, a reviewer of another scope read there who started the run, who
+        decided at its gate and who put its placeholders back, while the run
+        itself was not found for them.
+        """
+        for who in ("starter", "org_member", "admin"):
+            assert await orchestration.run_visible(pool, world.ids[who], world.run_id), who
+        for who in ("neighbour", "stranger"):
+            assert not await orchestration.run_visible(pool, world.ids[who], world.run_id), who
+
     async def test_the_steps_follow_the_run(self, pool, system_pool, world):
         """node_executions inherit the run's visibility through their policy."""
         node = await system_pool.fetchval(
@@ -143,6 +155,21 @@ class TestWhoSeesAWorkflowRun:
             assert await conn.fetchval(query, world.run_id) == 0
         assert await pool.fetchval(query, world.run_id) == 0, "nobody named, nothing seen"
 
+    async def test_the_documents_follow_the_run(self, pool, system_pool, world):
+        """A bank statement is the run's: whoever does not see the run does not
+        see that it has one (ADR-049)."""
+        await system_pool.execute(
+            "INSERT INTO workflow_run_documents (run_id, name, media_type, bytes, characters, text) "
+            "VALUES ($1, 'kontoauszug', 'text/plain', 30, 30, 'Gutschrift {{PERSON_1}}')",
+            world.run_id)
+
+        query = "SELECT count(*) FROM workflow_run_documents WHERE run_id = $1"
+        async with acting.acting_as(pool, world.ids["starter"]) as conn:
+            assert await conn.fetchval(query, world.run_id) == 1
+        async with acting.acting_as(pool, world.ids["neighbour"]) as conn:
+            assert await conn.fetchval(query, world.run_id) == 0
+        assert await pool.fetchval(query, world.run_id) == 0, "nobody named, nothing seen"
+
 
 class TestDecidingNeedsToSeeTheRun:
     async def test_a_reviewer_outside_the_scope_cannot_decide(self, pool, system_pool, world):
@@ -151,6 +178,35 @@ class TestDecidingNeedsToSeeTheRun:
             await orchestration.record_oversight(
                 pool, world.people["neighbour"], world.run_id,
                 OversightDecision(decision="approved"),
+                engine=orchestration.Engine(
+                    registry=None, pool=system_pool,
+                    placeholders=orchestration.Placeholders(
+                        policy_for=partial(policy_or_shipped, pool), keys=mapping_keys())),
+            )
+        assert await system_pool.fetchval(
+            "SELECT count(*) FROM review_votes v JOIN node_executions e ON e.id = v.execution_id "
+            "WHERE e.run_id = $1", world.run_id) == 0
+
+
+class TestTechnicalAccountsDoNotDecide:
+    async def test_not_even_as_a_member_of_the_scope(self, pool, system_pool, world):
+        """Member of the run's scope, role enough, and still refused (CHY-275).
+
+        The account sees the run — the refusal is about who it is, not what it
+        may see — and nothing is recorded.
+        """
+        account = Caller(sub=f"it-ci-{uuid4().hex}", username="it ci",
+                         groups=["chy-architects", "chy-service-accounts"])
+        actor = await resolve_actor(pool, account)
+        assert actor.is_service_account
+        scope = await system_pool.fetchval(
+            "SELECT scope_id FROM workflow_definitions WHERE id = $1", world.workflow)
+        await _member(pool, scope, actor.id)
+        assert (await orchestration.get_run(pool, account, world.run_id)).id == world.run_id
+
+        with pytest.raises(ServiceAccountMayNotDecide):
+            await orchestration.record_oversight(
+                pool, account, world.run_id, OversightDecision(decision="approved"),
                 engine=orchestration.Engine(
                     registry=None, pool=system_pool,
                     placeholders=orchestration.Placeholders(
@@ -206,6 +262,12 @@ class TestWhoSeesAPilotRun:
     async def test_the_starter_and_admin_see_it(self, pool, world, pilot_run):
         for who in ("starter", "admin"):
             assert (await pilots.get_run(pool, world.people[who], pilot_run)).id == pilot_run
+
+    async def test_its_history_follows_the_run(self, pool, world, pilot_run):
+        """What the audit log asks before it hands out a pilot run's entries (CHY-303)."""
+        for who in ("starter", "admin"):
+            assert await pilots.run_visible(pool, world.ids[who], pilot_run), who
+        assert not await pilots.run_visible(pool, world.ids["org_member"], pilot_run)
 
     async def test_a_member_of_any_scope_does_not(self, pool, world, pilot_run):
         """A pilot run has no scope, so no membership reaches it."""

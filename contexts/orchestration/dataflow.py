@@ -89,16 +89,34 @@ def apply_mapping(
     Only strings are treated as paths. A literal value in a mapping passes
     through, which is how a node gets a constant without a configuration entry
     of its own.
+
+    A dotted target builds an object (CHY-178): `{"prompt.kennzahlen":
+    "kennzahlen.data", "prompt.auffaelligkeiten": "auffaelligkeiten.data"}`
+    gives `prompt` two keys. That is how a step reads several upstream values
+    as one prompt — the targets read like the sources, and nothing is
+    interpreted that a reader could not see in the definition.
     """
     result: dict[str, Any] = {}
     for target, source in mapping.items():
         if not isinstance(source, str):
-            result[target] = source
+            _assign(result, target, source)
             continue
         value = resolve_path(source, available)
         if value is not MISSING:
-            result[target] = value
+            _assign(result, target, value)
     return result
+
+
+def _assign(result: dict[str, Any], target: str, value: Any) -> None:
+    """Set `value` at a dotted target, building objects on the way."""
+    head, _, rest = target.partition(".")
+    if not rest:
+        result[head] = value
+        return
+    inner = result.get(head)
+    if not isinstance(inner, dict):
+        inner = result[head] = {}
+    _assign(inner, rest, value)
 
 
 def build_input(

@@ -10,7 +10,8 @@ Everything here is about rows, so everything is here and not in a double:
     and its votes — and the run is marked; its trace stays
   - a finished run past its `run_trace` period is deleted with everything that
     hangs on it, votes included, which have no cascade
-  - a recent run and an unfinished one are never touched, however old
+  - a recent run and an unfinished one are never touched, however old — but a
+    run that waited for documents in vain is, documents included (ADR-049)
   - a run whose sub-run is kept longer is held, not deleted from under it
   - pilot runs and their transparency records, feedback with and without a
     workflow, by the installation-wide or the workflow's period
@@ -74,7 +75,8 @@ async def _workflow(pool, scope_id: UUID) -> tuple[UUID, UUID]:
 async def _run(pool, workflow: UUID, node: UUID, *, days_ago: int, status="complete",
                parent: UUID | None = None, voter: UUID | None = None) -> UUID:
     """A run finished `days_ago` days ago, with one execution and its content."""
-    finished = None if status in ("pending", "running", "awaiting_oversight") else days_ago
+    finished = None if status in ("pending", "running", "awaiting_oversight",
+                                  "awaiting_documents") else days_ago
     run_id = await pool.fetchval(
         "INSERT INTO workflow_runs (workflow_id, workflow_version, status, input_data, result, "
         "  error_message, created_at, completed_at, parent_run_id) "
@@ -119,8 +121,10 @@ async def _content_of_run(pool, run_id: UUID) -> dict:
         "SELECT v.* FROM review_votes v JOIN node_executions e ON e.id = v.execution_id "
         "WHERE e.run_id = $1", run_id)
     mapping = await pool.fetchrow("SELECT * FROM pii_mappings WHERE run_id = $1", run_id)
+    document = await pool.fetchrow(
+        "SELECT * FROM workflow_run_documents WHERE run_id = $1", run_id)
     return {"workflow_runs": run, "node_executions": execution, "review_votes": vote,
-            "pii_mappings": mapping}
+            "pii_mappings": mapping, "workflow_run_documents": document}
 
 
 async def _assert_cleared(pool, run_id: UUID) -> None:
@@ -175,6 +179,31 @@ async def test_content_expires_before_the_trace_and_unfinished_runs_are_left_alo
     assert await system_pool.fetchval(
         "SELECT content_purged_at FROM workflow_runs WHERE id = $1", content_due) == marked
     assert await _purges(system_pool) == before + 2, "every real run is recorded"
+
+
+async def test_a_run_that_waited_for_documents_in_vain_expires(system_pool):
+    """A run waiting for documents does no work; one whose documents never came
+    would otherwise keep its input and what did arrive for good (ADR-049). It
+    counts from its creation. A run at a gate, as old, is not touched: its
+    content is what the reviewer has to read (CHY-254)."""
+    scope = await _scope(system_pool, content_days=_CONTENT_DAYS, trace_days=_TRACE_DAYS)
+    workflow, node = await _workflow(system_pool, scope)
+    waiting = await _run(system_pool, workflow, node, days_ago=15, status="awaiting_documents")
+    at_the_gate = await _run(system_pool, workflow, node, days_ago=15,
+                             status="awaiting_oversight")
+    for run_id in (waiting, at_the_gate):
+        await system_pool.execute(
+            "INSERT INTO workflow_run_documents "
+            "(run_id, name, media_type, bytes, characters, text) "
+            "VALUES ($1, 'kontoauszug', 'text/plain', 40, 40, 'Gutschrift Erika Mustermann')",
+            run_id)
+
+    await purge(_database_url(), dry_run=False)
+
+    await _assert_cleared(system_pool, waiting)
+    kept = await _content_of_run(system_pool, at_the_gate)
+    assert kept["workflow_runs"]["content_purged_at"] is None
+    assert kept["workflow_run_documents"]["text"] == "Gutschrift Erika Mustermann"
 
 
 async def test_a_run_whose_sub_run_is_kept_longer_is_held(system_pool):

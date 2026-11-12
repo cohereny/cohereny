@@ -37,8 +37,10 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from contexts.orchestration import conditions
-from contexts.orchestration.errors import NodeTypeNotExecutable
+from contexts.orchestration.errors import NodeExecutionFailed, NodeTypeNotExecutable
 from contexts.orchestration.schema import ContextRequirements
+from core import ingress
+import steps
 
 #: Gateways route; they do not compute. A fork places tokens on its outgoing
 #: edges and a join consumes tokens on its incoming ones, and both of those are
@@ -81,6 +83,19 @@ class NodeContext:
     #: migration 023). `None` on every other node type. Never defaulted to the
     #: node type: that fallback used to route a typo as task "llm_call".
     task_type: str | None = None
+    #: The JSON Schema an `llm_call`'s answer must match (CHY-175, migration
+    #: 039). The service checks the answer; an executor reads this only to
+    #: ask the gateway for JSON. `None` means "no shape asked for".
+    output_schema: Mapping[str, Any] | None = None
+    #: What a `compute` node runs (ADR-048, migration 040): a registered pure
+    #: function and its pinned version. `None` on every other node type.
+    function: str | None = None
+    function_version: int | None = None
+    #: What a `document` node hands on (ADR-049, migration 041): the run's
+    #: document of the node's name — text with the run's placeholders, media
+    #: type, pages, counted findings — read by the service at the claim. `None`
+    #: on every other node type.
+    document: Mapping[str, Any] | None = None
     #: The run input under `run`, each predecessor's output under its own
     #: `node_ref`, and whatever `input_mapping` selected on top (CHY-131).
     input_data: Mapping[str, Any] = field(default_factory=dict)
@@ -152,6 +167,63 @@ async def _refuse(ctx: NodeContext) -> NodeResult:
     raise NodeTypeNotExecutable(ctx.node_type, ctx.node_ref)
 
 
+async def _compute(ctx: NodeContext) -> NodeResult:
+    """Run a registered pure function (ADR-048, CHY-173).
+
+    Built in rather than injected: a step reaches nothing outside its input, so
+    there is nothing for the composition root to supply (ADR-028 point 3 is
+    about executors that need the outside world).
+
+    The result is the output under `data`, as for an llm_call with a schema,
+    so an edge or a successor reads both the same way. `function` records
+    which version computed it — the step's `model_used`.
+
+    A refused input fails the node with the step's reason, which names the
+    field and never its value. Anything else a step raises is a bug in it and
+    stays loud: the service records it and raises again.
+    """
+    step = steps.lookup(ctx.function, ctx.function_version)
+    if step is None:
+        # Activation refuses this (rule `unknown_function`). Reaching it means
+        # the code lost a step a released definition still names.
+        raise NodeExecutionFailed(
+            ctx.node_ref,
+            f"{ctx.function}@{ctx.function_version} is not a registered step",
+        )
+    try:
+        data = step.run(ctx.input_data)
+    except steps.StepInputError as exc:
+        raise NodeExecutionFailed(ctx.node_ref, f"{step.ref}: {exc}") from exc
+    return NodeResult(output={"data": data, "function": step.ref})
+
+
+async def _document(ctx: NodeContext) -> NodeResult:
+    """Hand one document of the run to this node's successors, fenced (ADR-049).
+
+    Built in, like `compute`: the service read the document at the claim, and
+    nothing else from outside is needed.
+
+    **Fenced here, in the node's output**, not where a prompt is built: wherever
+    the text goes, it goes as foreign data between markers (CHY-135). The scan
+    that `fence` relies on ran when the document arrived, and its findings come
+    along, counted. The documents are not in the run input, so the edges of
+    this node are the only way a step sees one — the point of the node.
+    """
+    text = ctx.document.get("text") if ctx.document else None
+    if text is None:
+        # Unreachable while the run is the only way in: it starts with its last
+        # document, and its content is cleared only once it is over. A run
+        # stopped here says so rather than handing on an empty document.
+        raise NodeExecutionFailed(ctx.node_ref, "the run holds no text for its document")
+    return NodeResult(output={
+        "text": ingress.fence(text),
+        "name": ctx.document["name"],
+        "media_type": ctx.document["media_type"],
+        "pages": ctx.document["pages"],
+        "findings": list(ctx.document["findings"]),
+    })
+
+
 async def evaluate_edge_condition(
     _edge_id: UUID, condition: Mapping[str, Any] | None, result: NodeResult
 ) -> bool:
@@ -192,6 +264,8 @@ class ExecutorRegistry:
     ) -> None:
         self._executors: dict[str, NodeExecutor] = {
             **dict.fromkeys(ROUTING_ONLY, _routing_only),
+            "compute": _compute,
+            "document": _document,
             **(executors or {}),
         }
         #: How a guarded edge is judged. On the registry and not beside it: both

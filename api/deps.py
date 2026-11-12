@@ -35,6 +35,7 @@ Dependencies:
   - httpx         (async HTTP for JWKS fetch)
 """
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 
@@ -45,7 +46,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jwt import PyJWK
 
 from api.config import settings
+from kernel import current_call
 from kernel.surfaces import ALL_AUDIENCES, issuers
+
+_log = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
@@ -121,9 +125,16 @@ async def _fetch_jwks(issuer: str) -> dict:
                 resp = await client.get(jwks_url, timeout=10.0)
                 resp.raise_for_status()
         except httpx.HTTPError as exc:
+            # httpx names the address it could not reach; that goes to the log,
+            # the caller gets the id to quote (CHY-97).
+            _log.warning("JWKS fetch failed", extra={
+                "jwks_url": jwks_url, "error_type": type(exc).__name__, "detail": str(exc),
+            })
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"OIDC JWKS endpoint unreachable: {exc}",
+                detail=current_call.with_reference(
+                    "the identity provider's signing keys could not be fetched"
+                ),
             ) from exc
 
         document = resp.json()
@@ -178,6 +189,12 @@ _AUDIENCES = sorted(ALL_AUDIENCES)
 #: listed here.
 _REQUIRED_CLAIMS = ["exp", "iss", "aud", "sub"]
 
+#: The shortest RSA key a token may be signed with (CHY-273, OpenSSF
+#: `crypto_keylength`). Fixed, not a setting: there is no installation that
+#: should accept less, and NIST SP 800-131A has disallowed RSA below 2048 bits
+#: for signatures since 2014.
+MIN_RSA_KEY_BITS = 2048
+
 
 def _validate_token(token: str, jwks: dict, issuer: str) -> dict:
     """Validate an RS256 JWT against the issuer's keys, matching by kid where possible.
@@ -189,6 +206,12 @@ def _validate_token(token: str, jwks: dict, issuer: str) -> dict:
 
     `aud` may be a string or a list; the spec allows both, Authentik has used
     both, and a list passes when one of its entries is ours.
+
+    A key shorter than MIN_RSA_KEY_BITS is never used (CHY-273). It is passed
+    over like a key that did not sign, and if one was passed over and no other
+    key verified the token, the answer is 503, not 401: the identity provider
+    publishes a key it should not, and the caller cannot fix that. The log
+    names the key id and its length.
     """
     try:
         header = jwt.get_unverified_header(token)
@@ -206,9 +229,13 @@ def _validate_token(token: str, jwks: dict, issuer: str) -> dict:
         candidates = keys  # fallback: try all keys
 
     last_exc: jwt.PyJWTError | None = None
+    too_short: list[tuple[str | None, int]] = []
     for key_data in candidates:
         try:
             key = PyJWK(key_data, algorithm="RS256").key
+            if key.key_size < MIN_RSA_KEY_BITS:
+                too_short.append((key_data.get("kid"), key.key_size))
+                continue
             return jwt.decode(
                 token,
                 key,
@@ -228,6 +255,16 @@ def _validate_token(token: str, jwks: dict, issuer: str) -> dict:
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
 
+    if too_short:
+        for kid, bits in too_short:
+            _log.warning("JWKS key too short", extra={
+                "issuer": issuer, "kid": kid, "bits": bits, "minimum": MIN_RSA_KEY_BITS})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=current_call.with_reference(
+                f"the identity provider signs with a key shorter than {MIN_RSA_KEY_BITS} bits"
+            ),
+        )
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=f"Token validation failed: {last_exc}",

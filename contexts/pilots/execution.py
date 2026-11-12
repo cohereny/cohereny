@@ -25,8 +25,8 @@ Execution model, unchanged from before the move:
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
-import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
@@ -35,6 +35,9 @@ from uuid import UUID
 
 from contexts.pilots import store
 from contexts.pilots.registry import RunRegistry
+from kernel import current_call
+
+_log = logging.getLogger(__name__)
 
 executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pilot")
 
@@ -70,6 +73,26 @@ class RunSpec:
     #: Emit node_metrics events (token usage per model call). Was `dev_mode`
     #: until CHY-192 removed the switch it was named after.
     node_metrics: bool = False
+
+
+def _failure_text(exc: BaseException, spec: RunSpec) -> str:
+    """What a failed run stores and sends its client.
+
+    Until CHY-97 that was the whole traceback, and its first 500 characters
+    went to the client: paths, and whatever a library put in its message. Now
+    the application log has the traceback and the run has the request's id.
+
+    A cancellation is the exception. Both pilots raise a `WorkflowCancelledError`
+    of their own when a person cancels; that is an outcome, not a defect, and
+    its text is ours (CHY-153).
+    """
+    if type(exc).__name__ == "WorkflowCancelledError":
+        return str(exc)
+    _log.error("pilot run failed", exc_info=exc,
+               extra={"run_id": str(spec.run_id), "pilot": spec.pilot_name})
+    return current_call.with_reference(
+        f"unexpected error ({type(exc).__name__}), details in the application log"
+    )
 
 
 def run_in_thread(
@@ -187,11 +210,13 @@ def run_in_thread(
                 db_dsn, run_id, model_used=spec.model_used, disclosure=disclosure,
             ))
         except Exception:
-            pass
+            # Written down, not passed over: a missing Art. 50 record is a
+            # finding, even when the run it belongs to is fine (CHY-97).
+            _log.warning("transparency record not stored", exc_info=True,
+                         extra={"run_id": str(run_id)})
 
         emit(done_event)
     except Exception as exc:
-        err = traceback.format_exc()
         # A run that did not get approval ends as "rejected", not "failed".
         # oversight_outcome tells apart the two ways that happens: a human said
         # no, or nobody answered in time. Both are terminal, but only the first
@@ -245,13 +270,17 @@ def run_in_thread(
                 "fiscal_year":      partial.get("fiscal_year", ""),
             })
         else:
-            loop.run_until_complete(store.t_mark_failed(db_dsn, run_id, err))
-            emit({"type": "error", "message": err[:500]})
+            message = _failure_text(exc, spec)
+            loop.run_until_complete(store.t_mark_failed(db_dsn, run_id, message))
+            emit({"type": "error", "message": message[:500]})
     finally:
         try:
             loop.run_until_complete(store.t_store_events(db_dsn, run_id, local_events))
         except Exception:
-            pass  # best-effort; the run outcome is already persisted above
+            # Best effort: the outcome is already stored above. Logged, so a
+            # run whose events are missing has a reason somewhere (CHY-97).
+            _log.warning("run events not stored", exc_info=True,
+                         extra={"run_id": str(run_id)})
         emit(None)  # sentinel — the SSE generator closes after this
         loop.close()
         registry.release_thread(run_id)

@@ -395,8 +395,11 @@ class TestLlmCallExecutor:
         async def unreachable(*_a, **_k):
             raise ModelUnreachable("gateway silent")
 
+        from kernel import current_call
+
         monkeypatch.setattr(workflows, "route_for", chain)
         monkeypatch.setattr(workflows.completion, "complete_with_fallback", unreachable)
+        current_call.begin("abc123")
         with pytest.raises(NodeExecutionFailed) as failed:
             await workflows._call_model_for(None)(
                 _ctx("llm_call", "answer", task_type="summarize", scope_id=uuid4(),
@@ -405,6 +408,10 @@ class TestLlmCallExecutor:
         message = str(failed.value)
         assert "summarize" in message
         assert "gemma4-cloud" in message
+        # The run is read by everyone who may read the run: it keeps the id,
+        # the application log keeps the gateway's words (CHY-97).
+        assert "gateway silent" not in message
+        assert message.endswith("(request ID abc123)")
 
 
 class TestTheModelGetsContextAndRequest:

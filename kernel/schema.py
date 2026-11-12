@@ -190,6 +190,32 @@ PG_INT_MAX = 2_147_483_647
 #: in the kernel would have been two lists that could drift.
 PrivacyLevel = Literal["public", "internal", "confidential", "critical"]
 PRIVACY_LEVELS: tuple[str, ...] = get_args(PrivacyLevel)
+
+#: How risky direct model calls in a scope are (CHY-199, ADR-050), weakest
+#: first. The three classes a workflow carries (migration 044); a scope where
+#: nobody classified direct calls counts as `high`, as an unclassified workflow.
+RiskClass = Literal["minimal", "limited", "high"]
+RISK_CLASSES: tuple[str, ...] = get_args(RiskClass)
+
+#: A share drawn for review is stored as NUMERIC(4, 3) — at a sample gate
+#: (migration 045) and for direct calls (048): three decimal places, so the
+#: smallest share there is is one in a thousand.
+SMALLEST_SHARE = 0.001
+
+
+def share_as_stored(rate: float | None) -> float | None:
+    """A share drawn for review, as its column keeps it — or a ValueError.
+
+    Refused rather than rounded: 0.0505 would be kept as 0.051 and nobody told,
+    and a share small enough to round to 0 broke the CHECK — a 500 for direct
+    calls (CHY-269), a misleading 422 at a sample gate (CHY-276). One rule for
+    both places, so the two cannot drift. The lower bound itself is the
+    caller's `ge=SMALLEST_SHARE`, which puts it into the contract too.
+    """
+    if rate is not None and round(rate, 3) != rate:
+        msg = "a share has at most three decimal places, as it is stored (0.001 to 1)"
+        raise ValueError(msg)
+    return rate
 # Second copy of the alias from domain/actor.py, list and all. Both are gone;
 # the roles live in domain/roles.py (INFRA-92).
 ActorRole = Role
@@ -325,6 +351,52 @@ class MeOut(BaseModel):
     role: ActorRole
     is_service_account: bool
     memberships: list[MembershipOut]
+
+
+# ── review areas (CHY-180, ADR-050) ───────────────────────────────────────────
+
+#: The name of a review area, as a gate names it in `review_areas`. The same
+#: pattern as the CHECKs of migration 043, for the same reason as a document
+#: name: a definition is written by people and read by a reviewer.
+REVIEW_AREA_NAME = r"^[a-z][a-z0-9_]{0,62}$"
+
+
+class ReviewAreaCreate(BaseModel):
+    """An area that votes at a gate, defined on a scope and valid below it.
+
+    Front office, back office, credit committee: the names are the
+    organisation's. A gate names the areas whose vote it needs; each casts one.
+    """
+
+    name: str = Field(pattern=REVIEW_AREA_NAME, examples=["marktfolge"])
+
+
+class ReviewAreaMemberCreate(BaseModel):
+    """Add an actor to a review area. The id comes from `GET /v1/me`."""
+
+    actor_id: UUID
+
+
+class ReviewAreaMember(BaseModel):
+    """One person in a review area. A revoked membership keeps its row and its
+    date: a vote cast under it stays provable, and no new vote is accepted."""
+
+    actor_id: UUID
+    granted_at: datetime
+    granted_by: UUID | None = None
+    revoked_at: datetime | None = None
+    revoked_by: UUID | None = None
+
+
+class ReviewArea(BaseModel):
+    """A review area of a scope, with its members, revoked ones included."""
+
+    id: UUID
+    scope_id: UUID
+    name: str
+    created_at: datetime
+    created_by: UUID | None = None
+    members: list[ReviewAreaMember] = []
 
 
 # ── retention (CHY-17, ADR-046) ───────────────────────────────────────────────

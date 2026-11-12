@@ -297,6 +297,20 @@ class TestCompose:
         assert r.set.await_args.kwargs["ex"] == CACHE_TTL_SECONDS
 
     @pytest.mark.asyncio
+    async def test_a_failed_cache_write_costs_nothing_but_leaves_a_line(self, caplog):
+        """The write is optional, and stays so; it is no longer silent (CHY-97)."""
+        import logging
+
+        r = _redis()
+        r.set.side_effect = ConnectionError("redis gone")
+        with caplog.at_level(logging.WARNING, logger="contexts.repository.compose"):
+            ctx = await compose(_pool(blocks=[_block_row(_ORG, 1, "org rule", "org_a")]), r,
+                                ComposeRequest(scope_id=_PROJ))
+        assert len(ctx.blocks) == 1
+        assert [rec.message for rec in caplog.records
+                if rec.name == "contexts.repository.compose"] == ["composed context not cached"]
+
+    @pytest.mark.asyncio
     async def test_cache_hit_skips_the_database(self):
         cached = ComposedContext(
             scope_id=_PROJ, blocks=[], compiled_at=_NOW
@@ -418,3 +432,19 @@ class TestEndpoint:
             assert client.post("/v1/compose", json={}).status_code == 422
         finally:
             self._cleanup()
+
+
+async def test_a_missed_generation_bump_leaves_a_line(caplog):
+    """The status change stands without it, and a stale context is served for
+    up to an hour. Before CHY-97 nothing said why."""
+    import logging
+
+    from contexts.repository import service
+
+    r = _redis()
+    r.incr.side_effect = ConnectionError("redis gone")
+    with caplog.at_level(logging.WARNING, logger="contexts.repository.service"):
+        await service._invalidate_if_composed(r, "draft", "active", _ORG)
+    r.incr.assert_awaited_once()
+    assert [rec.message for rec in caplog.records
+            if rec.name == "contexts.repository.service"] == ["scope generation not bumped"]

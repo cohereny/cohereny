@@ -46,7 +46,7 @@ TRANSPORT = ("api",)
 
 #: Everything the transport layer sits on. Both the current shape and the
 #: target shape of ADR-030 -- see the module docstring.
-BELOW = ("core", "domain", "router", "contexts", "kernel")
+BELOW = ("core", "domain", "router", "contexts", "kernel", "steps")
 
 #: Web frameworks. Their presence below the transport layer is the measurable
 #: form of "the business rules know about HTTP".
@@ -65,6 +65,16 @@ KERNEL = "kernel"
 #: store.py holds the SQL, the aggregate holds the rules, and an adapter that
 #: reaches past service.py couples itself to both.
 CONTEXT_PUBLIC = ("service", "schema", "errors")
+
+#: ADR-048: a compute step is pure. Its package imports the standard
+#: library's arithmetic and itself, nothing else -- no network, no database,
+#: no clock, no randomness, no other zone. Held here so "pure" is a counted
+#: rule from the first commit, not an intention in a docstring.
+STEPS = "steps"
+STEPS_ALLOWED = frozenset({
+    "__future__", "collections", "dataclasses", "decimal", "fractions",
+    "math", "numbers", "statistics", "typing", STEPS,
+})
 
 
 @dataclass(frozen=True)
@@ -144,6 +154,13 @@ def _import_violations(pkg: str, rel: str, own_context: str | None,
                 "kernel_uses_nothing", rel, line,
                 f"kernel/ imports {module} — the kernel is used by contexts, "
                 f"never the other way round",
+            ))
+
+        if pkg == STEPS and head not in STEPS_ALLOWED:
+            found.append(Violation(
+                "impure_step", rel, line,
+                f"steps/ imports {module} -- a compute step uses arithmetic and "
+                f"nothing else (ADR-048)",
             ))
 
         if own_context and head == "contexts":
@@ -241,7 +258,7 @@ def counts() -> dict[str, int]:
     regress."""
     out = dict.fromkeys(
         ("inward_only", "context_isolation", "framework_free", "http_below_transport",
-         "kernel_uses_nothing", "context_encapsulation"), 0
+         "kernel_uses_nothing", "context_encapsulation", "impure_step"), 0
     )
     for v in violations():
         out[v.rule] = out.get(v.rule, 0) + 1

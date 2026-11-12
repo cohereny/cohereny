@@ -19,15 +19,21 @@ integration test.
 """
 from __future__ import annotations
 
+from functools import partial
 from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
 
+from contexts.orchestration import service as orchestration
 from kernel import retention
 from kernel.errors import RetentionOverrideNotFound, ScopeNotFound
 from kernel.schema import RetentionPolicySet, scope_label
 from tests.integration._callers import caller
+
+# Every change of a period checks the high-risk scopes since CHY-266.
+_set = partial(retention.set_policy, high_risk_scopes=orchestration.high_risk_scopes)
+_remove = partial(retention.remove_override, high_risk_scopes=orchestration.high_risk_scopes)
 
 pytestmark = pytest.mark.integration
 
@@ -84,12 +90,12 @@ async def test_a_scope_period_applies_below_and_its_removal_restores_the_inherit
     project = await _child(pool, team, "project")
     admin = caller("admin")
 
-    await retention.set_policy(pool, admin, "run_content",
+    await _set(pool, admin, "run_content",
                                RetentionPolicySet(scope_id=team, keep_days=3650))
     seen = _class(await retention.overview(pool, admin, project), "run_content")
     assert (seen.effective_keep_days, seen.effective_from_scope) == (3650, team)
 
-    await retention.remove_override(pool, admin, "run_content", team)
+    await _remove(pool, admin, "run_content", team)
     seen = _class(await retention.overview(pool, admin, project), "run_content")
     assert (seen.effective_keep_days, seen.effective_from_scope) == (30, None)
 
@@ -103,9 +109,9 @@ async def test_a_scope_period_applies_below_and_its_removal_restores_the_inherit
 
 async def test_changing_a_period_twice_records_the_first_value(pool, scope):
     admin = caller("admin")
-    await retention.set_policy(pool, admin, "run_trace",
+    await _set(pool, admin, "run_trace",
                                RetentionPolicySet(scope_id=scope, keep_days=400))
-    await retention.set_policy(pool, admin, "run_trace",
+    await _set(pool, admin, "run_trace",
                                RetentionPolicySet(scope_id=scope, keep_days=None))
     rows = await pool.fetch(
         "SELECT keep_days FROM retention_policies "
@@ -120,7 +126,7 @@ async def test_changing_a_period_twice_records_the_first_value(pool, scope):
 async def test_an_unknown_scope_and_a_missing_override_are_refused(pool, scope):
     admin = caller("admin")
     with pytest.raises(ScopeNotFound):
-        await retention.set_policy(pool, admin, "run_content",
+        await _set(pool, admin, "run_content",
                                    RetentionPolicySet(scope_id=uuid4(), keep_days=10))
     with pytest.raises(RetentionOverrideNotFound):
-        await retention.remove_override(pool, admin, "run_content", scope)
+        await _remove(pool, admin, "run_content", scope)

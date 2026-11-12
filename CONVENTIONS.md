@@ -214,7 +214,20 @@ hat ein fehlendes Recht gefunden.
 ## 5 — Fehler
 
 - **Kein `except: pass`.** Entweder protokollieren oder begründen — begründen heißt
-  Kommentar **und** Log-Zeile
+  Kommentar **und** Log-Zeile. Auch `contextlib.suppress(Exception)` ist ein `pass`: Ein
+  Redis, das nicht mehr antwortete, fiel nur daran auf, dass alles langsamer wurde (CHY-97)
+- **Fremder Fehlertext bleibt drinnen.** Was die Installation verlässt — eine Antwort, ein
+  gespeicherter Lauf, das Audit-Log — sagt, was schiefging, und trägt die Request-ID
+  (`kernel.current_call.with_reference`). Was ein Gateway oder eine Bibliothek dazu schreibt,
+  gehört ins Anwendungslog. Muster: `core/errors.py`, `str()` für außen und `detail` für das Log.
+  Anlass: Ein 502 vom 14.08.2026 nannte jedem Aufrufer Adresse und Port eines
+  Inferenz-Rechners (Audit B6, CHY-97)
+- **Eine Logzeile nennt Dinge bei ihrer ID, sie zitiert sie nicht.** Kein Prompt, keine
+  Antwort, kein Dokumenttext, kein Wert aus einem Lauf. Akteure stehen dort per UUID, nie per
+  Token-Subject, das ein Identity Provider mit der E-Mail-Adresse füllen kann. Felder kommen
+  über `extra=`, nicht in den Satz formatiert, damit jedes für sich auswertbar bleibt.
+  Anlass: uvicorns Zugriffszeile schrieb zu jedem Request Client-Adresse und vollen
+  Query-String (gemessen 09.11.2026); ersetzt durch die Request-Zeile in `api/request_log.py`
 - **Nie breiter fangen, als man behandeln kann.** `except Exception` braucht einen Satz,
   warum genau hier alles gefangen werden muss
 - **Kontexte werfen Domänenfehler, keine `HTTPException`.** Die Zuordnung auf Statuscodes
@@ -248,7 +261,8 @@ hat ein fehlendes Recht gefunden.
   als `failed`: es ist nichts schiefgegangen, jemand hat hingesehen und nein gesagt. Beides zu
   vermengen ließe eine Governance-Entscheidung in jedem Fehlerbericht auftauchen
 
-*Prüfstelle:* **ruff** (`TRY`, `EM` als Ratchet) · **`scripts/architecture.py`** — Regel
+*Prüfstelle:* **ruff** (`TRY`, `EM` als Ratchet) · **Test** für fremden Fehlertext und die
+Request-Zeile (`tests/test_request_log.py`, `tests/test_complete.py`) · **`scripts/architecture.py`** — Regel
 `http_below_transport`, Ausgangswert **3** (nicht 5; die frühere Zahl stammte aus `grep` und
 zählte Importzeile und Kommentar mit)
 
@@ -430,6 +444,11 @@ belegt
   überhaupt Verstöße gibt, auch die drei bekannten
 
 - **YouTrack-Kennung am Ende der Commit-Nachricht:** `feat: add router engine CHY-35`
+- **Sperre für Sicherheitskorrekturen:** Ein Fix für eine Lücke, die noch nicht öffentlich
+  ist, trägt im Trailer-Block die Zeile `Embargo: CHY-…`. Solange er auf `test` liegt und noch
+  nicht auf `main`, veröffentlicht `publish:next` nichts (CHY-272). Ohne die Zeile stünde der
+  Fix nach dem nächsten Deploy auf test öffentlich auf GitHub `next` — vor dem Release, das
+  Betreiber erst schützt
 - **Englisch**, Beschreibung im Imperativ, Begründung im Rumpf
 - **Kein direkter Push auf `main`/`test`.** `dev` → MR → `test` → MR → `main`, reguläre
   Merge Commits
@@ -536,6 +555,10 @@ Damit niemand sie neu verhandelt:
 ---
 
 ## Änderungen an diesem Dokument
+
+**09.11.2026** — §5 *Fremder Fehlertext bleibt drinnen* und *Eine Logzeile zitiert nicht*,
+dazu `suppress` als Form von `pass` (CHY-97; Anlass: der 502 vom 14.08. mit interner Adresse,
+die gemessene Zugriffszeile von uvicorn, sechs stille Fehlerstellen).
 
 **07.11.2026** — §6 *Migrationen gehen nur vorwärts* (CHY-113; Anlass: Von 13 Migrationen hatte
 keine einen Rückweg, und Arbeitsregel 12 stand nur als Warnung da; die falsche Begründung in 014

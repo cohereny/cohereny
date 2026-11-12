@@ -202,3 +202,34 @@ class TestTheIdentityProviderMustAnswer:
         def fail(url):
             return httpx.Response(500, request=httpx.Request("GET", url))
         assert (await self._through_the_fetch(fail)).status_code == 503
+
+
+class TestAShortKeyIsNeverUsed:
+    """OpenSSF `crypto_keylength` (CHY-273): a key under 2048 bits signs nothing here."""
+
+    _SHORT = new_key(1024)
+
+    async def test_a_token_signed_with_a_short_key_is_a_503_naming_the_cause(self, caplog):
+        import logging
+
+        jwks = {"keys": [jwk_of(self._SHORT, kid="short")]}
+        with caplog.at_level(logging.WARNING, logger="api.deps"), \
+                pytest.raises(HTTPException) as e:
+            await _auth(sign(_claims(), self._SHORT, kid="short"), jwks)
+        assert e.value.status_code == 503, e.value.detail
+        assert "shorter than 2048 bits" in e.value.detail
+        [line] = [r for r in caplog.records if r.getMessage() == "JWKS key too short"]
+        assert (line.kid, line.bits) == ("short", 1024)
+
+    async def test_a_short_key_beside_a_good_one_does_not_stand_in_the_way(self):
+        """Without a kid every key is tried: the short one is passed over, the
+        good one verifies — the token is fine, the short key just never counts."""
+        jwks = {"keys": [jwk_of(self._SHORT, kid="short"), jwk_of(_KEY)]}
+        user = await _auth(sign(_claims(), _KEY, kid=None), jwks)
+        assert user.sub == "abc"
+
+    async def test_a_2048_bit_key_is_used(self):
+        """Counter-probe: the minimum itself is enough."""
+        user = await _auth(sign(_claims(), _KEY))
+        assert user.sub == "abc"
+

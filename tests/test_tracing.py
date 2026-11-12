@@ -256,8 +256,10 @@ def test_complete_records_an_error_on_a_gateway_failure():
     # and the routing rule (CHY-87 step 2b). Answered by statement, because one
     # fixed list would hand the routing path a scope row.
     scope = uuid4()
+    # A scope where a direct call may answer at all (CHY-199).
     chain = [{"id": scope, "scope_path": "org", "node_type": "org",
-              "name": "org", "depth": 1, "privacy_level": None}]
+              "name": "org", "depth": 1, "privacy_level": "internal",
+              "direct_call_risk_class": "minimal", "direct_call_sample_rate": 0.05}]
     rule_rows = [{"block_id": uuid4(), "version": 1, "scope_id": scope,
               "content": "für den Test",
               "metadata": {"task_type": "summarize",

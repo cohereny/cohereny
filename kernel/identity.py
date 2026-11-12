@@ -37,8 +37,10 @@ Anonymized actors and re-provisioning:
   lookup nor the ON CONFLICT can match it. A person who exercised Art. 17 and
   then keeps working gets a *new* actor row, and their past actions stay
   severed from it. That is the intended reading — erasure applies to what was
-  recorded, not to the right to carry on — and it assumes the erasure is
-  accompanied by deprovisioning in Authentik. See kernel/schema.py.
+  recorded, not to the right to carry on. For a person who leaves, access ends
+  at the identity provider, not here: the operator locks the account there
+  first and anonymizes afterwards (DATA-PROTECTION.md §6, item 6; CHY-270).
+  Every new row is audited as actor.provisioned. See kernel/schema.py.
 
 Called by:
   - api/v1/{admin,audit,blocks,complete,pilots,scopes}.py
@@ -58,7 +60,7 @@ from uuid import UUID
 
 import asyncpg
 
-from kernel import least_privilege
+from kernel import current_call, least_privilege
 from kernel.access import ResolvedActor, require
 from kernel.audit import (
     ACTION_ACTOR_ANONYMIZED,
@@ -152,7 +154,18 @@ async def resolve_actor(pool: asyncpg.Pool, caller: Caller) -> ResolvedActor:
     audit entry and that entry must not survive a failed write — `write_audit`
     would happily run on a pooled connection and autocommit, which is the exact
     failure its own docstring warns about.
+
+    The result is noted on the open call (CHY-97): the application log names
+    the actor of a request by this id, never by the token subject, which an
+    identity provider may fill with an e-mail address.
     """
+    resolved = await _resolve(pool, caller)
+    current_call.note_actor(resolved.id)
+    return resolved
+
+
+async def _resolve(pool: asyncpg.Pool, caller: Caller) -> ResolvedActor:
+    """The three paths of resolve_actor, without noting the result."""
     row = await pool.fetchrow(
         "SELECT id, role, is_service_account FROM actors "
         "WHERE idp_sub = $1 AND is_anonymized = FALSE",

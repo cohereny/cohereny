@@ -96,6 +96,28 @@ def test_each_declared_package_exists_on_disk(pkg):
     assert (REPO / pkg).is_dir(), f"pyproject declares {pkg}, which is not a directory"
 
 
+def test_the_console_script_finds_its_packages():
+    """`cc` runs in the image, not only the API (CHY-257).
+
+    `pip install .` runs before the sources are copied, so it installs the
+    console script and none of the packages. They live in the working
+    directory, which uvicorn searches and a console script does not: the API
+    started and every `cc` command failed with "No module named 'cli'" — the
+    purge and the expiry of gates among them, which the operator's timer runs.
+
+    Offline, like the rest of this file: the stage has to put its working
+    directory on the path. The CI job `quickstart` runs both commands in the
+    built image; that is the check that the line does what it says.
+    """
+    app_stage = DOCKERFILE.read_text(encoding="utf-8").split("\nFROM ", 1)[0]
+    workdir = re.search(r"^WORKDIR (\S+)$", app_stage, re.M)
+    assert workdir, "the app stage sets no WORKDIR"
+    assert re.search(rf"^ENV PYTHONPATH={re.escape(workdir.group(1))}$", app_stage, re.M), (
+        f"the app stage does not put {workdir.group(1)} on PYTHONPATH — `cc` in the image "
+        f"cannot import cli.main"
+    )
+
+
 def test_a_plain_build_is_the_production_image():
     """The quickstart stage (CHY-189) must never be what a deploy builds.
 

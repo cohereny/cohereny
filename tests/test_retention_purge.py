@@ -128,6 +128,8 @@ class TestOneTransaction:
              patch.object(purge_module.retention, "current_periods", AsyncMock()), \
              patch.object(purge_module.retention, "record_purge", AsyncMock()) as record, \
              patch.object(purge_module.orchestration, "purge_runs", zero), \
+             patch.object(purge_module.orchestration, "purge_direct_samples",
+                          AsyncMock(return_value={})), \
              patch.object(purge_module.orchestration, "workflow_scopes", AsyncMock(return_value={})), \
              patch.object(purge_module.pilots, "purge_runs", AsyncMock(return_value={})), \
              patch.object(purge_module.learning, "purge_feedback", AsyncMock(return_value={})):

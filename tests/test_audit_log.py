@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+import api.v1.audit as audit_api
 from api.deps import CurrentUser, require_auth
 from api.main import app
 from kernel.audit import ACTION_ACTOR_ANONYMIZED, target_ref, write_audit
@@ -446,5 +447,85 @@ class TestAuthorAccess:
             assert client.get(
                 "/v1/audit-log", params={"target": "block:not-a-uuid"}
             ).status_code == 403
+        finally:
+            _cleanup()
+
+
+# ── Whose history: the object's visibility (CHY-303) ──────────────────────────
+
+_RESTRICTED = ("workflow_run", "pilot_run", "direct_call_sample")
+
+
+class TestHistoryFollowsTheObject:
+    """A run, a pilot run and a drawn direct call: their history goes to those
+    who see them. Before, a reviewer of another scope read it here while the
+    run's own route answered 404 (CHY-303)."""
+
+    @staticmethod
+    def _checks(monkeypatch, answer: bool) -> dict[str, AsyncMock]:
+        checks = {kind: AsyncMock(return_value=answer) for kind in _RESTRICTED}
+        for kind, check in checks.items():
+            monkeypatch.setitem(audit_api._VISIBLE_TO, kind, check)
+        return checks
+
+    @pytest.mark.parametrize("kind", _RESTRICTED)
+    def test_a_hidden_object_answers_404_and_the_log_is_not_read(self, monkeypatch, kind):
+        checks = self._checks(monkeypatch, answer=False)
+        entity = uuid4()
+        pool = _make_pool(role="reviewer", rows=[_entry(target_ref=f"{kind}:{entity}")])
+        client = _client(pool)
+        try:
+            resp = client.get("/v1/audit-log", params={"target": f"{kind}:{entity}"})
+            assert resp.status_code == 404
+            checks[kind].assert_awaited_once_with(pool, _ACTOR_ID, entity)
+            pool.fetch.assert_not_called()
+        finally:
+            _cleanup()
+
+    @pytest.mark.parametrize("kind", _RESTRICTED)
+    def test_a_visible_object_is_read(self, monkeypatch, kind):
+        self._checks(monkeypatch, answer=True)
+        entity = uuid4()
+        pool = _make_pool(role="reviewer", rows=[_entry(target_ref=f"{kind}:{entity}")])
+        client = _client(pool)
+        try:
+            resp = client.get("/v1/audit-log", params={"target": f"{kind}:{entity}"})
+            assert resp.status_code == 200
+            assert resp.json()[0]["target_ref"] == f"{kind}:{entity}"
+        finally:
+            _cleanup()
+
+    def test_an_id_that_does_not_parse_names_nothing(self, monkeypatch):
+        checks = self._checks(monkeypatch, answer=True)
+        pool = _make_pool(role="reviewer")
+        client = _client(pool)
+        try:
+            resp = client.get("/v1/audit-log", params={"target": "workflow_run:not-a-uuid"})
+            assert resp.status_code == 404
+            checks["workflow_run"].assert_not_awaited()
+        finally:
+            _cleanup()
+
+    @pytest.mark.parametrize("target", [f"workflow:{uuid4()}", f"scope:{uuid4()}", "task_type:summarize"])
+    def test_kinds_without_row_security_follow_the_role_alone(self, monkeypatch, target):
+        """Counter-check: the visibility rule must not close what was open."""
+        checks = self._checks(monkeypatch, answer=False)
+        pool = _make_pool(role="reviewer", rows=[])
+        client = _client(pool)
+        try:
+            assert client.get("/v1/audit-log", params={"target": target}).status_code == 200
+            assert not any(c.await_count for c in checks.values())
+        finally:
+            _cleanup()
+
+    def test_the_role_comes_first(self, monkeypatch):
+        """Below reviewer the answer is 403 before anyone asks whether the run exists."""
+        checks = self._checks(monkeypatch, answer=True)
+        pool = _make_pool(role="contributor")
+        client = _client(pool)
+        try:
+            resp = client.get("/v1/audit-log", params={"target": f"workflow_run:{uuid4()}"})
+            assert resp.status_code == 403
+            checks["workflow_run"].assert_not_awaited()
         finally:
             _cleanup()

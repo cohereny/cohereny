@@ -54,6 +54,7 @@ from typing import Any, Iterator
 from uuid import UUID
 
 from api.config import settings
+from core.version import VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def init_tracing() -> None:
             secret_key=settings.langfuse_secret_key,
             host=settings.langfuse_host,
             environment=settings.langfuse_environment,
-            release=settings.api_version,
+            release=VERSION,
         )
         # The one call that actually reaches the server. Without it a wrong host
         # or a rotated key stays invisible until someone misses the traces.

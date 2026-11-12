@@ -4,9 +4,9 @@
 
 **SHAPE · ADAPT · LEARN · REPEAT**
 
-> **Version:** 2.63 (basiert auf Whitepaper v4.40)
+> **Version:** 2.75 (basiert auf Whitepaper v4.44)
 > **Autor:** Thomas Roth
-> **Datum:** 2026-11-08
+> **Datum:** 2026-11-10
 > **Status:** Pre-Release (vor 1.0)
 > **Template:** Arc42 v8.2 (arc42.org)
 
@@ -20,6 +20,59 @@
 >
 > **Ziel und Stand:** Cohereny ist ein Pre-Release. Das Dokument beschreibt das Ziel 1.0; was
 > heute fehlt, trägt den Meilenstein, der es bringt (→ M5 … M8, Übersicht im Whitepaper §10).
+
+**Änderungen v2.74 → v2.75 (2026-11-10) — CHY-118: Art. 50(2) KI-VO bewertet:**
+- **§13:** Die Kennzeichnung nach Art. 50(2) liegt im Modell; Cohereny reicht durch, ohne sie zu entfernen, und kennzeichnet nicht selbst — wer ein Modell ohne Wasserzeichen anbindet, trägt die Pflicht (entschieden 10.11.2026, Verhaltenskodex der Kommission vom 10.06.2026). Die Zeile im Risikoregister ist erledigt. Fußnote zum Omnibus: Die Übergangsfrist bis 02.12.2026 gilt nur für Systeme, die vor dem 02.08.2026 in Verkehr waren. Begründung in `compliance/eu-ai-act.md`.
+
+**Änderungen v2.73 → v2.74 (2026-11-10) — CHY-268: CRA-Einordnung an den Quellen geprüft:**
+- **§13.3:** Der Geltungsbereich stützt sich auf die Leitlinien der Kommission (C(2026) 5252, Rn. 13, 52–53, 57): Hersteller ist Cohereny für die kommerziell lizenzierte Fassung, schon mit dem Angebot auf Anfrage (entschieden 10.11.2026); die AGPL-Fassung einer natürlichen Person fällt nicht unter den CRA. Art.-14-Zeile: Vorlagen samt Nutzerinformation nach Art. 14(8) vor dem 18.11. Begründungen in `compliance/cra.md`.
+
+**Änderungen v2.72 → v2.73 (2026-11-10) — CHY-199: direkte Aufrufe nach Prüfstufe:**
+- **ADR-050:** Kasten „Ergänzt durch CHY-199“. `/v1/complete` hat kein Gate und antwortet deshalb nur, wo die Mindeststufe `sample` ist. Die Risikoklasse direkter Aufrufe legt ein Bereich fest (Migration 047), entlang der Kette gilt die strengste, ohne Einstufung `high`. Die Entscheidung selbst bleibt unverändert.
+- **Nachgezogen:** §4.1 (E6), §6.1, §8.7 (Tabellen, die Lücke als ✅), ADR-004 (Kasten „Umgesetzt“), §13.2, §13.4, §13.5 (BSI Menschliche Aufsicht jetzt ✅).
+
+**Änderungen v2.71 → v2.72 (2026-11-10) — CHY-159: Abkühlen nach 429:**
+- **ADR-035:** Kasten „Ergänzt durch CHY-159“ unter der Tabelle. Ein Modell, das 429 meldet, wird für eine Zeit übersprungen, steigend 1, 5, 15, 60 min, und die Kette vermerkt es als `skipped`. Der letzte Kandidat wird immer gefragt. Der Zustand liegt je Stufe in Redis. Die Entscheidung selbst bleibt, wie sie war.
+
+**Änderungen v2.70 → v2.71 (2026-11-10) — CHY-163: Stand in ADR-042 markiert:**
+- **ADR-042, Punkt 1:** führte vier Augen noch als offen (→ M5). Markiert, dass CHY-163 seit 05.11. umgesetzt ist (ADR-045). Vier Augen gelten nur für Datenfluss-Bausteine, andere Blöcke darf ihr Autor weiter selbst freigeben. Der Text der Entscheidung bleibt, wie er war.
+
+**Änderungen v2.69 → v2.70 (2026-11-09) — CHY-6, CHY-97: Protokollierung:**
+- **§8.4:** neue Zeile „Anwendungslog“. Je Request eine JSON-Zeile mit Request-ID, Route, Status, Dauer und Akteur-UUID; nie Inhalte, Pfadwerte, Query-Strings oder Client-Adressen. Die Frist legt der Betreiber fest, empfohlen sind 30 Tage.
+- **§8.6:** neue Zeile für Fehler eines Nachbarsystems und unerwartete Fehler. Nach außen und im gespeicherten Lauf steht eine allgemeine Meldung mit Request-ID, nie der fremde Text; die Einzelheiten stehen im Anwendungslog. Anlass war ein 502, der Adresse und Port eines Inferenz-Rechners nannte (Audit B6).
+- **§13.5 (OPS.1.1.5):** Das Protokollierungskonzept liegt vor (CHY-6). Offen bleiben die Frist des Audit-Logs (CHY-242), sechs Monate Laufspur bei Hochrisiko-Workflows (CHY-266) und die Request-ID an Audit und Traces (CHY-267).
+
+**Änderungen v2.68 → v2.69 (2026-11-09) — CHY-170: Zurückziehen und Entscheiden im direkten Bereich (ADR-042):**
+- **ADR-042, vierter Nachtrag:** Im direkten Bereich darf, wer dort schreiben darf, auch zurückziehen und ausdrücklich freigeben oder ablehnen (entschieden 06.11., gebaut 09.11.). Strenge Bereiche bleiben, wie sie sind. Einen Datenfluss-Baustein freizugeben bleibt beim Reviewer (ADR-045 Punkt 3). Zurückziehen zählt nie als Lockerung, auch nicht bei einer einschränkenden Datenschutzregel. Der offene Punkt unter dem ersten Nachtrag ist als erledigt markiert.
+
+**Änderungen v2.67 → v2.68 (2026-11-09) — CHY-150: eine Schleife an ihrer Grenze (ADR-026):**
+- **ADR-026, Umsetzung und Nachtrag:**
+  - Der Vermerk ist gebaut, als `workflow.loop_exhausted` im Audit, nicht unter dem Namen `loop_limit_reached`.
+  - Punkt 3 hielt der Runner bis dahin nicht ein: Eine erschöpfte bewachte Rückkante hielt die `default`-Kante geschlossen, und der Lauf endete als `complete`, ohne das Gate zu erreichen.
+  - Jetzt zählt sie wie eine Bedingung, die nicht gegriffen hat.
+  - Neu entschieden: Bleibt kein Weg, endet der Lauf als `failed` und nennt Kante und Grenze.
+  - Die Knotenansicht des Laufs nennt die erschöpften Schleifen (`exhausted_loops`).
+- **Nachgezogen:** §5.6 (Schleife).
+
+**Änderungen v2.66 → v2.67 (2026-11-09) — CHY-254, CHY-180, CHY-223: das Gate (ADR-050):**
+- **ADR-050 neu:** Prüftiefe nach Risiko in drei Stufen (`sample` < `approver` < `four_eyes`); die Mindeststufe ist das Strengere aus der Datenklasse des Geltungsbereichs und der Risikoklasse des Workflows, ohne Einstufung `critical` bzw. `high`; zur Laufzeit gilt das Strengere aus Gate und Mindeststufe beim Erreichen des Gates, auditiert. Bereiche je Votum (Kompetenzordnung je Geltungsbereich, Zugehörigkeit entziehbar mit Datum, die Datenbank weist ab); abweichende Voten eskalieren über eine Kante an eine höhere Kompetenzstufe, die auch ein einzelner eigener Bereich sein kann. Zeitablauf: `expired` als neuer Endzustand, `cc oversight expire` vom Timer des Betriebs, die Inhaltsfrist gilt auch am Gate. `sample` mit Prüfwarteschlange. Migrationen 042–045.
+- **ADR-004, Umsetzung:** Die am 06.11. angekündigte Abstufung ist gebaut (ADR-050); Abschalten lässt sich die Pflicht weiterhin nicht.
+- **ADR-046, zweiter Nachtrag:** Läufe am Gate behalten ihren Inhalt nicht mehr über die Frist — sie enden `expired`, der Inhalt geht im selben Schritt (CHY-254).
+- **ADR-049:** Die Konsequenz „ein Lauf am Gate hat dieselbe Lücke“ ist mit ADR-050 geschlossen; markiert.
+- **Nachgezogen:** §1.4, §4.1 (E6), §5.6 (Datenmodell `human_review`), §6.9 (Szenario Freigabe-Gate), §12 Glossar „Human Oversight“.
+
+**Änderungen v2.65 → v2.66 (2026-11-08) — CHY-174: Dokumente eines Laufs (ADR-049):**
+- **ADR-049 neu:** Ein Workflow mit `document`-Knoten startet als `awaiting_documents`; Dokumente kommen über einen eigenen Endpunkt am Lauf (`PUT /v1/workflows/runs/{run_id}/documents/{name}`), nur vom Starter, ohne eigenes Token, das letzte startet den Lauf. Einmal gelesen (PDF zu Text, ohne Textebene abgelehnt), geprüft (`ingress.scan`, gezählt, nie zitiert) und mit den Platzhaltern des Laufs gespeichert. Dokumente stehen nicht in der Laufeingabe: Ein Schritt sieht eines nur über eine Kante vom `document`-Knoten — so setzt Weg 1 aus CHY-177 den § 37a BDSG um. Grenzen: Installation als Obergrenze, der Knoten nur enger. Migration 041.
+- **ADR-046, Nachtrag:** Läufe, die auf Dokumente warten, zählen für die Fristen wie abgeschlossene. Läufe am Gate behalten ihren Inhalt über die Frist (CHY-254).
+- **Nachgezogen:** §1.4.
+
+**Änderungen v2.64 → v2.65 (2026-11-08) — CHY-173: Rechenschritte (ADR-048):**
+- **ADR-048 neu:** Knotentyp `compute` für reine, im Code registrierte Funktionen nach Name und Version; Paket `steps/` mit Wächterregel `impure_step`; fehlende Eingabe lässt den Schritt scheitern; unbekannte Funktion verhindert die Aktivierung; Spalten nach ADR-040 (Migration 040). Für Banking: `risk_gateway` entfällt, weil das Gate immer hält.
+- **Nachgezogen:** §1.4.
+
+**Änderungen v2.63 → v2.64 (2026-11-08) — CHY-175: Ausgabeschema im Runner:**
+- **ADR-006, Nachtrag:** Stufe 1 der Validator-Pyramide greift jetzt auch im Runner. Ein `llm_call` kann ein JSON Schema tragen (Migration 039, Spalte nach ADR-040). Die Antwort wird als ein JSON-Objekt gelesen, geprüft und als `data` in die Ausgabe gelegt; eine Abweichung beendet den Lauf. Der Benchmark bewertet mit Stufe 1, der Runner hält an.
+- **Nachgezogen:** §1.4.
 
 **Änderungen v2.62 → v2.63 (2026-11-08) — CHY-250, CHY-230: Piloten abgekündigt, Ersetzen genau benannt:**
 - **ADR-018, dritter Nachtrag:** „Vor jedem Modellaufruf“ gilt für `/v1/complete` und die `llm_call`-Knoten der Workflows. Die LangGraph-Piloten rufen das Modell mit den Werten auf, der Bank-Pilot schreibt sie auch in seinen Langfuse-Trace; `/v1/route` überlässt den Aufruf dem Client. Gefunden bei der Prüfung der öffentlichen Dateien vor dem Schnappschuss vom 08.11.
@@ -527,7 +580,7 @@ Die folgende Tabelle zeigt die Top-5 Qualitätsziele (sortiert nach Priorität):
 | **Reviewer**                           | Übersichtliche Review-Queue; nachvollziehbare Diffs                 |
 | **Admin**                              | Volle Kontrolle über Konfiguration und Governance                   |
 
-### 1.4 Implementierungsstand (Stand 2026-11-08)
+### 1.4 Implementierungsstand (Stand 2026-11-09)
 
 > **Legende (gilt dokumentweit):** ✅ implementiert · 🔧 teilweise (Skeleton/Stub vorhanden) · 📋 geplant (Ziel-Architektur) · **→ M5** Meilenstein auf dem Weg zu 1.0, in dem das Fehlende kommt (Übersicht: Whitepaper §10 „Weg zu 1.0“). Cohereny ist ein Pre-Release; das Zeichen zeigt immer den heutigen Stand.
 
@@ -541,7 +594,8 @@ Diese Übersicht folgt der Tabelle „What is built“ in der README; die Zeilen
 | Vier Augen, wo Daten den Ort wechseln: Eine Routing-Regel mit einem Modell unterhalb `critical` und eine gelockerte Datenschutzregel brauchen in jedem Geltungsbereich eine zweite Person; technische Konten geben sie nie frei | ✅ | ADR-045, CHY-163 |
 | Aufbewahrung: jede Tabelle einer Aufbewahrungsklasse zugeordnet; wie lange Inhalte und Spur eines Laufs bleiben, steht je Geltungsbereich in der Admin-API, auditiert, angewandt von `cc retention purge` | ✅ | ADR-046, CHY-17 |
 | Bezeichner vor jedem Modellaufruf von `/v1/complete` und in Workflows ersetzt: E-Mail-Adressen, Telefonnummern, IBANs, Steuer-IDs, Krankenversichertennummern, gekennzeichnete Geburtsdaten, jeder Wert, den der Aufrufer nennt, und die Regeln des Bereichs als geprüfte Blöcke. Modell, Gateway und Trace sehen Platzhalter. Workflow-Läufe werden nur mit Platzhaltern gespeichert, die Zuordnung je Lauf verschlüsselt; wer den Lauf gestartet hat, und ab `reviewer` wer ihn sieht, lässt die Werte auflösen, protokolliert. Namen ohne Liste → M7 (CHY-235). Die LangGraph-Piloten ersetzen nicht; sie sind abgekündigt (CHY-172) | ✅ | ADR-018, CHY-63, CHY-234 |
-| Workflow-Runner: Verzweigungen, Zusammenführungen, `human_review`-Gates mit Vier-Augen-Freigabe; wer entscheidet, liest vorher die Ausgaben der Knoten | ✅ | ADR-028, CHY-127, CHY-176, CHY-229 |
+| Workflow-Runner: Verzweigungen, Zusammenführungen, `human_review`-Gates mit Vier-Augen-Freigabe; wer entscheidet, liest vorher die Ausgaben der Knoten; die Antwort eines Modells je Schritt gegen ein JSON Schema geprüft, eine Abweichung beendet den Lauf; Rechenschritte als reine, im Code registrierte Funktionen (`compute`); Dokumente eines Laufs (PDF, Text) über einen eigenen Endpunkt am Lauf, sichtbar nur entlang der Kanten ihres Knotens | ✅ | ADR-028, ADR-006, ADR-048, ADR-049, CHY-127, CHY-176, CHY-229, CHY-175, CHY-173, CHY-174 |
+| Das Gate nach ADR-050: Prüftiefe nach Datenklasse und Risikoklasse (`sample` mit Prüfwarteschlange, `approver`, `four_eyes`), ohne Einstufung die strengste; Bereiche je Votum mit Eskalation an eine höhere Kompetenzstufe; Zeitlimit und Inhaltsfrist für wartende Gates (`expired`, `cc oversight expire`) | ✅ | ADR-050, CHY-223, CHY-180, CHY-254 |
 | Läufe sieht nur, wer sie gestartet hat, wer Mitglied im Bereich des Workflows oder eines Bereichs darüber ist, und `admin` — durchgesetzt per Row-Level Security, eine Abfrage, die nicht sagt, für wen, sieht nichts. Blöcke folgen in M6 (CHY-237) | ✅ | ADR-047, CHY-92 |
 | Append-only Audit-Log außer Reichweite der Anwendung: Die API läuft als Datenbankrolle, die keine Tabelle besitzt und keinen Trigger abschalten darf, und startet nicht mit mehr Rechten. API je Oberfläche (`serve`, `author`, `observe`, `admin`) hinter OpenID Connect | ✅ | Migrationen 011, 033, 034, ADR-009, ADR-029, ADR-031, CHY-85 |
 | Pilot-Endpunkte `/v1/pilots/*` mit SSE und gespeicherten Ereignissen (`events_json`); Altbestand auf LangGraph, wird auf den Workflow-Runner gezogen | ✅ | ADR-013, ADR-028, CHY-58 |
@@ -711,7 +765,7 @@ der Referenzinstallation geplant, nicht in diesem Repository.
 
 **E5 — Actor-Pattern für DSGVO:** Personenbezug nie direkt in Fachdaten, sondern über anonymisierbare Actor-Referenz. Konsequenz: Fachliche Revisionssicherheit und das Löschrecht nach DSGVO sind gleichzeitig erfüllbar.
 
-**E6 — Human Oversight hardcoded:** Menschliche Freigabe ist Pflicht und nicht konfigurierbar (ADR-004). Gebaut: Jeder Workflow braucht einen `human_review`-Knoten, und kein Pfad von einem `llm_call` endet ohne ihn; ein Lauf lässt sich jederzeit abbrechen (Art. 14(4)(e), CHY-200). Noch nicht unter der Zusage: `/v1/complete` liefert Modellantworten ohne Gate (→ M6, CHY-199), und die Freigabepflicht nach einer im Benchmark erkannten Regression kommt mit den Benchmark-Läufen (→ M6, CHY-64). Entschieden ist, die Prüftiefe nach Risiko abzustufen (→ M6, CHY-223): Abschalten lässt sie sich weiterhin nicht, aber nicht jede Stufe hält die Ausgabe an. `/v1/complete` bleibt dann nur dort, wo die Stufe ohne Gate vor der Ausgabe zulässig ist. Konsequenz: AI-Act-kompatibles Sicherheitsverhalten als nicht umgehbarer Kern jedes Workflows.
+**E6 — Human Oversight hardcoded:** Menschliche Freigabe ist Pflicht und nicht konfigurierbar (ADR-004). Gebaut: Jeder Workflow braucht einen `human_review`-Knoten, und kein Pfad von einem `llm_call` endet ohne ihn; ein Lauf lässt sich jederzeit abbrechen (Art. 14(4)(e), CHY-200). Noch nicht unter der Zusage: die Freigabepflicht nach einer im Benchmark erkannten Regression kommt mit den Benchmark-Läufen (→ M6, CHY-64). Die Prüftiefe ist nach Risiko abgestuft (ADR-050, CHY-223): Abschalten lässt sie sich weiterhin nicht, aber nicht jede Stufe hält die Ausgabe an. `/v1/complete` hat kein Gate und antwortet deshalb nur, wo die Stufe ohne Gate vor der Ausgabe zulässig ist: Datenklasse `public` oder `internal`, direkte Aufrufe als `minimal` eingestuft (CHY-199). Konsequenz: AI-Act-kompatibles Sicherheitsverhalten als nicht umgehbarer Kern jedes Workflows.
 
 ### 4.2 Motivationen
 
@@ -1062,7 +1116,8 @@ WorkflowNode        ← Knoten im Graph, Teil einer WorkflowDefinition-Version
     join_policy: wait_all | wait_any | first_wins
 
   Für node_type = human_review:                                 🔵 neu v2.7
-    review_role:      approver | four_eyes    ← Mindestrolle bzw. Vier-Augen-Pflicht
+    review_role:      sample | approver | four_eyes    ← Prüfstufe (ADR-050); dazu
+                                                  review_areas, review_sample_rate
                                                   four_eyes durchgesetzt seit CHY-176:
                                                   zwei verschiedene Personen, eine Zeile je
                                                   Entscheidung in review_votes (Migration 027),
@@ -1092,7 +1147,7 @@ StepClassification  ← globale Taxonomie, Admin-gepflegt
   typical_context_block_types: [str]
 ```
 
-> **Implementierungsstand (04.09.2026, CHY-82):** Das Modell oben steht im Schema, mit Ausnahmen: `StepClassification` gibt es nicht; Versionen einer Definition (stabile `workflow_id`, `workflow_version` an Knoten und Kanten) sind geplant (CHY-127) — heute hängen Knoten und Kanten an der Zeilen-ID; die Kanten heißen `source_node_id`/`target_node_id`; `timeout` heißt `review_timeout` und wird noch nicht ausgewertet.
+> **Implementierungsstand (04.09.2026, CHY-82):** Das Modell oben steht im Schema, mit Ausnahmen: `StepClassification` gibt es nicht; Versionen einer Definition (stabile `workflow_id`, `workflow_version` an Knoten und Kanten) sind geplant (CHY-127) — heute hängen Knoten und Kanten an der Zeilen-ID; die Kanten heißen `source_node_id`/`target_node_id`; `timeout` heißt `review_timeout` und wird seit ADR-050 ausgewertet (`cc oversight expire`).
 > **Migration 018** ergänzt `loop_limit` und `label` an den Kanten, `sub_workflow` samt
 > Mapping-Feldern, die Detailfelder von `human_review` sowie `risk_classification`,
 > `description` und `superseded_by_version` an der Definition. Dazu die Zustandstabellen des
@@ -1142,10 +1197,12 @@ graph LR
 ```
 
 **Schleife.** Eine Kante, die auf einen bereits durchlaufenen Knoten zurückführt. Sie **muss**
-`loop_limit` tragen. Ist die Grenze erreicht, wird die Rückkante nicht mehr genommen und der Run
-läuft auf dem regulären Pfad weiter. Ein Vermerk `loop_limit_reached` im Audit-Trail soll im Nachhinein
-unterscheidbar machen, ob ein Ergebnis überzeugt hat oder nur das Budget aufgebraucht war (ADR-026) —
-gebaut ist er noch nicht: Der Runner erkennt die erschöpfte Kante, protokolliert sie aber nicht.
+`loop_limit` tragen. Ist die Grenze erreicht, wird die Rückkante nicht mehr genommen; sie zählt wie eine
+Bedingung, die nicht gegriffen hat, und der Run läuft auf dem regulären Pfad weiter, über die `default`-Kante
+in der Regel zum Gate. Bleibt kein Weg und läuft sonst nichts, endet der Run als `failed` und nennt Kante und
+Grenze. Damit sich hinterher unterscheiden lässt, ob ein Ergebnis überzeugt hat oder nur das Budget
+aufgebraucht war, schreibt jede Erschöpfung `workflow.loop_exhausted` ins Audit, und die Knotenansicht des
+Laufs nennt sie unter `exhausted_loops` (ADR-026, CHY-150).
 
 ```mermaid
 graph LR
@@ -1868,7 +1925,7 @@ Platz haben. Vor CHY-101 waren es neun.
 
 ### 6.1 Szenario (🔧): Agentic Workflow Step mit step-spezifischem Kontext
 
-> **Stand 01.11.2026:** Gebaut ist alles bis auf die Adaption: `/v1/complete` löst die Routing-Regel des Geltungsbereichs auf, komponiert mit Cache, ruft das Modell über LiteLLM mit Rückfallkette und schreibt einen Langfuse-Trace. Die Transformation je Modell kommt mit der Adaptions-Engine (📋 → M6, CHY-204). `/v1/complete` liefert ohne Freigabe-Gate (→ M6, CHY-199); für Ergebnisse, die freigegeben werden müssen, ist der Workflow-Lauf in §6.9 der Weg.
+> **Stand 01.11.2026:** Gebaut ist alles bis auf die Adaption: `/v1/complete` löst die Routing-Regel des Geltungsbereichs auf, komponiert mit Cache, ruft das Modell über LiteLLM mit Rückfallkette und schreibt einen Langfuse-Trace. Die Transformation je Modell kommt mit der Adaptions-Engine (📋 → M6, CHY-204). `/v1/complete` hat kein Freigabe-Gate und antwortet seit 10.11. nur, wo die Mindeststufe des Bereichs `sample` ist (CHY-199); für Ergebnisse, die freigegeben werden müssen, ist der Workflow-Lauf in §6.9 der Weg.
 
 ```mermaid
 sequenceDiagram
@@ -2263,6 +2320,7 @@ sequenceDiagram
 
 - **Wartezustand statt blockiertem Thread:** `awaiting_oversight` ist ein Zustand in PostgreSQL. Weiterlaufen nach einer Entscheidung ist dieselbe Operation wie der Start (ADR-028 Punkt 2).
 - **Vier Augen:** Bei `four_eyes` schließt das Gate erst mit zwei Freigaben verschiedener Personen; der Primärschlüssel von `review_votes` weist eine zweite Entscheidung derselben Person ab.
+- **Prüftiefe und Bereiche (ADR-050):** Jedes Gate verlangt mindestens, was Datenklasse und Risikoklasse verlangen; die Stufe wird beim Erreichen festgehalten und auditiert (`workflow.run_gate_reached`). Ein Gate mit Bereichen braucht je Bereich ein Votum; abweichende Voten eskalieren über eine Kante. Ein `sample`-Gate hält nicht an und zieht einen Anteil in die Prüfwarteschlange. Ein Gate, an dem niemand entscheidet, endet nach Zeitlimit oder Inhaltsfrist als `expired` oder eskaliert.
 - **Ablehnung** beendet den Lauf als `rejected`, nicht als `failed` — eine Entscheidung, kein Fehler.
 - **Abbruch** beendet den Lauf und den Knoten, an dem er steht, als `cancelled` — weder Fehler noch Ablehnung, am Gate wird nichts entschieden (CHY-200, Art. 14(4)(e)). Ein Knoten, der noch arbeitet, läuft zu Ende; sein Ergebnis wird verworfen.
 - **Noch nicht gebaut:** TransparencyRecord je Lauf (→ M7b, CHY-201).
@@ -2425,6 +2483,7 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 | Tracing        | Langfuse               | Jeden LLM-Call mit Eingabe, Ausgabe, Latenz, Kosten tracen |
 | Metriken       | — (Betreiber)          | Cohereny exportiert keine Metriken; System-Metriken liefert die Infrastruktur des Betreibers |
 | Audit Log      | PostgreSQL             | Alle Governance-Aktionen (wer hat was wann geändert)      |
+| Anwendungslog  | stderr (JSON), Sammlung beim Betreiber | Je Request eine Zeile (Request-ID, Route, Status, Dauer, Akteur-UUID), Warnungen und Tracebacks; nie Inhalte. Jede Antwort trägt `X-Request-ID` (CHY-97). Frist beim Betreiber, empfohlen 30 Tage (CHY-6) |
 | Benchmark      | `benchmark_runs`, `benchmark_measurements` | Messwerte je Anker, Modell und Variante (🔧: Tabellen ✅, Läufe CHY-68, Report CHY-64) |
 
 ### 8.5 Caching-Konzept (v2.0 — an ADR-010 angeglichen)
@@ -2447,6 +2506,7 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 | OIDC Provider nicht erreichbar  | `503 Service Unavailable`; kein Fallback auf unauth. Anfragen              |
 | Benchmark: Modell nicht erreichbar oder verweigert | Messung mit `outcome` `unreachable`, `refused` oder `error`, nie als Wert 0 (ADR-043, Migration 028); Läufe geplant (CHY-68) |
 | PostgreSQL nicht erreichbar     | Die Anfrage scheitert (500); kein Circuit Breaker, kein degraded Mode ohne Persistenz |
+| Fehler eines Nachbarsystems (Modell-Gateway, Identity Provider) oder unerwarteter Fehler | Nach außen und im gespeicherten Lauf eine allgemeine Meldung mit Request-ID, nie der fremde Text; Einzelheiten im Anwendungslog (CHY-97) |
 
 ### 8.7 Regulatorische Einordnung
 
@@ -2457,13 +2517,13 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 | Regulierung                                                                                                | Geltungsbereich für Cohereny                                                                                                                                  | Status | Kritische Lücken                                                                                           |
 | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
 | **DSGVO** (EU 2016/679)                                                                              | ✅ Voll anwendbar — personenbezogene Daten via Actor-Pattern**und in Payloads** (§8.3)                                                           | ⚠️   | Löschung über `POST /v1/admin/actors/{actor_ref}/anonymize` gebaut (CHY-34); Payloads vergehen nach ihrer Frist (CHY-17 ✅) und erreichen Modell, Gateway und Trace nur mit Platzhaltern (CHY-63 ✅, ADR-018); Workflow-Läufe nur mit Platzhaltern gespeichert (CHY-234 ✅), Namen ohne Liste → M7 (CHY-235); DPIA-Grundlage für Betreiber ✅ (`DATA-PROTECTION.md`), Muster-DSFA für das Arztbrief-Szenario ✅ (`DATA-PROTECTION-EXAMPLE.md`, CHY-18) |
-| **EU AI Act** (2024/1689, i. d. F. VO (EU) 2026/1744)                                                | ⚠️ Cohereny selbst wahrscheinlich kein KI-System (Komm.-Leitlinien C(2025) 924); Deployer-Pflichten beim Betreiber;**Art.-25-Risiko:** Gesamtsystem Cohereny+LLM ist ein KI-System | ⚠️   | Art.-50-Hinweis in der Referenz-UI (Veröffentlichung → M8, CHYUI-11); Kennzeichnung nach Art. 50(2) → M7b (CHY-118); Anhang III ab 02.12.2027, Anhang I ab 02.08.2028 |
+| **EU AI Act** (2024/1689, i. d. F. VO (EU) 2026/1744)                                                | ⚠️ Cohereny selbst wahrscheinlich kein KI-System (Komm.-Leitlinien C(2025) 924); Deployer-Pflichten beim Betreiber;**Art.-25-Risiko:** Gesamtsystem Cohereny+LLM ist ein KI-System | ⚠️   | Art.-50-Hinweis in der Referenz-UI (Veröffentlichung → M8, CHYUI-11); Art. 50(2): Kennzeichnung im Modell, Cohereny reicht durch; bindet der Betreiber ein Modell ohne Wasserzeichen an, trägt er die Pflicht (CHY-118, `compliance/eu-ai-act.md`); Anhang III ab 02.12.2027, Anhang I ab 02.08.2028 |
 | **CRA** (2024/2847)                                                                                  | ✅ Anwendbar — Cohereny behandelt sich mit der Veröffentlichung als Hersteller; Art.-14-Meldepflichten seit 11.09.2026, volle Anwendung ab 11.12.2027 | ⚠️     | `SECURITY.md` ✅; CVE-Prüfung in CI (pip-audit, Container Scanning; meldend, CHY-75); SBOM ✅ (CHY-22); Unterstützungszeitraum (CHY-149), Patch-SLA (CHY-12), Meldeprozess (CHY-16) → M7b; die Pflichten gelten ab der Veröffentlichung |
 | **DORA** (EU 2022/2554)                                                                              | ⚠️ Kapitel II bei Finanzinstitut-Betreibern vollständig                                                                                               | ⚠️   | Incident-Handling-Konzept → M7b (CHY-16); BCP als Betreiber-Checkliste nach 1.0 (CHY-8); **Restore-Tests dokumentieren (Art. 12)** beim Betreiber                                     |
 | **MaRisk AT 4.3.4** (RS 06/2026, 9. Novelle, in Kraft seit 30.06.2026 — AT 7.2 ohne IT-Anforderungen) | ⚠️ Finanzinstitut-Betreiber mit automatisierten Modellen                                                                                               | ⚠️     | Regelmäßige Analyse der Modellergebnisse über Benchmark-Läufe → M6 (CHY-68); formales Pre-Deployment-Assessment-Dokument (Betreiber-Checkliste nach 1.0, CHY-9) |
 | **BaFin-Orientierungshilfe KI** (18.12.2025)                                                         | ⚠️ Kreditinstitute/Versicherungen (unverbindlich) — adressiert**explizit Model Drift + Lebenszyklus inkl. Stilllegung**                         | ⚠️     | Decommissioning → Model-Sunset-Workflow vorgeschlagen (ADR-020), Umsetzung → M6 (CHY-158); Prozessbeschreibung nach 1.0 (CHY-11) |
 | **BSI IT-Grundschutz** (Edition 2023; Übergang zu **Grundschutz++** seit 04/2026, OSCAL/JSON) | ⚠️ Behörden-Betreiber                                                                                                                                 | ⚠️   | Kryptokonzept CON.1 (ADR-014); Mapping künftig gegen Grundschutz++-Bibliothek automatisierbar              |
-| **BSI Kriterienkatalog KI** (24.06.2025)                                                             | ⚠️ Bundesverwaltung (empfehlend)                                                                                                                       | ⚠️     | Prompt-Injection-Schutz aus Dokumenten (ADR-039; verdrahtet nur im Banking-Piloten) → M7b (CHY-5); `/v1/complete` ohne Gate → M6 (CHY-199) |
+| **BSI Kriterienkatalog KI** (24.06.2025)                                                             | ⚠️ Bundesverwaltung (empfehlend)                                                                                                                       | ⚠️     | Prompt-Injection-Schutz aus Dokumenten (ADR-039; verdrahtet nur im Banking-Piloten) → M7b (CHY-5) |
 | **BSI C5:2026** (07.04.2026 — keine KI-Anforderungen; einschlägig ist der freiwillige Katalog AIC4) | n/a On-Premise → C5 nicht anwendbar                                                                                                                   | n/a     | Vorteil ggü. Cloud-Lösungen                                                                              |
 | **EVB-IT 2026** (Open Source als Standard, veröffentlicht 03/2026) | ⚠️ Öffentliche Beschaffung | ✅ | SBOM, das die Muster vorsehen: CycloneDX in jeder Pipeline (CHY-22) |
 | **MDR** + **IEC 62304**                                                                        | ❌ Nur bei SaMD-Klassifizierung                                                                                                                          | ❌     | SaMD-Entscheidung erforderlich (nach 1.0, CHY-4)                                                                        |
@@ -2475,7 +2535,7 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 
 | Architekturmerkmal                   | Regulatorische Wirkung                                                    |
 | ------------------------------------ | ------------------------------------------------------------------------- |
-| Pflicht-Gate `human_review` in jedem Workflow (Validator, Runner), Vier-Augen-Gates; Ausgaben vor der Entscheidung einsehbar (CHY-229) | EU AI Act Art. 14(3)(a), Art. 14(4)(a) — im Workflow-Weg nicht abschaltbar; `/v1/complete` liefert ohne Gate (→ M6, CHY-199) |
+| Pflicht-Gate `human_review` in jedem Workflow (Validator, Runner), Vier-Augen-Gates; Ausgaben vor der Entscheidung einsehbar (CHY-229) | EU AI Act Art. 14(3)(a), Art. 14(4)(a) — im Workflow-Weg nicht abschaltbar; `/v1/complete` antwortet nur, wo die Mindeststufe `sample` ist (CHY-199) |
 | Drift-Erkennung + `review_needed` (Läufe, Zeitplan, Läufe bei Änderungen → M6, Messfühler → M7; ADR-044) | EU AI Act Art. 9(2)(c), Art. 14(4)(a), Art. 72; MaRisk AT 4.3.4 Tz. 5; DORA Art. 10 |
 | Actor-Pattern (Append-Only)          | DSGVO Art. 25 Privacy by Design; Art. 17 Löschrecht ohne Datenverlust    |
 | OIDC mandatory in prod               | DORA Art. 9; DSGVO Art. 32; BSI ORP.4                                     |
@@ -2497,8 +2557,8 @@ Konsequenz: Fachliche Geschichte ist vollständig rekonstruierbar; der Personenb
 | Prompt-Injection-Schutz aus Dokumenten: Zaun und Musterprüfung gebaut (`core/ingress.py`, ADR-039), verdrahtet nur im Banking-Piloten; `/v1/complete` und Workflow-Runner prüfen zugelieferten Text nicht | BSI Kriterienkatalog KI | 🔧 CHY-135 ✅; CHY-5 → M7b |
 | SaMD-Entscheidung (Arztbrief-Szenario, §6.7)                                  | MDR, IEC 62304             | 🔘 nach 1.0, CHY-4 |
 | **PII-Redaction vor LLM** (Payload-Datenkategorie, §8.3)               | DSGVO Art. 17/25           | ✅ CHY-63 und CHY-234 (ADR-018): an der Grenze und am Eingang; NER → M7 (CHY-235) |
-| **Art.-50-Hinweis + TransparencyRecord** | EU AI Act Art. 50 | 🔧 Hinweis in der Referenz-UI (Veröffentlichung → M8, CHYUI-11); TransparencyRecord nur für Pilotläufe, für Workflow-Läufe und `/v1/complete` → M7b (CHY-201); Art. 50(2) → M7b (CHY-118) |
-| `/v1/complete` ohne Freigabe-Gate — entschieden: erlaubt nur, wo die Prüfstufe des Bereichs keine Freigabe vor der Ausgabe verlangt | EU AI Act Art. 14 | 🔵 → M6, CHY-199 über CHY-223 |
+| **Art.-50-Hinweis + TransparencyRecord** | EU AI Act Art. 50 | 🔧 Hinweis in der Referenz-UI (Veröffentlichung → M8, CHYUI-11); TransparencyRecord nur für Pilotläufe, für Workflow-Läufe und `/v1/complete` → M7b (CHY-201); Art. 50(2): Kennzeichnung im Modell, Cohereny reicht durch; bindet der Betreiber ein Modell ohne Wasserzeichen an, trägt er die Pflicht (CHY-118, `compliance/eu-ai-act.md`) |
+| `/v1/complete` ohne Freigabe-Gate — antwortet nur, wo die Mindeststufe `sample` ist; die Risikoklasse direkter Aufrufe legt der Bereich fest, ohne Einstufung `high` | EU AI Act Art. 14 | ✅ CHY-199 (Migration 047) |
 | Abbruch von Workflow-Läufen | EU AI Act Art. 14(4)(e) | ✅ CHY-200 (Migration 038); am Pilot-Gate ✅ CHY-153 |
 | Autorisierung je Geltungsbereich: Laufinhalte lesen, Blöcke lesen, schreiben | DORA Art. 9, BSI ORP.4, CRA | Laufinhalte ✅ CHY-92 (ADR-047); Blöcke 🔵 → M6, CHY-237; Schreiben 🔵 CHY-243 |
 | Vier Augen bei Datenfluss-Bausteinen (Routing-Regeln unterhalb `critical`, gelockerte Datenschutzregeln) | DORA Art. 9, BSI ORP.4, CRA | ✅ CHY-163, ADR-045 |
@@ -2706,6 +2766,8 @@ ersetzt Migration 037 die falsche Begründung aus 014 (CHY-152).
 
 > **Angekündigt (2026-11-06, Thomas; CHY-223 → M6):** Die Prüftiefe wird nach Risiko abgestuft, in drei Stufen: `sample` (die Ausgabe geht sofort hinaus, ein einstellbarer Anteil wird nachträglich geprüft), `approver` und `four_eyes`. Es gilt das Strengere aus der Datenklasse des Geltungsbereichs und der Risikoklasse des Workflows; tiefere Bereiche dürfen nur verschärfen, wie bei der Modellwahl (ADR-041). Nie abgestuft werden der Fall dieser Entscheidung — die Freigabe nach einer Regression —, Meldungen der Drift-Erkennung (ADR-044) und die Datenklasse `critical`. Die angewandte Stufe steht je Lauf im Audit. `/v1/complete` ist danach die Stufe ohne Gate vor der Ausgabe und nur dort erlaubt, wo sie zulässig ist (CHY-199). Die ADR entsteht mit der Umsetzung.
 
+> **Umgesetzt (2026-11-09; ADR-050):** Die Stufen, die Mindeststufe aus Datenklasse und Risikoklasse und das Audit je Lauf sind gebaut, dazu Bereiche je Votum und der Zeitablauf am Gate. Ein `sample`-Gate bleibt ein Knoten, den der Validator verlangt; es hält nur nicht an. `/v1/complete` folgt den Stufen seit CHY-199 (10.11.2026): Es hat kein Gate und antwortet nur, wo die Mindeststufe `sample` ist; die Risikoklasse direkter Aufrufe legt ein Bereich fest, ohne Einstufung gilt `high` (ADR-050, Ergänzung).
+
 **Kontext:** Soll die Pflicht zum Human Review bei Qualitäts-Regressionen konfigurierbar sein?
 
 **Entscheidung:** Nein. `human_oversight_required = True` bei erkannter Regression ist hardcoded, nicht konfigurierbar. Rationale: AI Act Art. 14; Sicherheits-Anker der nicht durch Konfigurationsfehler umgangen werden kann.
@@ -2793,6 +2855,13 @@ Die Privacy-Prüfung aus Schritt 1 findet deshalb **zweimal statt, aber nicht je
 - (+) CalibrationAnchors sind scope-spezifisch und versioniert
 - (-) Layer-1-Validatoren müssen pro Artefakt-Typ definiert und gepflegt werden
 - (-) CalibrationAnchors brauchen initiale manuelle Erstellung (einmalig pro Scope/Task)
+
+**Nachtrag (2026-11-08, Thomas; CHY-175): Stufe 1 auch im Runner.** Ein `llm_call` kann ein JSON Schema tragen (`workflow_nodes.output_schema`, Migration 039, eine Spalte nach ADR-040). Der Runner liest die Antwort als genau ein JSON-Objekt (ein umschließender ```json-Block wird geduldet, Text darum herum nicht), prüft es und legt das geprüfte Objekt als `data` in die Ausgabe des Knotens; Kanten (`data.risk_level`) und Nachfolger lesen es dort. Der Benchmark *bewertet* mit Stufe 1, der Runner *hält an*: Eine Abweichung beendet den Lauf, ein stiller Rückfall auf Vorgabewerte wie im Banking-Piloten ist ausgeschlossen (ADR-004).
+
+- Geprüft wird im Dienst direkt nach dem Ausführer, nicht im Ausführer: Ausführer sind injiziert und austauschbar (ADR-028 Punkt 3), die Prüfung nicht.
+- Die Begründung nennt Stelle und Regel, nie den Wert aus der Antwort; er kann einen Menschen bezeichnen und steht sonst in `node_executions.error_message`.
+- Mit Schema fordert der Ausführer beim Gateway JSON an (`response_format`). Das erhöht die Trefferquote und prüft nichts.
+- Ein Schema prüft Struktur, nicht Bezeichner: Die Antwort trägt Platzhalter (ADR-018), ein Muster für eine IBAN sähe `{{IBAN_1}}`.
 
 ---
 
@@ -3413,7 +3482,7 @@ Für ein System, dessen Zweck Governance und Nachweisbarkeit ist, wäre ausgerec
 
 **Status:** Entschieden (2026-08-11)
 
-> **Umsetzungsstand (31.10.2026):** Gerichteter Graph mit Zyklen, `loop_limit` je Rückkante, Zähler je Kante und Lauf und die Prüfung, dass Sub-Workflow-Aufrufe keinen Zyklus bilden, sind gebaut (Migration 018, Validator in `contexts/orchestration/graph.py`, Runner CHY-127). Abweichend: Eine Rückkante ohne `loop_limit` lehnt die Aktivierung mit 409 ab, nicht mit 422. Nicht gebaut: der Vermerk `loop_limit_reached` — der Runner erkennt die erschöpfte Kante, schreibt sie aber nicht ins Audit —, und das Übersteuern der Grenze je Lauf; Workflow-Läufe haben keinen `effective_config`-Schnappschuss.
+> **Umsetzungsstand (09.11.2026):** Gerichteter Graph mit Zyklen, `loop_limit` je Rückkante, Zähler je Kante und Lauf und die Prüfung, dass Sub-Workflow-Aufrufe keinen Zyklus bilden, sind gebaut (Migration 018, Validator in `contexts/orchestration/graph.py`, Runner CHY-127). Abweichend: Eine Rückkante ohne `loop_limit` lehnt die Aktivierung mit 409 ab, nicht mit 422. Der Vermerk ist seit 09.11.2026 gebaut, als `workflow.loop_exhausted` (CHY-150, Nachtrag unten). Nicht gebaut: das Übersteuern der Grenze je Lauf; Workflow-Läufe haben keinen `effective_config`-Schnappschuss.
 
 **Kontext:** §5.6 Domäne 2 legte den Workflow bis v2.6 als **DAG** fest. Die Prüfung am 11.08. ergab, dass diese Festlegung weder begründet noch umgesetzt war:
 
@@ -3438,6 +3507,13 @@ Das Whitepaper hielt die Frage ausdrücklich offen: *„Workflow-DAG-Semantik: �
 5. **Zwischen** Workflows sind Zyklen ausgeschlossen: Der Aufrufgraph der Sub-Workflows muss azyklisch sein. Dort gäbe es keine Kante, an der eine Grenze hängen könnte.
 
 **Warum `loop_limit_reached` im Audit-Trail steht:** Ohne diesen Vermerk lässt sich hinterher nicht unterscheiden, ob ein Ergebnis das Prüfkriterium bestanden hat oder ob nur das Iterationsbudget aufgebraucht war. Für einen Freigebenden ist das der Unterschied zwischen „geprüft und gut" und „so gut wie es in drei Anläufen wurde" — er muss ihn sehen können (EU AI Act Art. 14: wirksame Aufsicht setzt voraus, dass der Mensch die Grundlage seiner Entscheidung kennt).
+
+> **Nachtrag (2026-11-09, Thomas; CHY-150):**
+> - **Punkt 3 hielt der Runner bis dahin nicht ein.** Eine erschöpfte *bewachte* Rückkante zählte nicht mehr als Bedingung, also blieb die `default`-Kante geschlossen. Nichts war mehr bereit, und der Lauf endete als `complete`, ohne das Gate zu erreichen. Freigebbar war er damit nicht, er war einfach vorbei.
+> - **Jetzt** zählt eine erschöpfte Rückkante wie eine Bedingung, die nicht gegriffen hat; der reguläre Pfad ist die `default`-Kante.
+> - **Neu entschieden** für den Fall, den Punkt 3 offen ließ: Gibt es keinen regulären Pfad und läuft sonst nichts, endet der Lauf als `failed` und nennt Kante und Grenze.
+> - **Der Vermerk** heißt `workflow.loop_exhausted` und nennt Knoten, Kante, Grenze und wohin der Lauf weiterging.
+> - **Für den Freigebenden** steht dieselbe Auskunft in der Knotenansicht des Laufs (`exhausted_loops`), die er vor der Entscheidung liest.
 
 **Konsequenzen:**
 
@@ -4142,6 +4218,8 @@ Die naheliegende Reparatur wäre, die Ausweichentscheidung LiteLLM zu überlasse
 | `ModelRefused` 429 | Ratenbegrenzung, eine Aussage über Verfügbarkeit | schaltet weiter |
 | `ModelRefused` übrige 4xx | Die Anfrage ist falsch: unbekanntes Modell, abgelaufener Schlüssel | **hält an** — kein Kandidat repariert das, und weiterzuschalten versteckte einen Tippfehler hinter einem funktionierenden zweiten Eintrag |
 
+> **Ergänzt durch CHY-159 (10.11.2026):** Nach einem 429 schaltet die Kette nicht nur weiter, sie merkt es sich. Das Modell wird danach für eine Zeit übersprungen statt bei jeder Anfrage erneut gefragt, steigend 1, 5, 15, 60 min, weil sich ein kurzes Rate-Limit und eine erschöpfte Quote am Statuscode nicht unterscheiden. Ein `Retry-After` des Gateways hat Vorrang, höchstens 60 min, und die erste Antwort des Modells beendet die Folge. Ein übersprungenes Modell steht als `skipped` im Versuchsprotokoll und damit in `routing.fell_back`. Sonst nennte der Nachweis das bevorzugte Modell gar nicht, und die Kette liefe unbemerkt eingeschränkt. Der **letzte** Kandidat wird immer gefragt: Eine Kette mit einem Modell verhält sich wie zuvor, und keine Anfrage scheitert, die gegangen wäre. Der Zustand liegt je Stufe in deren Redis-Datenbank (`core/cooldown.py`). Fällt Redis aus, wird nichts übersprungen. Für 5xx und Zeitüberschreitungen gilt das nicht. Wie die Kette mit einer Zeitüberschreitung umgehen soll, ist noch offen (CHY-264).
+
 Wer „bei Unerreichbarkeit weiterschaltet", hätte den Vorfall, für den die Kette gebaut wurde, **nicht** verhindert.
 
 **Das Privacy-Ratchet.** Ein Fallback feuert, wenn ohnehin schon etwas kaputt ist — der schlechteste Moment dafür, dass Daten irgendwohin wandern, wo sie weniger geschützt sind. Deshalb:
@@ -4392,7 +4470,7 @@ Das wäre ein **zweiter Weg, einen Block zu ändern** — mit eigener Versionier
 
 **Entscheidung: ein Freigabeweg.** „Merge Request" in ADR-011 heißt ab jetzt: die Freigabe einer Block-Version.
 
-1. **Strenge Scopes** (`org`, `team`, `workspace`) nutzen den vorhandenen Lebenszyklus: Entwurf → Einreichen → Freigabe durch einen Reviewer. Vier Augen soll CHY-163 erzwingen (→ M5, offen; bis dahin kann ein Reviewer seinen eigenen Block freigeben, siehe SECURITY.md)
+1. **Strenge Scopes** (`org`, `team`, `workspace`) nutzen den vorhandenen Lebenszyklus: Entwurf → Einreichen → Freigabe durch einen Reviewer. Vier Augen soll CHY-163 erzwingen (→ M5, offen; bis dahin kann ein Reviewer seinen eigenen Block freigeben, siehe SECURITY.md) *(Stand 10.11.2026: CHY-163 ist seit 05.11. umgesetzt, als ADR-045. Vier Augen gelten für Datenfluss-Bausteine, also Routing-Regeln zu einem Modell unterhalb `critical` und gelockerte Datenschutzregeln. Andere Blöcke darf ihr Autor weiter selbst freigeben, beide stehen im Audit; mit nur einer Person mit Freigaberecht gilt `self_approved`.)*
 2. **Direkte Scopes** (`project`, `sub_project`, `personal`) aktivieren sofort: `draft → pending_review → active` in einer Transaktion, der Autor als Freigebender, `direct` im Audit. Die Zustandsmaschine aus 013 bleibt unangetastet — sie verbietet `draft → active` weiterhin, der direkte Weg geht durch `pending_review` hindurch. Ratchet und `before_activation` laufen auf beiden Wegen
 3. **Promote** kopiert einen Block aus einem direkten Scope als Entwurf in einen strengen übergeordneten Scope; dort gilt Punkt 1
 4. **`merge_requests` und `merge_request_comments` entfallen** (Migration 025), ebenso die sieben Routen und der Kontext `governance`, der als Gerüst für das Merge-Request-Modell angelegt war (CHY-106). ADR-030 hat damit **vier Kontexte** statt fünf
@@ -4415,7 +4493,7 @@ Das wäre ein **zweiter Weg, einen Block zu ändern** — mit eigener Versionier
 - **Governance-Angaben kommen im direkten Scope bei einer Bearbeitung mit.** Außerhalb von `draft` sind sie gesperrt (Migration 016), und im strengen Scope sind Neufassung und neue Angabe bewusst zwei Schritte, damit ein Reviewer die zweite als Änderung sieht. Ein direkter Scope lässt aber keinen Entwurf stehen. Ohne Ausnahme wäre eine Angabe dort nach der ersten Aktivierung eingefroren. Die Angabe landet auf der neuen Version, solange diese noch Entwurf ist, und der Ratchet prüft sie bei der Aktivierung wie sonst
 - **`audit_log.created_at` ist die Zeit der Anweisung, nicht der Transaktion** (Migration 026, `clock_timestamp()`). `now()` gab allen Einträgen einer Transaktion denselben Zeitstempel. Das Audit wird nach `created_at DESC, id DESC` gelesen, also entschied dann die zufällige UUID die Reihenfolge. Der direkte Weg schreibt erstmals mehrere Lebenszyklus-Einträge in eine Transaktion (beim Bearbeiten drei: `block.superseded`, `block.submitted`, `block.approved`). Auf der Wegwerf-Datenbank stand „approved" vor „submitted"
 
-Offen: Im direkten Scope schaltet ein Contributor einen Block live, zurückziehen darf ihn weiterhin nur ein Reviewer. Entschieden am 06.11.2026 (Thomas): Wer in einem direkten Bereich aktivieren darf, darf dort auch zurückziehen und ausdrücklich freigeben oder ablehnen; strenge Bereiche bleiben, wie sie sind (→ M5, CHY-170).
+~~Offen:~~ **Erledigt (2026-11-09, CHY-170, vierter Nachtrag):** Im direkten Scope schaltete ein Contributor einen Block live, zurückziehen durfte ihn nur ein Reviewer. Entschieden am 06.11.2026 (Thomas): Wer in einem direkten Bereich aktivieren darf, darf dort auch zurückziehen und ausdrücklich freigeben oder ablehnen; strenge Bereiche bleiben, wie sie sind.
 
 **Zweiter Nachtrag (2026-09-29, Umsetzung von Punkt 3):** Promote ist `POST /v1/blocks/{id}/promote` mit dem Ziel-Scope.
 
@@ -4428,7 +4506,20 @@ Offen: Im direkten Scope schaltet ein Contributor einen Block live, zurückziehe
 
 **Dritter Nachtrag (2026-11-05, ADR-045):** Vier Augen sind für Datenfluss-Bausteine erzwungen — Routing-Regeln mit einem Modell unterhalb `critical` und Bausteine mit `privacy_impact = permissive`. Für sie gilt Punkt 2 nicht: Auch im direkten Scope werden sie eingereicht und von jemandem freigegeben, der sie nicht geschrieben hat. Der Satz in Punkt 1 („bis dahin kann ein Reviewer seinen eigenen Block freigeben“) gilt weiter für Prompt-Material.
 
-**Betrifft:** CHY-65, CHY-163 (Vier Augen), CHY-106 (Kontext `governance`), ADR-005, ADR-011, ADR-017, ADR-030, ADR-031
+**Vierter Nachtrag (2026-11-09, Thomas; CHY-170):** Punkt 2 gilt jetzt in beide Richtungen.
+
+| Bereich | Freigeben | Ablehnen | Zurückziehen |
+|---|---|---|---|
+| streng | Reviewer | Reviewer | Reviewer |
+| direkt | Contributor; Datenfluss-Baustein: Reviewer, der ihn nicht geschrieben hat | Contributor | Contributor |
+
+- **Die Regel steht an einer Stelle,** `block.role_for`, je Übergang und Freigabemodus.
+- **Wann geprüft wird:** Vor dem Lesen des Blocks nur die niedrigste Rolle (`contributor`), damit ein Consumer 403 bekommt, ohne zu erfahren, ob es den Block gibt. Die genaue Rolle wird auf der gesperrten Zeile geprüft.
+- **Einen Datenfluss-Baustein freizugeben** bleibt beim Reviewer (ADR-045 Punkt 3). Ein Contributor kann ihn dort auch nicht aktivieren.
+- **Zurückziehen zählt nie als Lockerung, auch nicht bei einer einschränkenden Datenschutzregel.** Daten verlassen die Installation nur über eine aktive Routing-Regel zu einem Modell unterhalb `critical` (ADR-045). Eine Datenschutzregel liest nur der Ratchet, wenn der nächste Baustein aktiviert wird; das Routing liest sie nicht. Was danach lockert, ist selbst ein Datenfluss-Baustein mit vier Augen. Eine zunächst gebaute Ausnahme dafür ist deshalb wieder gestrichen.
+- **Gezählt vor dem Bau:** keine wartenden Blöcke in direkten Bereichen auf dev. test und prod nicht gezählt.
+
+**Betrifft:** CHY-65, CHY-163 (Vier Augen), CHY-170 (Symmetrie im direkten Bereich), CHY-106 (Kontext `governance`), ADR-005, ADR-011, ADR-017, ADR-030, ADR-031, ADR-045
 
 ---
 
@@ -4674,7 +4765,11 @@ Zwei Anforderungen ziehen in verschiedene Richtungen. DSGVO Art. 5(1)(e) verlang
 
 **Nachtrag (2026-11-06, CHY-85):** Die Anwendung läuft nicht mehr als Superuser (ADR-009, Nachtrag). Einen Weg an den Triggern vorbei, wie ihn Punkt 4 voraussetzt, hätte jetzt die Eigentümerin der Tabellen, nicht die Anwendung. Ob Audit-Log, Blöcke und Messungen überhaupt eine Frist bekommen, und wenn ja als Löschweg der Eigentümerin, entscheidet CHY-242 (→ M7).
 
-**Betrifft:** CHY-17, CHY-19, CHY-63, CHY-85, CHY-179, CHY-231, CHY-242, INFRA-167, ADR-016, ADR-030, ADR-041, ADR-044
+**Nachtrag (2026-11-08, CHY-174):** Punkt 5 löschte nur abgeschlossene Läufe. Ein Lauf, der auf Dokumente wartet (ADR-049), arbeitet nicht — kein Knoten läuft —, und einer, dessen Dokumente nie kommen, hätte seine Eingabe und das Gelieferte für immer behalten. Er zählt jetzt wie ein abgeschlossener, ab seiner Anlage. Ein Lauf am Gate bleibt ausgenommen, denn wer entscheidet, braucht den Inhalt; dass er ihn deshalb über die Frist behält und das Zeitlimit am Gate nicht ausgewertet wird, regelt CHY-254 (→ M5).
+
+**Zweiter Nachtrag (2026-11-09, CHY-254; ADR-050 Punkt 9):** Geschlossen. Ist die Inhaltsfrist seit Erreichen des Gates abgelaufen, endet der Lauf `expired`, und sein Inhalt geht im selben Schritt — dem Löschen überlassen, bliebe er eine ganze Frist länger, denn es zählt ab `completed_at`. `expired` zählt danach für die Fristen wie jeder beendete Lauf. Angestoßen von `cc oversight expire` aus dem Timer des Betriebs, wie das Löschen (Punkt 5).
+
+**Betrifft:** CHY-17, CHY-19, CHY-63, CHY-85, CHY-174, CHY-179, CHY-231, CHY-242, CHY-254, INFRA-167, ADR-016, ADR-030, ADR-041, ADR-044, ADR-049
 
 ---
 
@@ -4712,6 +4807,291 @@ Zwei Anforderungen ziehen in verschiedene Richtungen. DSGVO Art. 5(1)(e) verlang
 - (−) Blöcke bleiben bis CHY-237 für alle Angemeldeten lesbar, und geschrieben wird mit der globalen Rolle in jedem Bereich (CHY-243)
 
 **Betrifft:** CHY-92, CHY-85, CHY-86, CHY-237, CHY-243, CHY-18, ADR-002, ADR-008, ADR-009, ADR-016, ADR-030, ADR-041, ADR-046
+
+---
+
+### ADR-048: Rechenschritte — reine, registrierte Funktionen als Knotentyp `compute` (neu in v2.65)
+
+**Status:** Entschieden (2026-11-08, Thomas; CHY-173)
+
+> **Umsetzungsstand (08.11.2026):** auf dev seit 08.11.2026 (!209, Migration 040); test und prod mit dem nächsten Release. Registriert: `banking.ratios@1`, `banking.anomalies@1`.
+
+**Kontext:** Der Banking-Ablauf hat Schritte, die kein Modell brauchen und keines haben dürfen: Kennzahlen aus den gelesenen Werten (`calculate_ratios`) und regelbasierte Auffälligkeiten mit Schwellen (der deterministische Teil von `detect_anomalies`). Der Runner kannte dafür keinen Knotentyp. `tool_call` bleibt verweigert, weil es Seiteneffekte hätte (Buch 14.2). Ein Rechenschritt als `llm_call` wäre falsch: Eine Eigenkapitalquote rechnet man, man lässt sie nicht schätzen.
+
+Der Pilot zeigt, was dabei schiefgeht. `safe_div(..., default=0.0)` machte aus einem fehlenden Wert still eine Kennzahl von 0 — eine Eigenkapitalquote von 0 % sieht aus wie ein Befund, nicht wie eine Lücke. Und `detect_anomalies` nahm `current_ratio = 1.0` an, wenn sie fehlte. Dasselbe Muster hat CHY-175 für Modellantworten ausgeschlossen (ADR-004: kein stiller Rückfall). Seit CHY-175 tragen Modellantworten geprüfte Felder (`data`), auf denen ein Rechenschritt arbeiten kann.
+
+**Entscheidung:**
+
+1. **Ein Knotentyp `compute`.** Er ruft eine Funktion auf, die **im Code** registriert ist, nach Name und Version: `function = "banking.ratios"`, `function_version = 1`. Es gibt keinen freien Code in der Datenbank und keine Ausdruckssprache in der Definition.
+2. **Rein heißt prüfbar rein.** Kein Netz, keine Datenbank, keine Uhr, kein Zufall, keine Umgebung — dieselbe Eingabe ergibt dieselbe Ausgabe (wie `contexts/learning/validators.py`). Die Funktionen liegen im eigenen Paket `steps/`, das nur die Standardbibliothek zum Rechnen und sich selbst importieren darf; der Architekturwächter hält das als Regel `impure_step`.
+3. **Ein- und Ausgabe über den Datenfluss** (CHY-131): Die Funktion bekommt, was `input_mapping` ihr gibt (etwa `kpis` aus `extract_kpis.data`), und gibt ein Objekt zurück. Es steht als Ausgabe des Knotens unter `data`, wie bei einem `llm_call` mit Schema — Kanten und Nachfolger lesen beides gleich. `function` hält `name@version` fest.
+4. **Eine fehlende oder unbrauchbare Eingabe lässt den Schritt scheitern.** Kein Vorgabewert, keine 0 für „nicht da“. Eine Division durch null ist ein benannter Grund, kein Ergebnis. Der Grund nennt das Feld, nie den Wert.
+5. **Name und Version werden bei der Aktivierung geprüft**, nicht erst im Lauf: Eine Definition, die eine unbekannte Funktion oder Version nennt, ist nicht aktivierbar (Regel `unknown_function`).
+6. **Version statt Überschreiben.** Ändert sich das Verhalten einer Funktion — auch eine Schwelle —, bekommt sie eine neue Version; die alte bleibt im Code, solange eine freigegebene Definition sie nennt (Art. 12 KI-VO, MaRisk AT 4.3.4).
+7. **Spalten nach ADR-040:** `workflow_nodes.function` und `function_version`, nur an `compute` und dort Pflicht, Version ab 1 (Migration 040). `config` bleibt leer dafür.
+8. **Der Ausführer ist eingebaut, nicht injiziert.** Ein Schritt braucht nichts von außen; ADR-028 Punkt 3 betrifft Ausführer, die die Welt erreichen.
+
+**Abgrenzung:** `tool_call` bleibt verweigert (Seiteneffekte nach außen). Kantenbedingungen bleiben, wofür sie da sind: verzweigen. Eine Schwelle, die eine Kante wählt, ist eine Bedingung; eine Schwelle, die einen Befund erzeugt, ist ein Rechenschritt.
+
+**Für den Banking-Ablauf (CHY-178):** `calculate_ratios` und der Regelteil von `detect_anomalies` werden `compute`-Schritte; mit drei Fällen gegen den Piloten abgeglichen (Kennzahlen gleich bis 1e-12, dieselben Auffälligkeiten). Abweichen wird er nur, wo der Pilot still 0 oder 1.0 einsetzte. `risk_gateway` entfällt, weil das Gate immer hält (Thomas, 08.11.). Der qualitative Teil von `detect_anomalies` bleibt ein `llm_call`.
+
+**Verworfen:**
+
+- **Ausdruckssprache in der Definition** (z. B. `"ek / bilanzsumme"`): eine zweite Programmiersprache im Produkt, mit eigener Prüfung und eigenen Lücken; und Rechenlogik, die mit einer Freigabe statt mit Review und Tests geändert würde.
+- **Python-Code in der Datenbank:** ausführbarer Code als Daten — genau, was `tool_call` verweigert.
+- **Rechenschritt als `llm_call`:** ein Modell schätzt, was man rechnen kann.
+
+**Konsequenzen:**
+
+- (+) Rechnungen sind deterministisch, getestet und versioniert; ein Lauf sagt, welche Fassung rechnete
+- (+) Eine fehlende Zahl wird sichtbar statt zu einer 0
+- (−) Eine neue Rechnung braucht eine Code-Änderung mit Review und Release, keine Freigabe im Betrieb — gewollt, aber langsamer
+- (−) Alte Versionen bleiben im Code, solange Definitionen sie nennen
+
+**Betrifft:** CHY-172, CHY-173, CHY-175, CHY-178, ADR-004, ADR-028, ADR-030, ADR-040
+
+---
+
+### ADR-049: Dokumente eines Laufs — eigener Endpunkt am Lauf, einmal gelesen und geprüft, sichtbar nur entlang der Kanten (neu in v2.66)
+
+**Status:** Entschieden (2026-11-08, Thomas; CHY-174) · **Ergänzt:** ADR-046
+
+> **Umsetzungsstand (08.11.2026):** auf dev seit 08.11.2026 (!210, Migration 041); test und prod mit dem nächsten Release.
+
+**Kontext:** Ein Workflow-Lauf nimmt heute nur JSON (`POST /v1/workflows/{id}/runs`). Der Banking-Pilot liest sein PDF selbst ein, prüft den Text mit `core/ingress.scan` und zäunt ihn mit `ingress.fence` ein, bevor er ihn einem Modell gibt (CHY-135). Für die Ablösung (CHY-172) braucht der Runner einen Dokumenteingang.
+
+Dazu kommt der Kontoauszug. § 37a BDSG verlangt ab **20.11.2026**, dass Zahlungsein- und -ausgänge nicht in einen Wahrscheinlichkeitswert eingehen; der Kontoauszug darf den Entwurf des Votums stützen, die Einstufung nicht (Buch 10.2). CHY-177 hat entschieden: Weg 1 — der Kontoauszug kommt in einen eigenen Schritt, dessen einzige Kante zum Entwurf führt. Das geht heute nicht: `build_input` gibt **jedem** Knoten die ganze Laufeingabe unter `run` (CHY-131). Ein Dokument in der Laufeingabe erreichte jeden Schritt, auch den Score.
+
+Und der Weg hinein muss zu den Platzhaltern passen: Ein Lauf wird mit Platzhaltern gespeichert, die Zuordnung zurück zu den Werten wird je Lauf versiegelt (CHY-234). Ein Dokument, das es vor seinem Lauf gibt, hätte noch keine Zuordnung.
+
+**Entscheidung:**
+
+1. **Ein Lauf, der Dokumente braucht, wartet auf sie.** Nennt die Definition `document`-Knoten, entsteht der Lauf beim Start im neuen Zustand **`awaiting_documents`**; kein Knoten läuft. Der Audit-Eintrag des Starts nennt die erwarteten Dokumente, `GET /v1/workflows/runs/{run_id}/documents` zeigt, welche angekommen sind — ohne Text. Ohne `document`-Knoten ändert sich nichts.
+2. **Dokumente kommen über einen eigenen Endpunkt am Lauf:** `PUT /v1/workflows/runs/{run_id}/documents/{name}`, im Body die Datei, der Typ im `Content-Type` (`curl -T abschluss.pdf -H 'Content-Type: application/pdf' …`). Der Start bleibt JSON und kennt keine Dateien; Größe, Typ und Lesen der Datei liegen an einer Stelle. Kein Multipart: keine neue Abhängigkeit, kein JSON in einem Formularfeld.
+3. **Kein eigenes Token — die Bindung ist der Lauf.** Hochladen darf nur, wer den Lauf gestartet hat, nur solange er auf Dokumente wartet, nur ein Dokument, das die Definition erwartet, und jedes nur einmal (sonst `409`). Ein Dokument gehört genau einem Lauf; es wird für keinen anderen Zweck wiederverwendet (Art. 5 Abs. 1 lit. b DSGVO). Hochladen vor dem Lauf gibt es nicht.
+4. **Grenzen auf zwei Ebenen: Die Installation setzt die Obergrenze, der Knoten kann nur enger werden.**
+   - **Installation:** `DOCUMENT_MAX_BYTES` und `DOCUMENT_MAX_PAGES`, Vorgabe 10 MB und 200 Seiten. Sie schützen den Dienst — kein Workflow holt mehr in den Speicher, als der Betreiber zulässt
+   - **Knoten:** `document_max_bytes` und `document_max_pages` am `document`-Knoten (Spalten nach ADR-040), leer heißt: die Grenze der Installation. Wer den Workflow baut, kennt das Dokument — ein Kontoauszug hat fünf Seiten, ein Vertragswerk dreihundert. Die Grenze geht mit durch die Freigabe, ist versioniert und sagt, wie viel der Zweck braucht (Datenminimierung, Art. 5 Abs. 1 lit. c DSGVO)
+   - Ein Knoten über der Obergrenze verhindert die Aktivierung (`document_limit_above_installation`). Senkt der Betreiber die Obergrenze später, gilt beim Hochladen der kleinere Wert; das `413` nennt beide
+   - Gelesen wird der Body höchstens bis zur Obergrenze der Installation (`413`), und erst nach der Anmeldung: Das Oberflächen-Gate prüft das Token vor jeder Abhängigkeit der Route. Die engere Grenze des Knotens prüft danach der Dienst, ebenso die Seiten (`422`) — die Konfiguration kennt nur der Transport (ADR-030)
+5. **Einmal gelesen, einmal geprüft, beim Hochladen.** Medientyp `application/pdf` oder `text/plain` für alle Knoten (sonst `415`); je Knoten einstellbar erst, wenn es gebraucht wird. PDF → Text mit `pypdf`, das damit vom Piloten in den Kern wandert. Ein PDF ohne Textebene — ein eingescanntes Blatt — wird abgelehnt (`422`), nicht als leeres Dokument angenommen; eine Texterkennung gibt es nicht. Dann `ingress.scan` auf den Text.
+6. **Gespeichert wird der Text mit den Platzhaltern des Laufs**, nicht das PDF. Was die Zuordnung noch nicht kennt, erweitert sie unter der Zeilensperre der Zuordnung, wie die Begründung am Gate (CHY-234, E7); Namen, die der Start unter `identifiers_to_redact` nennt, werden auch im Dokument ersetzt. Eigene Tabelle `workflow_run_documents` (Lauf, Name, Medientyp, Seiten, Zeichen, Text, Befunde nach Art und Regel, Eingang), Schlüssel (Lauf, Name), RLS über den Lauf wie bei `pii_mappings`. Die Frist für Laufinhalte (CHY-17) leert den Text mit dem Lauf.
+7. **Befunde im Prüfprotokoll und in der Antwort:** Je Dokument ein Audit-Eintrag `workflow.run_document_received` mit Name, Seiten, Zeichen, ersetzten Bezeichnern je Kategorie und den Befunden nach Art und Regel — **auch bei null Befunden** („geprüft, nichts“ ist eine andere Antwort als „nie geprüft“, wie im Piloten). Ohne Ausschnitt, im Audit wie in der Antwort: Der wäre Dokumenttext. Befunde halten den Lauf nicht an; der Text läuft eingezäunt weiter (Punkt 9), wie im Piloten.
+8. **Mit dem letzten Dokument läuft der Lauf los**, im selben Aufruf, wie heute der Start. Die Zeilensperre sorgt dafür, dass genau ein Aufruf ihn startet, auch wenn die letzten Dokumente gleichzeitig ankommen. **Kommt ein Dokument nie,** kann der Starter den Lauf abbrechen (CHY-200). Tut das niemand, greifen die Fristen: Ein Lauf, der auf Dokumente wartet, arbeitet nicht — kein Knoten läuft —, und deshalb zählt er für das Löschen wie ein beendeter, ab seiner Anlage (CHY-17). Nach der Inhaltsfrist sind Eingabe und gelieferte Dokumente geleert, ein späterer Upload bekommt `410` — der Löschlauf sperrt die Zeilen, ein Upload im selben Moment wartet auf ihn. Nach der Spurfrist ist der Lauf gelöscht. Bis 08.11. erfasste das Löschen nur beendete Läufe — ein verwaister Lauf hätte seine Dokumente für immer behalten.
+9. **Ein Knotentyp `document`** gibt genau ein Dokument aus (`document_name`, Spalte nach ADR-040): den Text **im Zaun** (`ingress.fence`), Seiten und Befunde. **Je Dokumentname genau ein Knoten** (eindeutig je Workflow): Der Knoten *ist* das Dokument, mit genau einer Grenze; brauchen zwei Schritte dasselbe Dokument, führen zwei Kanten vom selben Knoten weg. Die Dokumente stehen nicht in der Laufeingabe und damit auch nicht unter `run`; sehen kann sie nur ein Knoten mit einer Kante vom `document`-Knoten (CHY-131). So setzt Weg 1 aus CHY-177 den § 37a um: Knoten `kontoauszug` → einzige Kante → `draft`. Der Zaun gehört zur Ausgabe des Knotens, nicht zum Prompt-Bau: Wo auch immer der Text hinläuft, er läuft eingezäunt.
+
+**Verworfen:**
+
+- **Dokumente base64 im JSON des Starts:** ein Drittel größer, und der Start vermischte Steuerdaten mit Dateien — Grenzen, Medientyp und Lesen der Datei lägen im Start.
+- **Hochladen vor dem Lauf** (`POST /v1/documents`, dann Start mit Verweis): Zu dem Zeitpunkt gibt es keine Zuordnung; der Text läge mit Klarnamen in der Datenbank oder bräuchte eine zweite Zuordnung je Dokument. Dazu ein zweiter Lebenszyklus (Frist, RLS, verwaiste Dokumente) und Wiederverwendung für andere Zwecke.
+- **Eigenes Upload-Token je Lauf:** eine zweite Art von Zugangsdaten — ausgeben, gehasht speichern, ablaufen lassen — für etwas, das Lauf und Zustand schon leisten. Lädt einmal ein anderes System für den Starter hoch (Scanner, DMS), ist das eine eigene Entscheidung.
+- **Dokumente in der Laufeingabe:** erreichen jeden Knoten — der § 37a wäre nur Konvention —, und jeder Abruf des Laufs zöge den Text mit.
+- **Ein eigener Aufruf „los“ nach dem letzten Dokument:** Er hätte nur Sinn, wenn Befunde den Lauf anhalten sollen. Das tun sie nicht (Punkt 7); ob sie es je sollen, ist eine eigene Entscheidung.
+- **Eine Grenze nur für die Installation:** Sie müsste fürs größte Dokument jedes Workflows reichen, und jeder Schritt nähme so viel an, wie irgendein anderer braucht.
+- **Grenzen am Knoten ohne Obergrenze:** Eine Definition könnte den Dienst überlasten; was der Speicher trägt, entscheidet der Betrieb, nicht der Workflow.
+- **PDF speichern:** Bytes, die niemand liest, mit allen Bezeichnern darin, unersetzt.
+- **Strikte Eingaben je Workflow (Weg 2 aus CHY-177):** bleibt CHY-238, M7.
+
+**Konsequenzen:**
+
+- (+) Der Kontoauszug erreicht nur den Entwurf; der Ablauf zeigt es an seinen Kanten
+- (+) Dokumenttext steht von der ersten gespeicherten Zeile an mit Platzhaltern in der Datenbank
+- (+) Prüfung und Zaun wie im Piloten, aber einmal je Dokument und für jeden Workflow
+- (+) Der Start bleibt klein; Dateien haben einen eigenen Weg mit eigenen Grenzen
+- (+) Jeder Schritt nimmt nur so viel an, wie sein Zweck braucht, und das steht in der freigegebenen Version
+- (−) Ein Zustand mehr in der Zustandsmaschine; Abbrechen, Listen und UI müssen `awaiting_documents` kennen
+- (−) Zwei und mehr Aufrufe statt einem
+- (−) Eine neue Tabelle, die Frist und RLS mitnehmen müssen; aufgelöst (CHY-234) wird ein Dokument über die Ausgabe seines Knotens
+- (−) Der Text steht zweimal: am Dokument und in der Ausgabe des `document`-Knotens; beide leert die Frist
+- (−) `pypdf` wird Abhängigkeit des Kerns, in SBOM und Bestandsaufnahme (CHY-240)
+- (−) Ein Kontoauszug als Scan ohne Textebene wird abgelehnt; die Texterkennung liegt beim Anwender
+- (−) Zwei Einstellungen mehr für den Betrieb, und eine Aktivierungsregel, die sie lesen muss
+- (−) Ein Lauf, der am Gate wartet, hat dieselbe Lücke und nicht diese Lösung: Dort steht eine Entscheidung aus, die den Inhalt braucht. `review_timeout` und `on_timeout` werden bisher nicht ausgewertet (CHY-254) — *geschlossen mit ADR-050 Punkt 9 (09.11.)*
+- **Migration 041:** Zustand `awaiting_documents` (CHECK ohne IF EXISTS ersetzt, wie 038); Spalten `document_name`, `document_max_bytes`, `document_max_pages` mit CHECKs (nur am `document`-Knoten, Name Pflicht, Grenzen größer 0) und eindeutigem Namen je Workflow; Tabelle `workflow_run_documents`
+
+**Betrifft:** CHY-172, CHY-174, CHY-177, CHY-178, CHY-131, CHY-135, CHY-200, CHY-234, CHY-17, CHY-238, CHY-240, CHY-254, ADR-040, ADR-046
+
+---
+
+### ADR-050: Das Gate — Prüftiefe nach Risiko, ein Votum je Bereich, Eskalation über eine Kante, Zeitablauf als `expired` (neu in v2.67)
+
+**Status:** Entschieden (2026-11-06, 08.11. und 09.11., Thomas; CHY-223, CHY-180, CHY-254) · **Ergänzt:** ADR-004, ADR-041, ADR-046
+
+> **Umsetzungsstand (09.11.2026):** gebaut, auf dev in vier MRs — !214 Zeitablauf und Eskalationskante (Migration 042), !216 Bereiche (043), !217 Mindeststufe (044), !218 `sample` (045); test und prod mit dem nächsten Release. Wirksam wird der Zeitablauf erst mit dem Timer des Betriebs (INFRA-167); `cc` lief bis CHY-257 in keinem Container.
+
+> **Ergänzt durch CHY-199 (10.11.2026, Thomas):** `/v1/complete` hat kein Gate. Für einen direkten Aufruf gilt deshalb dieselbe Mindeststufe wie für ein Gate, und nur `sample` lässt ihn zu. Die Risikoklasse direkter Aufrufe legt ein Bereich fest (`PUT /v1/scopes/{id}/direct-call-risk-class`, ab `architect`, mit Audit; Migration 047, nur anfügbar). Entlang der Kette gilt die strengste, ohne Einstufung `high`. Direkte Aufrufe antworten damit nur bei Datenklasse `public` oder `internal` und Einstufung `minimal`; sonst antwortet `/v1/complete` mit 409 und dem Grund, vor dem Routing und vor jedem Modell. Verworfen: nur die Datenklasse (ließe Hochrisiko-Zwecke in Bereichen mit öffentlichen Daten zu, ohne dass es jemand entschieden hat) und „immer gesperrt“ (nähme der serve-Oberfläche ihren Hauptbaustein).
+
+**Kontext:** ADR-004 macht das Gate zum Kern, der sich nicht abschalten lässt: Kein Workflow wird ohne
+`human_review` aktiviert, keine Ausgabe eines `llm_call` erreicht das Ende ohne eines. Wie streng das Gate
+ist, steht heute fest im Knoten: `review_role` ist `approver` oder `four_eyes`, durchgesetzt seit CHY-176
+(Migration 027, eine Stimme je Person und Ausführung). Drei Dinge fehlen:
+
+- **Die Tiefe folgt nicht dem Risiko.** Eine Recherche trägt dieselbe Last wie eine Kreditentscheidung, und
+  umgekehrt kann ein Workflow im Bereich `critical` mit einem einzelnen `approver` freigegeben werden.
+  `workflow_definitions.risk_classification` wird gespeichert und von nichts gelesen.
+- **Wer abstimmt, zählt nicht.** Die MaRisk verlangen für risikorelevante Kredite zwei zustimmende Voten aus
+  Markt und Marktfolge; die Marktfolge darf nicht überstimmt werden, abweichende Voten führen zur Ablehnung
+  oder zur Entscheidung einer höheren Kompetenzstufe (BTO 1.1 Tz. 2 und 6). `four_eyes` stellt sicher, dass
+  zwei verschiedene Personen zustimmen — beide können aus dem Markt kommen (Buch 10.2, Listing 10.2-1).
+- **Niemand entscheidet, und nichts geschieht.** `review_timeout` und `on_timeout` werden gespeichert und von
+  nichts ausgewertet (CHY-254). Ein Lauf am Gate wartet unbegrenzt und behält seinen Inhalt über jede Frist,
+  weil das Löschen nur beendete Läufe erfasst (DATA-PROTECTION §5).
+
+Die Modellwahl hat das Muster schon (ADR-041): Die Datenklasse des Geltungsbereichs setzt eine Grenze, ein
+tieferer Bereich darf verschärfen, nie lockern, und ein Bereich ohne Einstufung zählt als `critical`.
+
+**Entscheidung:**
+
+1. **Drei Stufen der Prüftiefe:** `sample` < `approver` < `four_eyes`.
+   - `sample`: Der Lauf wartet nicht; die Ausgabe geht weiter, ein einstellbarer Anteil der Durchläufe kommt
+     in eine Prüfwarteschlange und wird nachträglich beurteilt (Punkt 6)
+   - `approver`: eine Person mit Rolle `reviewer` gibt frei, bevor es weitergeht
+   - `four_eyes`: zwei verschiedene Personen (CHY-176), mit Bereichen je ein Votum je Bereich (Punkt 7)
+2. **Die Mindeststufe ist das Strengere aus zwei Klassen** (Thomas, 06.11. und 09.11.):
+
+   | Datenklasse des Geltungsbereichs (ADR-041) | Mindeststufe | Risikoklasse des Workflows | Mindeststufe |
+   |---|---|---|---|
+   | `public`, `internal` | `sample` | `minimal` | `sample` |
+   | `confidential` | `approver` | `limited` | `approver` |
+   | `critical` | `four_eyes` | `high` | `four_eyes` |
+
+   - Datenklasse ist die wirksame des Bereichs, also die strengste auf seiner Kette; ein Bereich ohne
+     Einstufung zählt als `critical` (ADR-041)
+   - **Die Risikoklasse wird ein typisiertes Feld** `workflow_definitions.risk_class` (`minimal`, `limited`,
+     `high`) und löst das freie `risk_classification` ab (abgekündigt, von nichts gelesen). **Ein Workflow ohne Einstufung zählt als `high`** —
+     eine vergessene Angabe darf nicht lockern, wie beim Bereich ohne Datenklasse
+3. **Lockern wird abgewiesen, verschärfen ist frei.**
+   - Bei der Aktivierung: Ein Gate unter der Mindeststufe verhindert sie (Regel `review_below_minimum`)
+   - Im Lauf: Es gilt das Strengere aus der Stufe des Gates und der Mindeststufe **zum Zeitpunkt des Laufs** —
+     wird ein Bereich nach der Freigabe strenger eingestuft, prüft das Gate strenger, ohne neue Freigabe. Die
+     Stufe wird beim Erreichen des Gates an der Ausführung festgehalten (`review_level`); ein wartender Lauf
+     behält sie, und die Entscheidung liest sie, statt neu zu rechnen
+   - Ein Gate mit Bereichen kann nicht strenger werden, ohne dass jemand die Bereiche ändert — eine Stimme
+     dazuzunehmen, die niemand gezeichnet hat, hieße entscheiden, wer entscheidet. Fällt es durch eine
+     Umstufung unter die Mindeststufe, wird es nicht entschieden, bis der Workflow neu freigegeben ist
+     (`GateBelowMinimum`)
+   - **Eskalationsziele nach Auslöser** (Thomas, 09.11.): Ein Gate, das nur über abweichende Voten erreicht
+     wird, darf unter der Mindeststufe liegen — vorher haben schon zwei Bereiche votiert, der Weg erfüllt sie.
+     Kann es über einen Zeitablauf erreicht werden, hat dort niemand hingeschaut, und es muss sie selbst
+     erfüllen; ebenso jedes Gate mit einer Kante, die keine Eskalation ist
+   - **Im Audit steht je Lauf, welche Stufe galt und warum:** ein Eintrag `workflow.run_gate_reached` mit
+     Stufe, Mindeststufe, ihrer Quelle (Datenklasse oder Risikoklasse) und den Bereichen
+4. **Nie abgestuft** (06.11.): die Freigabe nach einer Regression (ADR-004), Meldungen der Drift-Erkennung
+   (ADR-044) und die Datenklasse `critical`. Die ersten beiden sind keine Workflow-Gates und bleiben, wie sie
+   sind; `critical` folgt aus der Tabelle.
+5. **Die Stufe steht am Gate**, `review_role` wird um `sample` erweitert. Damit bleibt das Gate ein Knoten im
+   Graph, den der Validator verlangt — auch ein `sample`-Gate. Kein Pfad von einem `llm_call` endet ohne
+   Gate; was sich ändert, ist nur, ob der Lauf dort wartet.
+6. **`sample` — eine eigene Prüfwarteschlange in Cohereny**:
+   - Der Anteil steht am Gate (`review_sample_rate`, größer 0 und höchstens 1, an einem `sample`-Gate Pflicht,
+     sonst unzulässig — Spalte nach ADR-040). Ob ein Durchlauf gezogen wurde, steht im Audit
+   - **Gezogen wird über einen Hash des Durchlaufs, nicht per Zufall** (09.11.): Dieselbe Frage bekommt immer
+     dieselbe Antwort, und die Ziehung im Audit lässt sich nachprüfen
+   - Verlangt die Mindeststufe zur Laufzeit mehr, wartet ein `sample`-Gate wie ein `approver`-Gate
+   - Ein `sample`-Gate hat keine Bereiche und kein Zeitlimit: Es entscheidet nichts und wartet auf nichts
+   - Gezogene Durchläufe liegen in einer Tabelle mit Bezug auf die Ausführung; sehen darf sie, wer den Lauf
+     sieht (RLS wie bei den Schritten, CHY-92), beurteilen ab `reviewer`
+   - Das Urteil — bestätigt oder beanstandet, mit Begründung — wird mit den Platzhaltern des Laufs
+     gespeichert (CHY-234, E7) und auditiert (`workflow.sample_reviewed`). Eine Beanstandung holt nichts
+     zurück: Die Ausgabe ist draußen. Sie wird gezählt und ist ein Signal aus dem Betrieb (ADR-044, Weg 3)
+   - Die Inhaltsfrist gilt auch für die Warteschlange; was bis dahin niemand beurteilt hat, verfällt mit dem Lauf
+7. **Bereiche als Daten, nicht als Code** (CHY-180, Blaupause Listing 10.2-1, verallgemeinert):
+   - Eine **Kompetenzordnung** je Geltungsbereich: Bereiche (etwa Markt, Marktfolge, Kreditkommission) und wer
+     ihnen angehört. Sie gilt nach unten, wie Mitgliedschaften; ein Name meint die nächste Definition auf der
+     Kette. Pflege durch `admin`, auditiert
+   - **Die Zugehörigkeit ist entziehbar, mit Datum** (Thomas, 09.11.): Die Zeile bleibt, ein Votum unter ihr
+     bleibt belegbar, ein neues verlangt eine **aktuelle** Zugehörigkeit. Wer aus dem Markt in die Marktfolge
+     wechselt, verliert das Markt-Votum sofort — eine Sperre beim Identitätsanbieter deckt das nicht ab
+   - Ein Gate nennt seine Bereiche (`review_areas`). Dann gilt: **je Bereich ein Votum** (Eindeutigkeit je
+     Ausführung und Bereich), **eine Person ein Votum** (Primärschlüssel, wie bisher), **ein Votum nur mit
+     aktueller Zugehörigkeit** (Fremdschlüssel auf die Kompetenzordnung, Trigger für den Entzug — die
+     Datenbank weist ab, nicht nur der Dienst). Der Fremdschlüssel hält zudem jede Zugehörigkeit fest, unter
+     der votiert wurde, auch gegen die Eigentümerrolle
+   - Ergebnis: alle Bereiche stimmen zu → frei; alle lehnen ab → `rejected`; **die Voten weichen ab →
+     Eskalation** (Punkt 8). Solange nicht jeder Bereich votiert hat, wartet das Gate
+   - Ein Gate mit mindestens zwei Bereichen zählt als `four_eyes`; die Aktivierung prüft, dass jeder genannte
+     Bereich auf der Kette des Workflow-Bereichs existiert (`unknown_review_area`) und Mitglieder hat
+     (`review_area_without_members`). Eine Rolle, die den Bereichen widerspricht, weist sie ab
+     (`review_role_contradicts_areas`): `approver` bei zwei oder mehr Bereichen, `four_eyes` bei genau einem
+8. **Eskalation ist ein Ergebnis des Gates und folgt einer Kante** (Thomas, 09.11.):
+   - Das Gate endet mit `decision = escalated` und dem Grund (`votes_differ` oder `timeout`)
+   - **Kanten aus einem Gate:** eine Kante ohne Bedingung ist der Weg bei Freigabe; die Eskalation nimmt nur
+     Kanten mit der Bedingung `decision = escalated`. Sie führen zu einem weiteren `human_review` — der höheren
+     Kompetenzstufe, mit eigenem Bereich oder eigener Rolle
+   - Bei der Aktivierung: Ein Gate, das eskalieren kann (mit Bereichen oder mit `on_timeout = escalate`), braucht
+     eine Eskalationskante (`escalation_without_edge`); sie muss direkt zu einem `human_review` führen
+     (`escalation_not_to_gate`), das eine **höhere Stufe** ist: **ein Bereich, den das eskalierende Gate nicht
+     nennt**, auch mit einem Votum — die Kreditkommission (Thomas, 09.11., BTO 1.1 Tz. 6) —, sonst eine Stufe
+     nicht unter der des eskalierenden Gates (`escalation_to_weaker_gate`)
+   - Bei einer Freigabe nimmt der Lauf die übrigen Kanten des Gates, nie die Eskalationskante; hat das Gate
+     keine anderen, ist der Lauf beendet
+   - Im Audit: `workflow.run_escalated` mit Gate, Grund und Ziel, nie mit Inhalten
+9. **Zeitablauf und der Endzustand `expired`** (CHY-254, Thomas, 09.11.):
+   - `expired` heißt: **niemand hat entschieden.** Es ist keine Ablehnung (eine Person sagt nein) und kein
+     Abbruch (eine Person stoppt). Neuer Endzustand für Lauf und Knoten
+   - Ein **Befehl**, angestoßen vom Timer des Betriebs (wie `cc retention purge`, ADR-046 Punkt 5, kein Scheduler
+     im API-Prozess), prüft wartende Gates:
+     - `review_timeout` abgelaufen, `on_timeout = reject` → Lauf und Gate `expired`
+     - `review_timeout` abgelaufen, `on_timeout = escalate` → Eskalation wie in Punkt 8, Grund `timeout`
+     - **Inhaltsfrist:** Ist die Inhaltsfrist des Bereichs seit Erreichen des Gates abgelaufen, endet der
+       Lauf `expired` — mit oder ohne Zeitlimit, auch bei `on_timeout = escalate`: Eine Eskalation hielte
+       den Inhalt nur länger fest. Der Inhalt wird im selben Schritt geleert. Dem Löschen überlassen, bliebe
+       er eine ganze Frist länger, denn es zählt einen beendeten Lauf ab `completed_at`, und das ist jetzt.
+       Damit schließt sich die Lücke aus DATA-PROTECTION §5 (Nachtrag an ADR-046)
+   - Jeder Lauf wird unter seiner Sperre noch einmal geprüft: Eine Entscheidung, die vorher kam, gilt
+   - Findet eine Eskalation zur Laufzeit keine Kante mehr (Definition geändert, Schleife ausgeschöpft),
+     endet der Lauf `failed` mit Grund, statt an einem abgelaufenen Gate weiter zu warten
+   - `review_timeout` ohne `on_timeout` und `on_timeout` ohne `review_timeout` werden bei der Aktivierung
+     abgewiesen (`timeout_without_action`, `action_without_timeout`); ein `sample`-Gate wartet nicht und hat
+     keines
+   - Im Audit: `workflow.run_expired` ohne Person — kein Mensch hat hier gehandelt, und so steht es da
+   - Eine Freigabe auf Zeitablauf gibt es weiterhin nicht (ADR-004, Migration 018)
+
+**Verworfen:**
+
+- **Die Warteschlangen von Langfuse für `sample`** (vor dem Bau zu prüfen, 06.11.): Langfuse ist in Cohereny
+  optional, eine Pflichtfunktion darf nicht daran hängen. Langfuse kennt keine Geltungsbereiche — wer dort
+  prüft, sähe alle Läufe des Projekts (gegen CHY-92). Und das Urteil stünde nicht im Cohereny-Audit.
+- **Eskalation als eigener Endzustand** oder **nur ablehnen**: Ein Endzustand bricht den Ablauf ab und
+  verlagert die Entscheidung aus dem System, das sie nachweisen soll; nur ablehnen lässt die zweite Möglichkeit
+  aus BTO 1.1 Tz. 6 weg.
+- **`rejected` bei Zeitablauf:** Im Audit stünde eine Ablehnung, die niemand ausgesprochen hat — dieselbe
+  Verwechslung, die CHY-200 mit `cancelled` vermieden hat.
+- **Markt und Marktfolge fest im Code:** Die Kompetenzordnung gehört der Bank und ändert sich ohne Release.
+- **Mindeststufe nur aus der Datenklasse:** Eine Kreditentscheidung auf öffentlichen Daten ist trotzdem ein
+  Hochrisiko-Fall (Anhang III Nr. 5 Buchst. b KI-VO); das Risiko der Aufgabe und das der Daten sind zwei Fragen.
+- **Ein Workflow ohne Einstufung zählt als `minimal`:** Eine vergessene Angabe würde lockern.
+
+**Konsequenzen:**
+
+- (+) Die Prüftiefe folgt dem Risiko und lässt sich nicht unbemerkt lockern; je Lauf ist belegt, welche galt
+- (+) Die MaRisk-Anforderung an Voten ist abgebildet, und die Datenbank weist das Votum eines Nicht-Mitglieds ab
+- (+) Die höhere Kompetenzstufe ist im Graph sichtbar und geht mit durch die Freigabe
+- (+) Kein Lauf wartet mehr unbegrenzt, und keiner behält seinen Inhalt über die Frist
+- (−) Bestehende Workflows ohne Risikoklasse zählen als `high` und brauchen ein `four_eyes`-Gate oder eine
+  Einstufung. Der Schnellstart trägt `limited`; dev, test und prod hatten am 09.11. keine Workflows (gemessen).
+  Einstufen heißt, bis es Versionen gibt (CHY-127): neu anlegen, freigeben, den alten archivieren
+- (−) `sample` lässt Ausgaben ungeprüft hinaus; zulässig nur dort, wo beide Klassen es erlauben
+- (−) Zwei neue Endzustände in kurzer Folge (`awaiting_documents`, `expired`): UI, Listen und Löschen müssen sie kennen
+- (−) Der Befehl braucht einen Timer im Betrieb; ohne ihn wirkt kein Zeitlimit (wie beim Löschen, INFRA-167)
+- (−) Gates mit Bereichen setzen eine gepflegte Kompetenzordnung voraus; ohne Mitglieder ist das Gate nicht aktivierbar
+
+**Umsetzung in drei Schritten** (je ein MR, je Backup vor dem Merge; gebaut am 09.11.):
+
+1. **CHY-254 und die Eskalationskante:** Endzustand `expired`, Kanten aus Gates (frei/eskaliert),
+   Aktivierungsregeln `escalation_without_edge`, `escalation_not_to_gate`, `escalation_to_weaker_gate`,
+   `timeout_without_action`, `action_without_timeout`, Befehl `cc oversight expire`, Inhaltsfrist für
+   wartende Gates (!214)
+2. **CHY-180, Bereiche:** Kompetenzordnung, `review_areas`, Voten je Bereich mit Fremdschlüssel, Ergebnis
+   inklusive Eskalation (!216)
+3. **CHY-223, Stufen,** in zwei MRs (Thomas, 09.11.): **3a** `risk_class`, Mindeststufe,
+   `review_below_minimum`, Stufe zur Laufzeit mit Audit (!217); **3b** `sample` mit Warteschlange (!218)
+
+Danach CHY-178 (Banking-Ablauf) mit `risk_class = high`, Gates mit den Bereichen Markt und Marktfolge und einer
+Eskalation an eine höhere Kompetenzstufe.
+
+**Betrifft:** CHY-223, CHY-180, CHY-254, CHY-176, CHY-178, CHY-199, CHY-200, CHY-92, CHY-234, CHY-17,
+CHY-256, CHY-257, INFRA-167, ADR-004, ADR-040, ADR-041, ADR-044, ADR-046, ADR-047, ADR-049
 
 ---
 
@@ -4815,7 +5195,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | Kein Incident-Reporting-Prozess — CRA-24h-Frist (Hersteller) und DORA-4h-Frist (bei reguliertem Einsatz) würden verfehlt | Mittel                                               | Hoch                                           | Incident-Handling-Konzept und Meldeprozess; die Meldepflicht nach CRA gilt ab der Veröffentlichung | CHY-16 (M7b) |
 | SaMD-Einstufung ungeklärt — Einsatz des Arztbrief-Szenarios (§6.7) ohne MDR-Konformität            | Niedrig (solange das Szenario nicht eingesetzt wird)  | Kritisch — CE-Kennzeichnungspflicht           | Entscheidung vor einem Einsatz des Arztbrief-Szenarios                               | CHY-4 (nach 1.0) |
 | Personenbezug in Payloads (Prompts/Traces/Results) von Art.-17-Löschung nicht erfasst               | Hoch (sobald echte Personendaten verarbeitet werden) | Hoch                                           | PII-Redaction an der Grenze gebaut (ADR-018): Modell, Gateway und Trace sehen Platzhalter; Fristen für Lauf-Inhalte gebaut (ADR-046); Workflow-Läufe nur mit Platzhaltern gespeichert (CHY-234). Restrisiko: Namen, die niemand nennt, und Klarwerte in Pilotläufen | CHY-63 ✅; CHY-234 ✅; CHY-235, CHY-239 (M7) |
-| Art.-50(2)-Kennzeichnung KI-generierter Inhalte fehlt in der Bewertung                              | Mittel                                               | Mittel                                         | Kennzeichnung ergänzen; Hinweis nach Art. 50(1) in der Referenz-UI gebaut, TransparencyRecord nur für Pilotläufe (Workflow-Läufe und `/v1/complete` → M7b, CHY-201) | CHY-118 (M7b) |
+| Art.-50(2)-Kennzeichnung KI-generierter Inhalte fehlt in der Bewertung                              | Mittel                                               | Mittel                                         | ✅ Bewertet 10.11.2026: Kennzeichnung im Modell, Cohereny reicht durch, Pflicht beim Betreiber, der ein Modell ohne Wasserzeichen anbindet (`compliance/eu-ai-act.md`); Hinweis nach Art. 50(1) in der Referenz-UI gebaut, TransparencyRecord nur für Pilotläufe (Workflow-Läufe und `/v1/complete` → M7b, CHY-201) | CHY-118 (M5) |
 
 ---
 
@@ -4838,7 +5218,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | **DSGVO**                                 | Datenschutz-Grundverordnung — EU-Verordnung zum Schutz personenbezogener Daten.                                                                                                                                                                                                                                                           |
 | **Einzelbetrieb**                         | Installation, in der nur eine Person freigeben darf (Rolle `reviewer` oder höher, kein technisches Konto). Sie gibt ihre eigenen Datenfluss-Bausteine frei; das ist in Audit, Log und Antwort als Selbstfreigabe gekennzeichnet. Kein Vier-Augen-Prinzip; endet mit der zweiten Person (ADR-045). |
 | **Headless**                              | Architekturmuster: Keine Geschäftslogik exklusiv in einem UI; alle Funktionen über API verfügbar.                                                                                                                                                                                                                                       |
-| **Human Oversight**                       | Verpflichtende menschliche Freigabe, nicht abschaltbar (ADR-004). Gebaut: Jeder Workflow braucht einen `human_review`-Knoten, kein Pfad von einem `llm_call` endet ohne ihn; Gates mit `four_eyes` verlangen zwei verschiedene Personen. Geplant: Freigabepflicht nach einer im Benchmark erkannten Regression (CHY-64).                                                                                                                                                                                                               |
+| **Human Oversight**                       | Verpflichtende menschliche Freigabe, nicht abschaltbar (ADR-004). Gebaut: Jeder Workflow braucht einen `human_review`-Knoten, kein Pfad von einem `llm_call` endet ohne ihn; Gates mit `four_eyes` verlangen zwei verschiedene Personen; die Prüftiefe folgt Datenklasse und Risikoklasse, Bereiche geben je ein Votum ab (ADR-050). Geplant: Freigabepflicht nach einer im Benchmark erkannten Regression (CHY-64).                                                                                                                   |
 | **Kontext-Block**                         | Kleinste versionierbare Einheit im Repository. Typen: `system_prompt`, `user_context`, `tool_schema`, `example_io` (Prompt-Material, werden komponiert) sowie `calibration_anchor` und `routing_rule` (kein Prompt-Material, ADR-037, ADR-043).                                                                                                                                                                                                  |
 | **Laufzeitrolle**                         | Datenbankrolle, als die sich API, CLI und Löschlauf verbinden (`<db>_runtime`): Sie besitzt keine Tabelle, führt kein DDL aus und darf keinen Trigger abschalten. Die Tabellen besitzt die Rolle der Migrationen (`<db>_migrator`), die Eigentümerin (ADR-009, CHY-85). |
 | **LiteLLM**                               | Open-Source Gateway der verschiedene LLM-Provider (OpenAI-API-kompatibel, Anthropic, Ollama etc.) hinter einer einheitlichen API abstrahiert. Stack-Baustein von Cohereny — kein Konkurrent (ADR-012).                                                                                                                              |
@@ -4866,7 +5246,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 
 > **Regulatorik-Update v2.0 (Faktencheck 07/2026) — gilt für alle Untertabellen dieses Anhangs:**
 >
-> 1. **Digital Omnibus** (VO (EU) 2026/1744, ABl. L vom 24.07.2026, in Kraft seit 27.07.2026): Anhang III Hochrisiko → **02.12.2027**; Anhang I → **02.08.2028**; **Art. 50 unverändert 02.08.2026**; Watermarking-Übergang Bestandssysteme 02.12.2026.
+> 1. **Digital Omnibus** (VO (EU) 2026/1744, ABl. L vom 24.07.2026, in Kraft seit 27.07.2026): Anhang III Hochrisiko → **02.12.2027**; Anhang I → **02.08.2028**; **Art. 50 unverändert 02.08.2026**; Watermarking-Übergang bis 02.12.2026 nur für Systeme, die vor dem 02.08.2026 in Verkehr waren (Art. 111(4)) — nicht für Cohereny (CHY-118).
 > 2. **AI-Act-Einordnung:** Quelle für „Cohereny wahrscheinlich kein KI-System" sind die Kommissions-Leitlinien **C(2025) 924** (06.02.2025, unverbindlich). **Art.-25-Risiko** ergänzt: Das Gesamtsystem Cohereny+LLM ist ein KI-System — wer es unter eigenem Namen bereitstellt, kann in die Anbieterrolle rutschen.
 > 3. **Finanzaufsicht:** BAIT für DORA-Institute seit 17.01.2025 aufgehoben (Vollaufhebung 31.12.2026); **9. MaRisk-Novelle** (RS 06/2026) seit 30.06.2026 in Kraft (AT 7.2 ohne IT-Anforderungen, Modelle in AT 4.3.4); **BaFin-Orientierungshilfe zu IKT-Risiken beim Einsatz von KI (18.12.2025, nicht verpflichtend)** nennt Model Drift + Lebenszyklus inkl. Stilllegung → ADR-020.
 > 4. **CRA:** Art.-14-Meldepflichten seit **11.09.2026** (24h/72h/14d, ENISA-Plattform) — gelten für Cohereny als Hersteller (§13.3).
@@ -4904,10 +5284,10 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | Art. 5 Verbotene Praktiken                             | ✅     | Kein Nudging, kein Social Scoring, keine Biometrie                                              | —                                                                                     |
 | Art. 9 Risikomanagementsystem                          | ⚠️   | Benchmark als Basis: Anker und Messtabellen gebaut, Läufe → M6 (CHY-68)                        | Kein formales RM-Dokument (nur bei High-Risk-Provider-Status)                          |
 | Art. 13 Transparenz / Instructions for Use             | ⚠️   | Langfuse-Tracing mit den verwendeten Bausteinen samt Version; Audit-Log                      | Kein formales "Instructions for Use" nach Art. 13(3) — nach 1.0 (CHY-203); TransparencyRecord für Workflow-Läufe und `/v1/complete` → M7b (CHY-201) |
-| Art. 14 Human Oversight                                | ⚠️     | Pflicht-Gate `human_review` in jedem Workflow (Validator, Runner), Vier-Augen-Gates; Abbruch von Workflow-Läufen (CHY-200) und Pilotläufen (`cancel_event`, am Gate CHY-153) | `/v1/complete` liefert Modellantworten ohne Gate → M6 (CHY-199); Freigabe nach einer Benchmark-Regression → M6 (CHY-64) |
+| Art. 14 Human Oversight                                | ⚠️     | Pflicht-Gate `human_review` in jedem Workflow (Validator, Runner), Vier-Augen-Gates; Abbruch von Workflow-Läufen (CHY-200) und Pilotläufen (`cancel_event`, am Gate CHY-153); `/v1/complete` nur, wo die Mindeststufe `sample` ist (CHY-199) | Freigabe nach einer Benchmark-Regression → M6 (CHY-64) |
 | Art. 14(4)(a) Anomalien erkennen                       | 📋     | Drift-Erkennung → `review_needed` (Anker und Messtabellen gebaut; Läufe → M6, Messfühler → M7; ADR-044) | —                                                                                     |
 | Art. 26 Deployer-Pflichten                             | ⚠️   | Human Oversight Gate als technische Grundlage ✅                                                | Betreiber muss qualifizierte Oversight-Personen benennen (Art. 26(2))                  |
-| Art. 50 Transparenz (Deployer,**ab 02.08.2026**) | ⚠️   | TransparencyRecord für Pilotläufe; KI-Hinweis in der Referenz-UI (Veröffentlichung → M8, CHYUI-11) | TransparencyRecord für Workflow-Läufe und `/v1/complete` → M7b (CHY-201); Kennzeichnung nach Art. 50(2) → M7b (CHY-118) |
+| Art. 50 Transparenz (Deployer,**ab 02.08.2026**) | ⚠️   | TransparencyRecord für Pilotläufe; KI-Hinweis in der Referenz-UI (Veröffentlichung → M8, CHYUI-11) | TransparencyRecord für Workflow-Läufe und `/v1/complete` → M7b (CHY-201); Art. 50(2): Kennzeichnung im Modell, Cohereny reicht durch; bindet der Betreiber ein Modell ohne Wasserzeichen an, trägt er die Pflicht (CHY-118, `compliance/eu-ai-act.md`) |
 | Art. 72 Post-Market Monitoring                         | ⚠️     | Langfuse-Tracing; Drift-Erkennung → M6/M7 (ADR-044)                                            | Kein schriftlicher Monitoring-Plan (Art. 72(3))                                        |
 | Art. 73 Incident Reporting                             | ❌     | —                                                                                              | Kein Incident-Meldeprozess (nur bei Provider-Status + High-Risk)                       |
 | Art. 71 EU-Datenbank-Registrierung                     | ❌     | —                                                                                              | Nur bei Hochrisiko + Provider-Status                                                   |
@@ -4916,7 +5296,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 
 ### 13.3 EU Cyber Resilience Act (CRA, Regulation 2024/2847)
 
-**Geltungsbereich:** Anwendbar. Mit der Veröffentlichung unter AGPLv3 und dem Angebot einer kommerziellen Lizenz behandelt sich Cohereny als Hersteller. Die Herstellerpflichten gelten ab der Veröffentlichung. Vorhanden sind Meldeadresse und Richtlinie zur koordinierten Offenlegung (`SECURITY.md`); ein SBOM entsteht seit 02.11.2026 in jeder Pipeline (CHY-22); in Arbeit (→ M7b) sind ein beschriebener Meldeprozess nach Art. 14 (CHY-16) und der Unterstützungszeitraum (CHY-149). Art.-14-Meldepflichten ab **11.09.2026** (24h Frühwarnung / 72h Meldung / 14 Tage Bericht, ENISA-Plattform; gelten auch für Bestandsprodukte). Volle Anwendung 11.12.2027.
+**Geltungsbereich:** Anwendbar. Für die kommerziell lizenzierte Fassung ist Cohereny Hersteller, schon mit dem Angebot auf Anfrage (Leitlinien der Kommission C(2026) 5252, Rn. 13, 52–53, 57; entschieden 10.11.2026, CHY-268). Die AGPL-Fassung einer natürlichen Person fällt nicht unter den CRA (Rn. 53). Die Meldepflichten nach Art. 14 gelten seit 11.09.2026. Vorhanden sind Meldeadresse und Richtlinie zur koordinierten Offenlegung (`SECURITY.md`); ein SBOM entsteht seit 02.11.2026 in jeder Pipeline (CHY-22); in Arbeit (→ M7b) sind ein beschriebener Meldeprozess nach Art. 14 (CHY-16) und der Unterstützungszeitraum (CHY-149). Art.-14-Meldepflichten ab **11.09.2026** (24h Frühwarnung / 72h Meldung / 14 Tage Bericht, ENISA-Plattform; gelten auch für Bestandsprodukte). Volle Anwendung 11.12.2027.
 
 | Anforderung                                   | Status | Cohereny-Feature                             | Lücke                                                           |
 | --------------------------------------------- | ------ | -------------------------------------- | ---------------------------------------------------------------- |
@@ -4926,7 +5306,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | Anhang I Teil I Nr. 2 Buchst. a: Keine bekannten ausnutzbaren Schwachstellen | ⚠️ | Basis-Image `python:3.14-slim`; pip-audit auf die Abhängigkeiten in CI | Prüfungen blockieren nicht; Container Scanning prüft ein anderes Basis-Image als das Dockerfile (CHY-198); kein Digest-Pinning → M7b (CHY-14) |
 | Anhang I Teil II Nr. 1: SBOM | ✅ | CycloneDX-SBOM in jeder Pipeline, mit Lieferant je Komponente und gegen das Schema geprüft (`sbom`-Job, `scripts/check_sbom.py`, CHY-22) | Beschreibt die Auflösung zur Pipeline-Zeit; ohne Lock-Datei kann ein späteres Image neuere Releases enthalten → M8 (CHY-211) |
 | Anhang I Teil II Nr. 5: Koordinierte Offenlegung | ✅  | `SECURITY.md`, Meldeweg security@cohereny.com | —                                                     |
-| Art. 14 Meldepflichten (ab 11.09.2026)        | ❌     | Meldeadresse (`SECURITY.md`)          | Kein beschriebener Meldeprozess für ausgenutzte Schwachstellen und schwere Vorfälle (24h/72h/14d) → M7b (CHY-16) |
+| Art. 14 Meldepflichten (ab 11.09.2026)        | ❌     | Meldeadresse (`SECURITY.md`)          | Kein beschriebener Meldeprozess für ausgenutzte Schwachstellen und schwere Vorfälle (24h/72h/14d); Vorlagen samt Nutzerinformation nach Art. 14(8) vor dem 18.11. (CHY-268), Prozess → M7b (CHY-16) |
 
 ---
 
@@ -4948,7 +5328,7 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 
 | Anforderung                        | Status | Cohereny-Feature                                       | Lücke                                           |
 | ---------------------------------- | ------ | ------------------------------------------------ | ------------------------------------------------ |
-| Modell-Governance / Human Override | ⚠️     | Pflicht-Gate `human_review` im Workflow-Runner; Versionierung und Freigabe der Bausteine; Actor-Pattern | Regelmäßige Analyse der Modellergebnisse über Benchmark-Läufe → M6 (CHY-68); `/v1/complete` ohne Gate → M6 (CHY-199) |
+| Modell-Governance / Human Override | ⚠️     | Pflicht-Gate `human_review` im Workflow-Runner; Versionierung und Freigabe der Bausteine; Actor-Pattern; `/v1/complete` nur, wo die Mindeststufe `sample` ist (CHY-199) | Regelmäßige Analyse der Modellergebnisse über Benchmark-Läufe → M6 (CHY-68) |
 | Regelmäßige Validierung          | 📋     | Benchmark nach Zeitplan und bei Änderungen → `review_needed` (→ M6, CHY-68, CHY-181; ADR-044) | Betreiber muss Ergebnisse formal dokumentieren   |
 | Pre-Deployment-Bewertung           | ⚠️   | Benchmark als Grundlage (Anker gebaut, Läufe → M6) | Kein formales Pre-Deployment-Assessment-Dokument; Betreiber-Checkliste nach 1.0 (CHY-9) |
 | Erklärbarkeit                     | ⚠️   | Je Workflow-Lauf `node_executions` mit Modell und Zeitstempeln; Langfuse-Traces mit Bausteinen samt Version | Keine formale Explainability-Dokumentation       |
@@ -4964,12 +5344,12 @@ Sicherheitsrelevante offene Punkte stehen auch in SECURITY.md unter „Known lim
 | Baustein / Anforderung                                    | Status | Cohereny-Feature                                                     | Lücke                                                                           |
 | --------------------------------------------------------- | ------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | ORP.4 IAM                                                 | ⚠️     | OIDC; Rollen aus dem Gruppen-Claim; Actor-Pattern; vier Augen bei Datenfluss-Bausteinen, technische Konten markiert (ADR-045); Laufinhalte nur für Berechtigte lesbar (ADR-047) | Blöcke liest jeder Angemeldete → M6 (CHY-237); Schreiben je Bereich → CHY-243 |
-| OPS.1.1.5 Protokollierung                                 | ⚠️     | Audit-Log; Langfuse-Traces (optional); Auflösen der Werte eines Laufs protokolliert (CHY-234) | Kein formales Log-Konzept → M5 (CHY-6); Aufbewahrung der Lauf-Daten konfigurierbar (ADR-046), des Audit-Logs → M7 (CHY-242) |
+| OPS.1.1.5 Protokollierung                                 | ⚠️     | Protokollierungskonzept (CHY-6); Audit-Log; Laufspur mit Frist (ADR-046); Anwendungslog mit Request-ID, ohne Inhalte (CHY-97); Langfuse-Traces (optional); Auflösen der Werte eines Laufs protokolliert (CHY-234) | Frist des Audit-Logs → M7 (CHY-242); Laufspur bei Hochrisiko-Workflows nicht unter sechs Monate (CHY-266); Request-ID an Audit und Traces (CHY-267) |
 | APP.3.1 Webanwendungen                                    | ⚠️   | FastAPI + OIDC + Pydantic Input-Validierung ✅                 | Kein WAF; dynamische API-Tests mit Schemathesis in CI, kein Sicherheitsscanner; WAF/DAST → M7b (CHY-7) |
 | SYS.1.6 Containerisierung                                 | ⚠️   | Dockerfile auf `python:3.14-slim`; Schnellstart mit Docker Compose (`deploy/quickstart/`, CHY-189) | Kein Image-Signing, kein Digest-Pinning → M7b (CHY-14)                          |
 | CON.1 Kryptokonzept                                       | ⚠️     | Kryptokonzept für Betreiber (`CRYPTOGRAPHY.md`, CHY-15): Zuständigkeit, Verfahren, Schlüsselverzeichnis; TLS am Reverse Proxy des Betreibers | at-rest-Verschlüsselung beim Betreiber; nur verschlüsselte Verbindungen → M7b (CHY-195); JWKS bei Schlüsselwechsel, Geheimnisse maskieren → M7b (CHY-232, CHY-233) |
 | OPS.1.1.3 Patch Management                                | ⚠️   | Sicherheitskorrekturen in der laufenden Entwicklungslinie (`SECURITY.md`) | CVE-Prüfung (pip-audit, Container Scanning) nur meldend (CHY-198); Patch-SLA → M7b (CHY-12) |
-| BSI Kriterienkatalog KI (Juni 2025): Menschliche Aufsicht | ⚠️     | Pflicht-Gate `human_review` im Workflow-Runner; Abbruch von Workflow-Läufen (CHY-200) | `/v1/complete` ohne Gate → M6 (CHY-199) |
+| BSI Kriterienkatalog KI (Juni 2025): Menschliche Aufsicht | ✅     | Pflicht-Gate `human_review` im Workflow-Runner; Abbruch von Workflow-Läufen (CHY-200); `/v1/complete` nur, wo die Mindeststufe `sample` ist (CHY-199) | — |
 | BSI Kriterienkatalog KI: Prompt Injection                 | ⚠️   | Klare Trennung Systemkontext/User-Input ✅                     | Zaun und Musterprüfung (ADR-039) nur im Banking-Piloten verdrahtet; `/v1/complete` und Workflow-Runner prüfen zugelieferten Text nicht → M7b (CHY-5) |
 | EVB-IT System (on-prem Integration)                       | ✅     | Self-hosted Stack passt zu EVB-IT System Vertragstyp           | —                                                                               |
 | EVB-IT 2026: Open Source als Standard (veröffentlicht 03/2026) | ✅ | Cohereny ist Open Source (AGPLv3)                         | SBOM, das die Muster vorsehen: CycloneDX in jeder Pipeline (CHY-22)                                     |

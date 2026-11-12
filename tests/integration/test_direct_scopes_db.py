@@ -24,7 +24,9 @@ from uuid import UUID, uuid4
 import asyncpg
 import pytest
 
+from api.v1._activation import HOOKS
 from contexts.repository import service as repository
+from contexts.repository import store
 from contexts.repository.errors import PrivacyRatchetViolation
 from contexts.repository.schema import BlockCreate, BlockPatch, BlockPromote
 from kernel.audit import (
@@ -34,6 +36,7 @@ from kernel.audit import (
     ACTION_BLOCK_SUBMITTED,
     ACTION_BLOCK_SUPERSEDED,
 )
+from kernel.errors import AccessDenied
 from kernel.identity import resolve_actor
 from kernel.schema import scope_label
 from tests.integration._callers import caller
@@ -248,3 +251,93 @@ class TestPromote:
         with pytest.raises(PrivacyRatchetViolation):
             await repository.transition(pool, redis, reviewer, copy.block_id, "approve",
                                         expected_version=1)
+
+
+class TestDecidingInADirectScope:
+    """CHY-170 (Thomas, 06.11.2026): whoever may activate in a direct scope may
+    also take a block back there and approve or reject one that waits. Strict
+    scopes keep their roles; so does approving a data-flow block (ADR-045)."""
+
+    async def _waiting(self, pool, redis, scope_id: UUID, **kw) -> UUID:
+        """A submission in a direct scope, as blocks written before ADR-042 were
+        left: inserted as a draft past the direct path, then submitted."""
+        author = caller("contributor")
+        row = await store.insert_block(pool, _block(scope_id, **kw),
+                                       (await resolve_actor(pool, author)).id)
+        await repository.transition(pool, redis, author, row["block_id"], "submit",
+                                    expected_version=1)
+        return row["block_id"]
+
+    async def _status(self, pool, block_id: UUID) -> str:
+        return await pool.fetchval(
+            "SELECT status FROM context_blocks WHERE block_id = $1 ORDER BY version DESC LIMIT 1",
+            block_id)
+
+    async def test_a_contributor_approves_a_waiting_block(self, pool, redis, scope):
+        personal = await _child(pool, scope, "personal")
+        block_id = await self._waiting(pool, redis, personal)
+
+        await repository.approve(pool, redis, caller("contributor"), block_id,
+                                 expected_version=1, hooks=HOOKS)
+
+        assert await self._status(pool, block_id) == "active"
+
+    async def test_and_rejects_one(self, pool, redis, scope):
+        project = await _child(pool, scope, "project")
+        block_id = await self._waiting(pool, redis, project)
+
+        await repository.transition(pool, redis, caller("contributor"), block_id, "reject",
+                                    expected_version=1, reason="Contradicts the returns policy.")
+
+        assert await self._status(pool, block_id) == "rejected"
+
+    async def test_a_contributor_takes_a_block_back(self, pool, redis, scope):
+        project = await _child(pool, scope, "project")
+        out = await repository.create_block(pool, redis, caller("contributor"), _block(project))
+
+        await repository.retire_block(pool, redis, caller("contributor"), out.block_id)
+
+        assert await self._status(pool, out.block_id) == "deprecated"
+
+    async def test_in_a_team_scope_the_roles_stay(self, pool, redis, scope):
+        """Counter-probe: the lowering belongs to the direct scope."""
+        team = await _child(pool, scope, "team")
+        author = caller("contributor")
+        out = await repository.create_block(pool, redis, author, _block(team))
+        await repository.transition(pool, redis, author, out.block_id, "submit",
+                                    expected_version=1)
+
+        with pytest.raises(AccessDenied):
+            await repository.approve(pool, redis, caller("contributor"), out.block_id,
+                                     expected_version=1, hooks=HOOKS)
+        await repository.approve(pool, redis, caller("reviewer"), out.block_id,
+                                 expected_version=1, hooks=HOOKS)
+        with pytest.raises(AccessDenied):
+            await repository.retire_block(pool, redis, caller("contributor"), out.block_id)
+        assert await self._status(pool, out.block_id) == "active"
+
+    async def test_a_data_flow_block_still_waits_for_a_reviewer(self, pool, redis, scope):
+        """A contributor could not activate it here either — it went to review."""
+        personal = await _child(pool, scope, "personal")
+        out = await repository.create_block(pool, redis, caller("contributor"), _block(
+            personal, governance_key=_KEY, privacy_impact="permissive"))
+        assert out.status == "pending_review"
+
+        with pytest.raises(AccessDenied):
+            await repository.approve(pool, redis, caller("contributor"), out.block_id,
+                                     expected_version=1, hooks=HOOKS)
+        await repository.approve(pool, redis, caller("reviewer"), out.block_id,
+                                 expected_version=1, hooks=HOOKS)
+        assert await self._status(pool, out.block_id) == "active"
+
+    async def test_a_restrictive_rule_too(self, pool, redis, scope):
+        """Retiring moves no data (Thomas, 09.11.2026): the claim is read only by
+        the ratchet, and whatever loosens next is a data-flow block that waits
+        for a second person of its own (ADR-045 point 1)."""
+        project = await _child(pool, scope, "project")
+        out = await repository.create_block(pool, redis, caller("contributor"), _block(
+            project, governance_key=_KEY, privacy_impact="restrictive"))
+
+        await repository.retire_block(pool, redis, caller("contributor"), out.block_id)
+
+        assert await self._status(pool, out.block_id) == "deprecated"

@@ -44,21 +44,26 @@ mapping and gets the answer back with placeholders and the mapping extended; the
 run seals it (CHY-234).
 
 Dependencies:
-  - httpx · core.tracing · kernel.redaction
+  - httpx · core.tracing · core.cooldown · kernel.redaction
 """
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from http import HTTPStatus
 from uuid import UUID
 
 import httpx
 
+from core.cooldown import ModelCooldown
 from core.errors import CompletionError, ModelRefused, ModelUnreachable
 from core.tracing import completion_trace
 from kernel.redaction import SHIPPED_RULES, Rule, redact, unresolved_in
+
+_log = logging.getLogger(__name__)
 
 #: Long enough for a slow local model on a Raspberry Pi, which is the actual
 #: constraint here — the Pi answers a 12 000-character prompt in minutes, not
@@ -91,6 +96,10 @@ class CompletionRequest:
     #: one-word prompt could take five minutes. The API always sets it from
     #: the routing rule; None remains for a direct call that has no rule.
     max_tokens: int | None = None
+    #: Ask the gateway for a JSON object (`response_format`). Set by an
+    #: `llm_call` that carries an output schema (CHY-175); it raises the
+    #: odds of a parsable answer and checks nothing — the runner does that.
+    json_object: bool = False
     #: Values the caller knows identify someone, by category (CHY-63):
     #: `{"PERSON": ["Erika Mustermann"]}`. Checked by the caller with
     #: `kernel.redaction.identifiers_from`; replaced before the call, put back
@@ -128,6 +137,11 @@ class CompletionResult:
     #: The run's mapping after this call, old and new: what the runner seals
     #: back into `pii_mappings` (CHY-234). None outside a run.
     run_mapping: Mapping[str, str] | None = None
+    #: The prompt as the model received it and its answer as it was checked —
+    #: both with placeholders, never the values. What a direct call drawn for
+    #: review keeps (CHY-269); `content` is what the caller gets.
+    sent_prompt: str = ""
+    redacted_answer: str = ""
 
 
 def build_messages(request: CompletionRequest) -> list[dict[str, str]]:
@@ -159,6 +173,10 @@ def build_body(request: CompletionRequest) -> dict:
     }
     if request.max_tokens is not None:
         body["max_tokens"] = request.max_tokens
+    if request.json_object:
+        # OpenAI's spelling, which LiteLLM translates per provider: Ollama's
+        # `format: json`, a tool call for Anthropic (CHY-175).
+        body["response_format"] = {"type": "json_object"}
     return body
 
 
@@ -219,15 +237,29 @@ async def complete(
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            error = ModelRefused(exc.response.status_code, exc.response.text)
+            error = ModelRefused(
+                exc.response.status_code, exc.response.text,
+                retry_after=exc.response.headers.get("retry-after"),
+            )
             # Recorded before raising: a failed completion is the one worth
             # finding later, and an unrecorded failure looks like a request that
-            # never happened.
-            trace.record_error(str(error))
+            # never happened. The trace and the log get the gateway's own
+            # account; the error carries only what may leave (CHY-97).
+            trace.record_error(error.detail)
+            _log.warning("model call refused", extra={
+                "model": request.model, "task_type": request.task_type,
+                "status_code": error.status_code, "detail": error.detail,
+            })
             raise error from exc
         except httpx.RequestError as exc:
             error = ModelUnreachable(str(exc))
-            trace.record_error(str(error))
+            trace.record_error(error.detail)
+            # The type as a field of its own: a timeout's text is empty, and
+            # "unreachable: " alone does not say what happened (CHY-264).
+            _log.warning("model call unreachable", extra={
+                "model": request.model, "task_type": request.task_type,
+                "error_type": type(exc).__name__, "detail": error.detail,
+            })
             raise error from exc
 
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -266,6 +298,8 @@ async def complete(
             redactions=dict(Counter(redaction.counts) + Counter(answer.counts)),
             unresolved_placeholders=unresolved_in(content, answer.replacements),
             run_mapping=answer.replacements,
+            sent_prompt=outgoing.prompt,
+            redacted_answer=content,
         )
 
     restored = redaction.restore(content)
@@ -278,6 +312,8 @@ async def complete(
         trace_id=payload.get("id"),
         redactions=redaction.counts,
         unresolved_placeholders=restored.unresolved,
+        sent_prompt=outgoing.prompt,
+        redacted_answer=answer.texts["content"],
     )
 
 
@@ -294,7 +330,8 @@ async def complete(
 #:       this model failed. That is 13.08.2026: LiteLLM was up, the local inference
 #:       host was off, every task_type got 502. Exactly what a chain is for.
 #:   ModelRefused 429 -- rate limited. About this model's availability, not
-#:       about the request.
+#:       about the request. Since CHY-159 also a reason to skip the model for
+#:       a while (core/cooldown.py).
 #:   ModelRefused other 4xx -- the request is wrong: unknown model, bad key,
 #:       context window exceeded. No candidate fixes that, and moving on would
 #:       hide a typo in the routing table behind a working second entry.
@@ -312,7 +349,7 @@ class Attempt:
     """
 
     model: str
-    outcome: str  # "answered" | "refused" | "unreachable"
+    outcome: str  # "answered" | "refused" | "unreachable" | "skipped"
     detail: str = ""
 
 
@@ -322,6 +359,7 @@ async def complete_with_fallback(
     *,
     base_url: str,
     api_key: str = "",
+    cooldown: ModelCooldown | None = None,
 ) -> CompletionResult:
     """Ask each candidate in turn until one answers.
 
@@ -336,11 +374,20 @@ async def complete_with_fallback(
 
     Raises the LAST error when no candidate answered. The first would name the
     model the author chose, which reads like the chain was never tried.
+
+    With a `cooldown` (CHY-159), a model that keeps answering 429 is skipped
+    and recorded as `skipped`: a record that left out the preferred model
+    would hide that the chain ran degraded. The last candidate is always
+    asked, so a chain is never refused without a model having been asked.
     """
     attempts: list[Attempt] = []
     last: CompletionError | None = None
 
-    for model in candidates:
+    for position, model in enumerate(candidates, start=1):
+        state = await cooldown.state(model) if cooldown else None
+        if cooldown and cooldown.cooling(state) and position < len(candidates):
+            attempts.append(Attempt(model, "skipped", f"cooling down until {state.until_text()}"))
+            continue
         try:
             result = await complete(
                 replace(request, model=model), base_url=base_url, api_key=api_key
@@ -348,6 +395,8 @@ async def complete_with_fallback(
         except ModelRefused as exc:
             attempts.append(Attempt(model, "refused", str(exc)))
             last = exc
+            if exc.status_code == HTTPStatus.TOO_MANY_REQUESTS and cooldown:
+                await cooldown.refused(model, state, exc.retry_after)
             if exc.status_code not in RETRY_ON_STATUS:
                 break
         except ModelUnreachable as exc:
@@ -355,6 +404,8 @@ async def complete_with_fallback(
             last = exc
             break
         else:
+            if cooldown and state is not None:
+                await cooldown.answered(model)
             attempts.append(Attempt(model, "answered"))
             return replace(result, attempts=tuple(attempts))
 

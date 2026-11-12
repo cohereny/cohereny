@@ -286,6 +286,35 @@ def test_reading_a_config_prefers_the_cache():
     )
 
 
+@pytest.mark.parametrize(
+    "broken",
+    [{"get": ConnectionError("redis gone")}, {"value": "{not json"}],
+    ids=["redis-silent", "entry-unreadable"],
+)
+def test_a_cache_that_fails_costs_a_read_and_leaves_a_line(broken, caplog):
+    """Before CHY-97 both were passed over without a word: a Redis that had
+    stopped answering showed only as everything getting slower."""
+    import logging
+
+    redis = make_redis()
+    if "get" in broken:
+        redis.get.side_effect = broken["get"]
+    else:
+        redis.get.return_value = broken["value"]
+    pool = make_pool(workflow_config=workflow_config_row())
+    with (
+        client_for(pool, redis=redis) as client,
+        caplog.at_level(logging.WARNING, logger="contexts.pilots.service"),
+    ):
+        response = client.get("/v1/pilots/configs/study")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["version"] == 1
+    assert [r.message for r in caplog.records if r.name == "contexts.pilots.service"] == [
+        "pilot config cache not read"
+    ]
+
+
 def test_an_unknown_pilot_is_refused_before_anything_is_read():
     """400, not 422 — `UnknownPilot` is what `check_pilot_known` raises, and
     this codebase maps it to 400. Asserted as it is rather than as it might

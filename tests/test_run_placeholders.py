@@ -94,7 +94,7 @@ async def _start(monkeypatch, input_data: dict, *,
     monkeypatch.setattr(service.store, "insert_run", insert_run)
     monkeypatch.setattr(service, "write_audit", audit)
     monkeypatch.setattr(service, "resolve_actor",
-                        AsyncMock(return_value=SimpleNamespace(id=uuid4(), role="contributor")))
+                        AsyncMock(return_value=SimpleNamespace(id=uuid4(), role="contributor", is_service_account=False)))
     monkeypatch.setattr(service, "require", lambda *_a: None)
 
     async def ok(_ctx):

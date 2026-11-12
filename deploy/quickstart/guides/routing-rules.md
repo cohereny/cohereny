@@ -33,8 +33,9 @@ not a setting a deployment flips.
   less, never more.
 - `content` — the reason. It is what a reviewer judges and what an auditor reads later.
 
-The quickstart's team *Customer Support* has two: `draft_reply` and `summarize`, both
-on the local model.
+The quickstart has two, both on the local model: `draft_reply` in the team *Customer
+Support*, which the workflow uses, and `summarize` in the *Help Center*, which step 3 of
+the README asks.
 
 ## Which rule applies
 
@@ -43,7 +44,8 @@ its organisation's. An organisation sets a default, and a project sharpens it. A
 with no rule for a task type, and none above it, cannot run that task at all —
 `/v1/complete` answers `409`. There is no installation-wide default model, on purpose:
 an installation that has not decided should say so rather than pick a model that then
-looks chosen.
+looks chosen. (`/v1/complete` also answers `409` where a scope does not allow direct
+calls at all; the message says which of the two it is — see step 3 of the README.)
 
 ## Models and data classes
 
@@ -69,13 +71,13 @@ wrong, which is the worst moment to move data somewhere less protected.
 ```bash
 curl -s $API/v1/blocks -H "Authorization: Bearer $AUTHOR" -H 'Content-Type: application/json' -d "{
   \"scope_id\": \"$PROJECT\", \"block_type\": \"routing_rule\",
-  \"content\": \"Short answers for quick questions in this project.\",
-  \"metadata\": {\"task_type\": \"summarize\", \"candidates\": [\"qwen2.5:1.5b\"], \"max_tokens\": 80}}"
+  \"content\": \"Short drafts for quick questions in this project.\",
+  \"metadata\": {\"task_type\": \"draft_reply\", \"candidates\": [\"qwen2.5:1.5b\"], \"max_tokens\": 80}}"
 ```
 
 *Order inquiries* is a direct scope, so the rule is live at once and from now on
-overrides the team's `summarize` rule for this project — ask step 3 of the README again
-and the answer is shorter. In a strict scope, submit and approve it like any block
-([Scopes and blocks](scopes-and-blocks.md)).
+overrides the team's `draft_reply` rule for this project — start another run (step 4 of
+the README) and the draft is shorter. In a strict scope, submit and approve it like any
+block ([Scopes and blocks](scopes-and-blocks.md)).
 
 To use another model, see [Your own model](your-own-model.md).

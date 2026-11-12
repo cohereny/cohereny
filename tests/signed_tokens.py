@@ -29,9 +29,9 @@ def _b64url_int(n: int) -> str:
     return b64url(n.to_bytes((n.bit_length() + 7) // 8, "big"))
 
 
-def new_key() -> rsa.RSAPrivateKey:
-    """A fresh RSA key pair, 2048 bits, as Authentik signs with."""
-    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+def new_key(bits: int = 2048) -> rsa.RSAPrivateKey:
+    """A fresh RSA key pair, 2048 bits by default, as Authentik signs with."""
+    return rsa.generate_private_key(public_exponent=65537, key_size=bits)
 
 
 def jwk_of(key: rsa.RSAPrivateKey, kid: str = "test-key") -> dict:

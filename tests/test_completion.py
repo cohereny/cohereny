@@ -14,6 +14,7 @@ its *other* callers, which is the half that did not exist before.
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -79,6 +80,14 @@ class TestBody:
     def test_no_limit_sends_no_key_rather_than_null(self):
         """`"max_tokens": null` is not "no limit" to every gateway."""
         assert "max_tokens" not in build_body(CompletionRequest(prompt="Frage", model="m"))
+
+    def test_a_node_with_an_output_schema_asks_for_json(self):
+        """CHY-175: raises the odds of a parsable answer; the runner still checks it."""
+        body = build_body(CompletionRequest(prompt="Frage", model="m", json_object=True))
+        assert body["response_format"] == {"type": "json_object"}
+
+    def test_without_one_no_format_is_asked_for(self):
+        assert "response_format" not in build_body(CompletionRequest(prompt="Frage", model="m"))
 
 
 # ── what comes back ───────────────────────────────────────────────────────────
@@ -146,7 +155,8 @@ class TestFailures:
             pytest.raises(ModelRefused) as refused,
         ):
             await complete(CompletionRequest(prompt="F", model="nope"), base_url="https://x/v1")
-        assert "unknown model" in str(refused.value)
+        # The gateway's own words are kept, for the log and the trace (CHY-97).
+        assert "unknown model" in refused.value.detail
 
     async def test_an_unreachable_gateway_raises_its_own_error(self):
         client = _http(_ANSWER)
@@ -194,6 +204,82 @@ class TestFailures:
             with pytest.raises(expected):
                 await complete(CompletionRequest(prompt="F", model="m"), base_url="https://x/v1")
         recorder.record_error.assert_called_once()
+
+
+# ── what leaves, and what stays inside (CHY-97) ───────────────────────────────
+
+#: A host name rather than an address: the leak scan of the public snapshot
+#: would rightly stop a private address in a public file.
+_INSIDE = "Cannot connect to host gpu-box.lan:11434"
+
+
+class TestWhatLeaves:
+    """Finding B6 of the audit of 14.08.2026: the error text was the gateway's.
+
+    It named the address and port of an inference host to whoever made the
+    request. Now the gateway's account is kept as `detail`, for the trace and
+    the application log, and `str()` says what went wrong without where.
+    """
+
+    @pytest.mark.parametrize(
+        ("failure", "expected"),
+        [
+            (httpx.ConnectError(_INSIDE), ModelUnreachable),
+            (
+                httpx.HTTPStatusError(
+                    "e", request=MagicMock(),
+                    response=MagicMock(status_code=502, text=_INSIDE),
+                ),
+                ModelRefused,
+            ),
+        ],
+        ids=["unreachable", "refused"],
+    )
+    async def test_the_error_names_no_host_the_trace_and_the_log_do(
+        self, failure, expected, caplog
+    ):
+        recorder = MagicMock()
+        client = _http(_ANSWER)
+        client.post = AsyncMock(side_effect=failure)
+        with (
+            patch("core.completion.httpx.AsyncClient", return_value=client),
+            patch("core.completion.completion_trace") as trace,
+            caplog.at_level(logging.WARNING, logger="core.completion"),
+        ):
+            trace.return_value.__enter__ = MagicMock(return_value=recorder)
+            trace.return_value.__exit__ = MagicMock(return_value=False)
+            with pytest.raises(expected) as raised:
+                await complete(
+                    CompletionRequest(prompt="F", model="m", task_type="summarize"),
+                    base_url="https://x/v1",
+                )
+
+        assert "gpu-box" not in str(raised.value)
+        assert "gpu-box" in raised.value.detail
+        assert "gpu-box" in recorder.record_error.call_args.args[0]
+        [line] = [r for r in caplog.records if r.name == "core.completion"]
+        assert "gpu-box" in line.detail
+        assert (line.model, line.task_type) == ("m", "summarize")
+
+    def test_a_refusal_keeps_its_status(self):
+        """429 says wait, 400 says change the request; neither says where."""
+        assert str(ModelRefused(429, _INSIDE)) == (
+            "the model gateway refused the request (status 429)"
+        )
+
+    async def test_a_timeout_names_its_type_in_the_log(self, caplog):
+        """httpx gives a timeout an empty message: "unreachable: " and nothing
+        after it, which is how the comparison run of 09.11. read (CHY-264)."""
+        client = _http(_ANSWER)
+        client.post = AsyncMock(side_effect=httpx.ReadTimeout(""))
+        with (
+            patch("core.completion.httpx.AsyncClient", return_value=client),
+            caplog.at_level(logging.WARNING, logger="core.completion"),
+            pytest.raises(ModelUnreachable),
+        ):
+            await complete(CompletionRequest(prompt="F", model="m"), base_url="https://x/v1")
+        [line] = [r for r in caplog.records if r.name == "core.completion"]
+        assert line.error_type == "ReadTimeout"
 
 
 # ── reachable without a request ───────────────────────────────────────────────

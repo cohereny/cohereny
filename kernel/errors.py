@@ -150,6 +150,42 @@ class ParentScopeNotFound(KernelError):
         super().__init__(f"Parent scope {parent_id} does not exist.")
 
 
+class ScopeLoosensRiskClass(KernelError):
+    """A scope would classify direct model calls looser than its ancestors do.
+
+    Refused for the reason a looser data class is (ScopeLoosensPrivacy): the
+    strictest class on the chain applies, so the looser one would be stored,
+    shown and have no effect (CHY-199).
+    """
+
+    def __init__(self, declared: str, inherited: str) -> None:
+        self.declared = declared
+        self.inherited = inherited
+        super().__init__(
+            f"This scope would classify direct model calls as {declared!r}, but a "
+            f"scope above it classifies them as {inherited!r}. A scope may be "
+            f"stricter than the scopes above it, never looser — theirs would still "
+            f"apply, and the classification would say something untrue."
+        )
+
+
+class ScopeLoosensSampleRate(KernelError):
+    """A scope would draw a smaller share of direct calls than its ancestors do.
+
+    The same rule as the class (CHY-269): along the chain the highest share
+    applies, so a lower one would be stored, shown and have no effect.
+    """
+
+    def __init__(self, declared: float, inherited: float) -> None:
+        self.declared = declared
+        self.inherited = inherited
+        super().__init__(
+            f"This scope would draw {declared} of direct calls for review, but a scope "
+            f"above it draws {inherited}. A scope may check more than the scopes above "
+            f"it, never less — theirs would still apply."
+        )
+
+
 class ScopeLoosensPrivacy(KernelError):
     """A new scope declares a looser data class than its parent holds.
 
@@ -183,6 +219,90 @@ class MembershipExists(KernelError):
             f"Actor {actor_id} already holds a role in this scope. "
             f"Changing it is not supported yet."
         )
+
+
+class ReviewAreaNotFound(KernelError):
+    """No area of this name on this scope (CHY-180).
+
+    Members are added on the scope that defines the area, not on one below it
+    that only inherits it: whoever maintains the competence order of the bank
+    does so where it is written down.
+    """
+
+    def __init__(self, scope_id: object, name: str) -> None:
+        self.scope_id = scope_id
+        self.name = name
+        super().__init__(f"Scope {scope_id} defines no review area {name!r}.")
+
+
+class ReviewAreaExists(KernelError):
+    """This scope already defines an area of this name. UNIQUE (scope_id, name)."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"This scope already defines the review area {name!r}.")
+
+
+class AreaMembershipExists(KernelError):
+    """The actor is already a current member of this area."""
+
+    def __init__(self, actor_id: object, name: str) -> None:
+        self.actor_id = actor_id
+        self.name = name
+        super().__init__(f"Actor {actor_id} already belongs to the review area {name!r}.")
+
+
+class AreaMembershipNotFound(KernelError):
+    """The actor is not a current member of this area — nothing to revoke.
+
+    A 404 rather than a quiet success, as for a retention override: revoking
+    somebody who does not belong usually means the wrong area was named.
+    """
+
+    def __init__(self, actor_id: object, name: str) -> None:
+        self.actor_id = actor_id
+        self.name = name
+        super().__init__(f"Actor {actor_id} is not a current member of the review area {name!r}.")
+
+
+class HighRiskPeriodTooShort(KernelError):
+    """A high-risk workflow and a period under six months would meet (CHY-266).
+
+    Art. 26(6) AI Act: whoever deploys a high-risk AI system keeps its logs
+    for at least six months. Decided by Thomas, 10.11.2026: in a scope with an
+    active workflow classified `high` — or not classified, which counts as
+    `high` (ADR-050) — neither the run trace nor the run content may be kept
+    for less than 183 days. Refused when a workflow would be activated into
+    such a scope, and when a period would be shortened below it there. A
+    conflict with the installation's state, so 409 — retrying changes nothing.
+
+    `shortfalls` maps each scope to the classes that fall short and the days
+    they would have.
+    """
+
+    def __init__(self, shortfalls: dict, minimum: int, *, activating: bool) -> None:
+        self.shortfalls = shortfalls
+        self.minimum = minimum
+        parts = "; ".join(
+            f"scope {scope_id}: " + ", ".join(f"{cls} {days} days" for cls, days in classes.items())
+            for scope_id, classes in shortfalls.items()
+        )
+        if activating:
+            message = (
+                f"This workflow counts as high-risk (risk_class high, or none), and its scope "
+                f"keeps logs for less than {minimum} days ({parts}). The AI Act asks a "
+                f"deployer to keep them at least six months (Art. 26(6)): set run_trace and "
+                f"run_content to at least {minimum} days there "
+                f"(PUT /v1/admin/retention/{{class}}), then activate."
+            )
+        else:
+            message = (
+                f"An active workflow that counts as high-risk (risk_class high, or none) "
+                f"would keep its logs for less than {minimum} days ({parts}). The AI Act asks "
+                f"a deployer to keep them at least six months (Art. 26(6)). Keep at least "
+                f"{minimum} days there, or retire the workflow first."
+            )
+        super().__init__(message)
 
 
 class RetentionOverrideNotFound(KernelError):

@@ -34,6 +34,25 @@ class above it (and `critical` when nobody declared one). It may never be looser
 its parent's. The class decides which models may serve the scope: see
 [Routing rules](routing-rules.md). *Example Corp* is `confidential`.
 
+The class also decides, with a second one, whether the model may be asked **directly**
+(`/v1/complete`), without a workflow and without a person between the answer and its
+use. An architect classifies how risky direct calls in a scope are — `minimal`,
+`limited` or `high`; nobody deciding counts as `high`. A direct call answers only where
+both ask for no more than a spot check: data `public` or `internal`, direct calls
+`minimal`. The spot check is real: with `minimal` goes `sample_rate`, the share of direct
+calls drawn and judged afterwards, as at a sample gate ([Workflows](workflows.md#checked-afterwards)).
+Like the data class, a scope may be stricter than the scopes above it, never looser — a
+higher share below is taken, a lower one refused. The *Help Center* is classified so:
+
+```bash
+curl -s -X PUT $API/v1/scopes/$HELP/direct-call-risk-class -H "Authorization: Bearer $ARCHITECT" \
+  -H 'Content-Type: application/json' -d '{"risk_class": "minimal", "sample_rate": 0.1}'
+```
+
+The answer says whether direct calls now answer there, and if not, what decides it. A
+drawn call keeps what the model was asked and what it answered — placeholders where an
+identifier was replaced, never the value — until the scope's content period ends.
+
 ## Blocks
 
 | `block_type` | Ends up as |
@@ -76,6 +95,11 @@ arrives as a draft and goes through review:
 curl -s $API/v1/blocks/$BLOCK/promote -H "Authorization: Bearer $CONTRIBUTOR" \
   -H 'Content-Type: application/json' -d "{\"target_scope_id\": \"<id of Customer Support>\"}"
 ```
+
+Whoever may write in a direct scope may also take a block back there
+(`DELETE /v1/blocks/{block_id}`) and approve or reject one that waits — the
+`contributor` role, where a strict scope asks for `reviewer`. Approving one of the blocks
+above that wait for a second person still needs a reviewer who did not write it.
 
 ### Changing a block
 

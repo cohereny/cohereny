@@ -1,0 +1,43 @@
+# Which model serves each step of the credit workflow (CHY-178), as routing_rule
+# blocks of the scope Musterbank — reviewed like any block, checked against the
+# data class of the scope (ADR-041).
+#
+# The pilot chose by tiers: small = phi3-mini, medium and "cloud" = gemma4-e4b
+# (migrations/017, the "cloud" tier was a local model). Only local models here:
+# Musterbank is confidential, and the hosted ones may see public data only
+# (router/routing-config.yaml). The second candidate runs on another host, as
+# every seeded rule since 13.08.2026: one host off must not stop the workflow.
+# gemma4-e4b reasons before it answers and needs 2048 tokens for that.
+#
+# Classifying reads the whole annual statement. The pilot sent its first 3000
+# characters to phi3-mini; a definition sends what the edge carries. In the
+# comparison run of 09.11.2026 phi3-mini on the Raspberry Pi took longer than
+# the 300 s a model call may take for a statement of 3,600 characters, and the
+# chain ends on a timeout (CHY-264). gemma3-4b answers in about ten seconds.
+# phi3-mini stays second for the case the chain is for — the first host down,
+# the gateway answering 5xx — and is no fallback for a document on today's
+# hardware (INFRA-177).
+
+reason: >-
+  Übernommen aus dem Banking-Piloten (CHY-178): medium und cloud werden gemma4-e4b.
+  Die Einordnung liest den ganzen Jahresabschluss und läuft deshalb auf gemma3-4b
+  statt auf phi3-mini, das auf dem Raspberry Pi dafür zu langsam ist. Der zweite
+  Kandidat läuft auf einem anderen Host. Nur lokale Modelle, weil der Bereich
+  vertraulich ist.
+
+rules:
+  - task_type: kredit_einordnung
+    candidates: ["gemma3-4b", "phi3-mini"]
+    max_tokens: 512
+  - task_type: kredit_kennzahlen
+    candidates: ["gemma4-e4b", "phi3-mini"]
+    max_tokens: 2048
+  - task_type: kredit_bewertung
+    candidates: ["gemma4-e4b", "phi3-mini"]
+    max_tokens: 2048
+  - task_type: kredit_risiko
+    candidates: ["gemma4-e4b", "phi3-mini"]
+    max_tokens: 2048
+  - task_type: kredit_votum
+    candidates: ["gemma4-e4b", "phi3-mini"]
+    max_tokens: 2048

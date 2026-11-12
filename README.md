@@ -21,8 +21,10 @@ reviewed context repository, composed per workflow step and routed per model.
 > - **There is no support commitment.** No SLA and no backports. Security reports are
 >   handled as described in [SECURITY.md](SECURITY.md).
 > - **This repository is a published snapshot.** Development happens on a self-hosted
->   GitLab; each snapshot is pushed here as a new commit. Issues are welcome, pull requests cannot be
->   merged yet — see [CONTRIBUTING.md](CONTRIBUTING.md).
+>   GitLab. `main` holds the releases, each pushed here as a new commit; `next` holds the tested
+>   state between releases, updated after every deployment to the test stage — not a release, not
+>   supported. Issues are welcome, pull requests cannot be merged yet — see
+>   [CONTRIBUTING.md](CONTRIBUTING.md).
 > - **One person, best effort.** Cohereny is built by one person, carefully and to the best of
 >   my knowledge. In a system this complex I will still miss things. If you find one — a bug, a
 >   gap in the security model, a claim in the documentation the code doesn't keep — please tell
@@ -75,14 +77,18 @@ wanted to find out in practice what works and what doesn't.
 | Four eyes where data changes place: a routing rule naming a model below `critical` and a loosened privacy rule need a second person in every scope; technical accounts never approve them | ✅ |
 | Retention: every table assigned to a retention class; how long run content and run traces are kept is configured per scope through the admin API and audited, and `cc retention purge` applies it | ✅ |
 | Identifiers replaced before every model call of `/v1/complete` and of a workflow: e-mail addresses, phone numbers, IBANs, German tax ids and health insurance numbers, labelled dates of birth, every value the caller names, and a scope's own rules as reviewed blocks. Model, gateway and trace see placeholders. Workflow runs are stored with placeholders, the mapping back to the values encrypted per run; whoever started a run, and from `reviewer` up whoever sees it, can have the values put back, audited. Names nobody lists in M7 | ✅ |
-| Workflow runner: graph definitions, branching and joins, `human_review` gates with four-eyes approval | ✅ |
+| Workflow runner: graph definitions, branching and joins, loops with a limit per edge — one that runs out goes on along its default or fails the run, and is recorded —, `human_review` gates with four-eyes approval; a prompt per step, composed from the blocks tagged for it; a model's answer checked against a JSON Schema per step, a mismatch stops the run; calculations as pure steps registered in the code, by name and version; documents of a run (PDF, text) uploaded by its starter, read once, scanned for instructions and stored with placeholders — a step sees one only through an edge from its node | ✅ |
 | Stopping a run (AI Act Art. 14(4)(e)): whoever started it, and from `reviewer` up whoever sees it, ends it as `cancelled` — neither a failure nor a rejection at the gate, audited, a reason optional and stored with placeholders | ✅ |
+| Gates nobody decides: past a gate's own time limit the run escalates along a connection to a gate that asks for at least as many people, or ends as `expired`; past the content period of its scope it ends as `expired` and its content is cleared. `cc oversight expire` applies it, audited without a person | ✅ |
+| Review depth by risk (ADR-050): every gate asks for at least what the scope's data class and the workflow's risk class ask — a scope or workflow left unclassified asks for four eyes. Activation refuses a gate below it; at run time a stricter classification applies at once, and the audit log says per gate which level applied and why. Where both are low, a gate may be `sample`: the run goes on, a share of the passes is drawn into a review queue and judged afterwards | ✅ |
+| Areas at the gate (MaRisk BTO 1.1): a gate names areas — front office, back office — and each casts one vote; differing votes escalate to a higher authority, which may be one area of its own such as a credit committee. Who belongs to which area is kept per scope by `admin`, revoked with a date, never deleted; the database refuses a vote without a current membership | ✅ |
 | Runs visible only to whoever started them, to the members of the workflow's scope and of the scopes above, and to admin — enforced by row-level security, so a query that does not say for whom sees nothing. Blocks follow in M6 | ✅ |
 | Append-only audit log, out of the application's reach: the API runs as a database role that owns no table and may not switch a trigger off, and refuses to start as more. Per-surface API (`serve`, `author`, `observe`, `admin`) behind OpenID Connect | ✅ |
+| Application log: one JSON line per request on stderr — request id, route, status, duration, actor UUID; never a prompt, an answer or a document — and an `X-Request-ID` on every response. An error that leaves the installation, in an answer or a stored run, names no internal address; it carries the request id, and the details are in the log | ✅ |
 | Drift detection: calibration anchors and measurement tables are in place; scheduled (nightly by default) and change-triggered runs with a trial run before approval in M6, signals from operation in M6, an embedding sensor for stale anchors in M7 | 🔧 |
 | Adaptation of prompt and context per model, derived from the benchmark results (M6) | 📋 |
 | One-command setup with Docker Compose: local model, development identity provider and a worked example, checked on every change ([deploy/quickstart](deploy/quickstart/)) | ✅ |
-| The two LangGraph pilots (banking, study), `/v1/pilots` and `/v1/questions`: they call the model with the values and store them, unlike a workflow. Deprecated; they are rebuilt as workflows on the runner. Personal data belongs in workflows or `/v1/complete` | ⚠️ |
+| The two LangGraph pilots (banking, study), `/v1/pilots` and `/v1/questions`: they call the model with the values and store them, unlike a workflow. Deprecated; they are rebuilt as workflows on the runner — banking as the credit analysis in [deploy/examples/banking](deploy/examples/banking/), study later. Personal data belongs in workflows or `/v1/complete` | ⚠️ |
 
 ✅ built · 🔧 in progress · 📋 planned · ⚠️ deprecated · M5–M8: milestones on the way to 1.0, listed in the
 [whitepaper](https://github.com/cohereny/cohereny/blob/main/docs/cohereny-whitepaper.md), section 10
@@ -93,27 +99,26 @@ What changed from one snapshot of this repository to the next: [CHANGELOG.md](CH
 ## Tests
 
 <!-- BEGIN generated by scripts/readme_tests.py -->
-2,042 unit tests need no services; another 169 run against a real PostgreSQL.
-The unit tests alone cover **93 %** of the lines outside the two pilots:
+2,526 unit tests need no services; another 340 run against a real PostgreSQL.
+The unit tests alone cover **91 %** of the lines:
 
 | Directory | What it holds | Line coverage |
 |---|---|---|
 | `router/` | Routing rules | 98 % |
+| `steps/` | Compute steps of workflows, pure functions | 98 % |
 | `api/` | HTTP transport | 97 % |
-| `kernel/` | Identity, roles, permissions, audit | 97 % |
-| `contexts/` | Context repository, orchestration, learning, pilot runs | 91 % |
-| `core/` | Database pool, Redis, tracing | 89 % |
-| `cli/` | Command line | 63 % |
-| **All of the above** | | **93 %** |
-| `pilots/banking/`, `pilots/study/` | The two original pilots | 19 %, 10 % |
-| **Including the pilots** | | **75 %** |
+| `kernel/` | Identity, roles, permissions, audit | 94 % |
+| `core/` | Database pool, Redis, tracing | 92 % |
+| `contexts/` | Context repository, orchestration, learning, pilot runs | 89 % |
+| `cli/` | Command line | 60 % |
+| **All of the above** | | **91 %** |
 
-Measured on 2026-11-08 with Python 3.14, pytest 9.2 and coverage 7.17:
-`pytest tests/ pilots/banking/tests pilots/study/tests --cov`
+Measured on 2026-11-12 with Python 3.14, pytest 9.2 and coverage 7.17:
+`pytest tests/ --cov`
 <!-- END generated by scripts/readme_tests.py -->
 
-The pilots were written before the workflow runner and are being moved onto it; they are
-what pulls the overall figure down. The `quality` job on the self-hosted GitLab measures
+The two LangGraph pilots are not measured: they are deprecated, being moved onto the
+workflow runner, and go when that is done. The `quality` job on the self-hosted GitLab measures
 coverage on every push and fails when it drops by more than half a point against
 [`quality-baseline.json`](quality-baseline.json).
 
@@ -219,10 +224,21 @@ cc retention purge --dry-run   # what would go, nothing changes
 cc retention purge             # clears and deletes, writes retention.purged
 ```
 
-Start it from a timer, not by hand — a systemd timer, a cron job or a
-Kubernetes CronJob, once a day. Every run writes an audit entry, also when
-nothing expired, and `GET /v1/admin/retention` reports the newest as
-`last_purge_at`: alarm on its age, not on the job's exit code.
+The purge leaves a run waiting at a gate alone: its content is what the
+reviewer has to read. A run nobody decides is ended by a second command —
+once the content period has passed since it reached the gate, or earlier by
+the gate's own time limit ([guide](deploy/quickstart/guides/workflows.md#reviews)):
+
+```bash
+cc oversight expire --dry-run  # what would expire or escalate, nothing changes
+cc oversight expire            # ends or escalates them, each audited
+```
+
+Both are in the API image; with the quickstart, `docker compose exec api cc
+oversight expire`. Start them from a timer, not by hand — a systemd timer, a
+cron job or a Kubernetes CronJob, once a day. Every purge writes an audit
+entry, also when nothing expired, and `GET /v1/admin/retention` reports the
+newest as `last_purge_at`: alarm on its age, not on the job's exit code.
 
 #### Identifiers before the model
 

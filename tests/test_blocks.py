@@ -335,7 +335,9 @@ def test_delete_block_is_idempotent_without_a_second_audit_entry():
     try:
         assert client.delete(f"/v1/blocks/{_BLOCK_ID}").status_code == 204
         pool.conn.execute.assert_not_called()
-        pool.conn.fetchval.assert_not_called()
+        # No audit entry. Not "no fetchval": since CHY-170 the scope's review
+        # mode is read on the same connection.
+        assert not [c for c in pool.conn.fetchval.call_args_list if "audit_log" in c.args[0]]
     finally:
         _cleanup()
 

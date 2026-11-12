@@ -15,19 +15,24 @@ Called by:
   - uvicorn (entrypoint: api.main:app)
 
 Dependencies:
-  - api.config      (Settings, api_version, api_docs)
+  - api.config      (Settings, api_docs)
+  - core.version    (the version, from pyproject.toml)
   - api.v1.router   (all /v1/* endpoints)
   - core.db         (asyncpg pool management)
   - core.redis      (aioredis connection management)
 """
 import asyncpg
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from api.v1._redaction import mapping_keys
+from api.v1._responses import document_unprocessable
 from api.v1.router import router as v1_router
 from api.config import settings
+from core.version import VERSION
+from api.request_log import REQUEST_ID_HEADER, RequestLog, configure_logging
 from core.db import create_pool, close_pool
 from core.redis import create_redis, close_redis
 from core.tracing import init_tracing, shutdown_tracing
@@ -56,8 +61,27 @@ from router.errors import (
     TokenLimitAboveRule,
 )
 from contexts.orchestration.errors import (
+    DocumentAlreadyReceived,
+    DocumentMediaTypeUnsupported,
+    DocumentNodeExists,
+    DocumentNotExpected,
+    DocumentNotFromStarter,
+    DocumentRefused,
+    DocumentTooLarge,
+    DocumentUnreadable,
+    RunNotAwaitingDocuments,
     MalformedCondition,
     OversightGateMissing,
+    AreaAlreadyVoted,
+    GateBelowMinimum,
+    SampleAlreadyJudged,
+    SampleContentPurged,
+    SampleNotFound,
+    ServiceAccountMayNotDecide,
+    NotInReviewArea,
+    ReviewAreaAmbiguous,
+    ReviewAreaNotAtGate,
+    ReviewAreaUnresolved,
     ReviewerAlreadyDecided,
     RunAlreadyFinished,
     RunContentPurged,
@@ -104,6 +128,7 @@ from contexts.repository.errors import (
     UnknownStatus,
     VersionConflict,
 )
+from kernel import current_call
 from kernel.errors import (
     AccessDenied,
     ActorAnonymized,
@@ -112,10 +137,17 @@ from kernel.errors import (
     MembershipExists,
     ParentScopeNotFound,
     RetentionOverrideNotFound,
+    HighRiskPeriodTooShort,
+    ReviewAreaExists,
+    ReviewAreaNotFound,
+    AreaMembershipExists,
+    AreaMembershipNotFound,
     InvalidIdentifiers,
     MalformedRedactionRule,
     RedactionRuleNotApprovable,
     ScopeLoosensPrivacy,
+    ScopeLoosensRiskClass,
+    ScopeLoosensSampleRate,
     ActorStateInconsistent,
     KernelError,
     LastAdminProtected,
@@ -126,7 +158,10 @@ from kernel.errors import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # First: without a key no run can be stored, so the API does not start
+    # Before anything that can fail: a start that is refused should say why in
+    # the same format as everything after it (CHY-97).
+    configure_logging(settings.log_level)
+    # Then: without a key no run can be stored, so the API does not start
     # rather than refusing every run later (CHY-234, E5).
     mapping_keys()
     await create_pool()
@@ -148,13 +183,20 @@ repository. Context blocks live in a scope hierarchy (org → team → project),
 are composed along that hierarchy at request time, and only reach a live prompt
 after review.
 
-Two conventions worth knowing before writing a client:
+Four conventions worth knowing before writing a client:
 
+* **422 has two shapes.** `detail` is a list of field errors when the request
+  failed validation, and a sentence when a rule or the database refused a value
+  in it. Every operation that takes input can answer either.
 * **409 is normal.** The block lifecycle refuses transitions that are not
   allowed from the current status, and refuses a request whose `version` is not
   the current one. That is the review gate doing its job, not an error to retry.
 * **501 means planned.** Operations marked `x-cohereny-status: planned` exist in
   this contract and not yet in the code. Each names its ticket.
+* **Quote the request ID.** Every response carries `X-Request-ID`. An error from
+  inside — the model gateway, the identity provider, anything unexpected — says
+  what went wrong and ends with that id, not with the inside's own words; the
+  operator finds the details in the application log by it.
 
 This specification is generated from the running application and checked into
 the repository as `openapi.yaml`; CI fails when the two disagree (ADR-029).
@@ -162,7 +204,7 @@ the repository as `openapi.yaml`; CI fails when the two disagree (ADR-029).
 
 app = FastAPI(
     title="Cohereny API",
-    version=settings.api_version,
+    version=VERSION,
     description=API_DESCRIPTION,
     # No `servers`: every deployment has its own address. The list used to name
     # the reference installation's three stages, and every generated contract
@@ -177,6 +219,20 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.api_docs else None,
     lifespan=lifespan,
 )
+
+_fastapi_schema = app.openapi
+
+
+def _openapi() -> dict[str, Any]:
+    """FastAPI's schema with every 422 in both of its shapes (CHY-168).
+
+    Replaces the method on this instance, which is how FastAPI expects a schema
+    to be customised; /openapi.json and scripts/export_openapi.py both call it.
+    """
+    return document_unprocessable(_fastapi_schema())
+
+
+app.openapi = _openapi  # type: ignore[method-assign]
 
 # ── Map domain errors onto HTTP (ADR-030, CHY-101) ──────────────────────────
 #
@@ -194,6 +250,8 @@ _KERNEL_STATUS: dict[type[KernelError], int] = {
     ScopeNotFound: 404,
     ParentScopeNotFound: 404,
     ScopeLoosensPrivacy: 422,
+    ScopeLoosensRiskClass: 422,
+    ScopeLoosensSampleRate: 422,
     MembershipExists: 409,
     ActorStateInconsistent: 409,
     LastAdminProtected: 409,
@@ -203,6 +261,12 @@ _KERNEL_STATUS: dict[type[KernelError], int] = {
     UnknownRole: 400,
     ActorAnonymized: 409,
     RetentionOverrideNotFound: 404,
+    # Art. 26(6) AI Act (CHY-266): the state of the installation refuses it.
+    HighRiskPeriodTooShort: 409,
+    ReviewAreaNotFound: 404,
+    ReviewAreaExists: 409,
+    AreaMembershipExists: 409,
+    AreaMembershipNotFound: 404,
     InvalidIdentifiers: 422,
     RedactionRuleNotApprovable: 422,
     MalformedRedactionRule: 500,
@@ -330,6 +394,43 @@ _ORCHESTRATION_STATUS: dict[type[OrchestrationError], int] = {
     # 409: the same person decided at this gate before. Not malformed — a
     # four-eyes gate needs someone else, and the state says who (CHY-176).
     ReviewerAlreadyDecided: 409,
+    # Areas at the gate (CHY-180). Not a member: 403, the caller sees the run
+    # and may not decide it for that area. An area the gate does not ask for,
+    # or none named where several apply: 422, the request is incomplete. The
+    # area has voted: 409, the state refuses. A definition the competence
+    # order no longer carries: 500, not the reviewer's to fix.
+    NotInReviewArea: 403,
+    ReviewAreaNotAtGate: 422,
+    ReviewAreaAmbiguous: 422,
+    AreaAlreadyVoted: 409,
+    # A gate with areas below what its scope requires since a reclassification
+    # (CHY-223): the state refuses, and a new release resolves it.
+    GateBelowMinimum: 409,
+    # The review queue of sample gates (CHY-223): not there or not visible 404,
+    # judged already 409.
+    SampleNotFound: 404,
+    SampleAlreadyJudged: 409,
+    SampleContentPurged: 410,
+    # A technical account at a gate or a sample (CHY-275): the role is there,
+    # the person is not — like ServiceAccountMayNotApprove for blocks.
+    ServiceAccountMayNotDecide: 403,
+    ReviewAreaUnresolved: 500,
+    # Documents of a run (CHY-174, ADR-049). A second node for one document
+    # name, a document for a run that no longer waits, one that arrived before:
+    # the state refuses, 409. Not the starter: 403 — the caller sees the run
+    # and may not supply what it works on. A name the definition does not
+    # expect: 404, the path names nothing. The file itself: 413 too large,
+    # 415 a type that is not taken, 422 one that cannot be read as it is.
+    DocumentNodeExists: 409,
+    RunNotAwaitingDocuments: 409,
+    DocumentAlreadyReceived: 409,
+    DocumentNotFromStarter: 403,
+    DocumentNotExpected: 404,
+    DocumentTooLarge: 413,
+    DocumentMediaTypeUnsupported: 415,
+    DocumentUnreadable: 422,
+    # The family; never raised itself. Listed for the completeness test.
+    DocumentRefused: 422,
     WorkflowRunNotFound: 404,
     # Cleared at the end of its period (CHY-17): the run is there, its content
     # is gone for good, and nothing the caller does brings it back (CHY-234).
@@ -407,9 +508,11 @@ _COMPLETION_STATUS: dict[type[CompletionError], int] = {
 
 @app.exception_handler(CompletionError)
 async def _completion_error(_request: Request, exc: CompletionError) -> JSONResponse:
+    # str(exc), not exc.detail: what the gateway said, and where it could not
+    # reach, is in the application log under this request's id (CHY-97).
     return JSONResponse(
         status_code=_COMPLETION_STATUS.get(type(exc), 502),
-        content={"detail": str(exc)},
+        content={"detail": current_call.with_reference(str(exc))},
     )
 
 
@@ -451,5 +554,27 @@ async def _nul_in_input(_request: Request, _exc: Exception) -> JSONResponse:
                            "and send the request again."},
     )
 
+
+@app.exception_handler(Exception)
+async def _unexpected(_request: Request, _exc: Exception) -> JSONResponse:
+    """Whatever nothing above mapped: a 500 that says nothing but its id.
+
+    Starlette runs this outside every middleware, after the request log has
+    written its line, so the header is set here as well. The traceback is not
+    written here: the server writes it when the exception reaches it, with the
+    same request id, and a second copy would only double the line (CHY-97).
+    """
+    call = current_call.current()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": current_call.with_reference("internal error")},
+        headers={REQUEST_ID_HEADER: call.request_id} if call is not None else None,
+    )
+
+
+# Starlette places it inside the layer that runs _unexpected and outside the
+# one that maps domain errors: their answers pass through it and carry the
+# header, and the line is written for every request, a raised one included.
+app.add_middleware(RequestLog)
 
 app.include_router(v1_router)

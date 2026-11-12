@@ -17,7 +17,6 @@ mechanisms would be two truths about what is approved.
 """
 from __future__ import annotations
 
-import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -441,7 +440,7 @@ async def _transition(pool, redis, caller: Caller, block_id: UUID, name: str, *,
                       hooks: ActivationHooks) -> Approval:
     move = rules.TRANSITIONS[name]
     performer = await resolve_actor(pool, caller)
-    require(performer, move.role)
+    require(performer, rules.LOWEST_ROLE)
 
     extra = {"reason": reason} if reason is not None else {}
 
@@ -449,6 +448,11 @@ async def _transition(pool, redis, caller: Caller, block_id: UUID, name: str, *,
         row = await store.lock_current_block(conn, block_id)
         if row is None:
             raise BlockNotFound
+        # The role depends on the block's scope (CHY-170), so it is checked on
+        # the locked row: in a direct scope whoever may write may also decide.
+        mode = await scopes.review_mode_of(conn, row["scope_id"])
+        loosens = name == "approve" and four_eyes.is_data_flow(row, hooks.routes_below_critical)
+        require(performer, rules.role_for(name, mode=mode, loosens=loosens))
         rules.check_version(current=row["version"], expected=expected_version)
         updated, verdict = await _move(
             conn, row, move, performer=performer, extra=extra, hooks=hooks,
@@ -627,14 +631,21 @@ async def promote_block(pool, caller: Caller, block_id: UUID, body: BlockPromote
 
 
 async def retire_block(pool, redis, caller: Caller, block_id: UUID) -> None:
-    """Take a published block out of service — the whole version line."""
+    """Take a published block out of service — the whole version line.
+
+    A reviewer's decision in a strict scope; in a direct scope whoever may write
+    there (CHY-170). Retiring moves no data, so nothing about the block itself
+    changes that (see `block.role_for`).
+    """
     performer = await resolve_actor(pool, caller)
-    require(performer, "reviewer")
+    require(performer, rules.LOWEST_ROLE)
 
     async with pool.acquire() as conn, conn.transaction():
         versions = await store.lock_all_versions(conn, block_id)
         if not versions:
             raise BlockNotFound
+        mode = await scopes.review_mode_of(conn, versions[0]["scope_id"])
+        require(performer, rules.role_for("retire", mode=mode, loosens=False))
         plan, retired = rules.plan_deletion(versions)
         if plan is DeletePlan.ALREADY_RETIRED:
             return
@@ -665,8 +676,13 @@ async def _invalidate_if_composed(redis, from_status: str, to_status: str,
     """
     if not rules.affects_composition(from_status, to_status):
         return
-    with contextlib.suppress(Exception):
+    try:
         await bump_scope_generation(redis, scope_id)
+    except Exception:
+        # Logged: a missed bump serves a stale context for up to an hour, and
+        # without this line nothing would say why (CHY-97).
+        logger.warning("scope generation not bumped", exc_info=True,
+                       extra={"scope_id": str(scope_id)})
 
 
 async def routing_rules_for(pool, scope_ids: list[UUID]) -> list:

@@ -1,4 +1,7 @@
-# CI of the publish branch: the public snapshot of cohereny (CHY-188).
+# CI of the publish branches: the public snapshot of cohereny (CHY-188). `publish`
+# carries the releases to GitHub `main`; `publish-next` the tested state of `test` to
+# GitHub `next`, the interim versions between releases (CHY-272). Both pass the same
+# checks; only `publish` makes a GitHub release.
 #
 # Two checks, then the push. The push needs both, so nothing reaches GitHub that
 # has not been scanned, and nothing is pushed into a repository that is public
@@ -17,7 +20,7 @@ leak-check:
     - apt-get update -qq && apt-get install -y -qq git >/dev/null
     - python scripts/public_snapshot.py --scan .
   rules:
-    - if: $CI_COMMIT_BRANCH == "publish"
+    - if: $CI_COMMIT_BRANCH == "publish" || $CI_COMMIT_BRANCH == "publish-next"
 
 secret-scan:
   stage: check
@@ -28,7 +31,7 @@ secret-scan:
   script:
     - gitleaks detect --source . --no-banner --redact -v
   rules:
-    - if: $CI_COMMIT_BRANCH == "publish"
+    - if: $CI_COMMIT_BRANCH == "publish" || $CI_COMMIT_BRANCH == "publish-next"
 
 # The changelog in both languages says the same thing (CHY-226). Checked before
 # the mirror, so a snapshot whose German section lags behind never reaches GitHub.
@@ -39,7 +42,7 @@ changelog:
   script:
     - python scripts/changelog.py --check
   rules:
-    - if: $CI_COMMIT_BRANCH == "publish"
+    - if: $CI_COMMIT_BRANCH == "publish" || $CI_COMMIT_BRANCH == "publish-next"
 
 visibility:
   stage: check
@@ -48,7 +51,7 @@ visibility:
   script:
     - python scripts/public_snapshot.py --visibility cohereny/cohereny --private-until 2026-11-01
   rules:
-    - if: $CI_COMMIT_BRANCH == "publish"
+    - if: $CI_COMMIT_BRANCH == "publish" || $CI_COMMIT_BRANCH == "publish-next"
 
 github-mirror:
   stage: mirror
@@ -64,10 +67,24 @@ github-mirror:
   rules:
     - if: $CI_COMMIT_BRANCH == "publish"
 
-# The GitHub release of the snapshot (CHY-226): tag snapshot-<date> of the newest
-# changelog section, both languages as its text, marked as a pre-release. After
-# the mirror, so the commit exists on GitHub. A snapshot without a section of its
-# own fails here: its tag would be the previous snapshot's.
+# The tested state between releases (CHY-272): pushed to `next`, never to `main`,
+# and without a release — it is not one.
+github-mirror-next:
+  stage: mirror
+  image: alpine:3.22
+  tags: [docker]
+  needs: [leak-check, secret-scan, visibility, changelog]
+  before_script:
+    - apk add --no-cache git
+  script:
+    - GIT_TERMINAL_PROMPT=0 git push "https://oauth2:${GITHUB_TOKEN}@github.com/cohereny/cohereny.git" HEAD:refs/heads/next --force
+  rules:
+    - if: $CI_COMMIT_BRANCH == "publish-next"
+
+# The GitHub release (CHY-226, CHY-271): tag vX.Y.Z of the newest changelog
+# section, both languages as its text, a pre-release below 1.0. After the
+# mirror, so the commit exists on GitHub. A release whose version has no section
+# of its own in both files fails here.
 github-release:
   stage: release
   image: python:3.12-slim

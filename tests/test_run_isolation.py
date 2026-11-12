@@ -38,6 +38,7 @@ SYSTEM_CONTEXT_ALLOWED = {
     "api/v1/workflows.py",        # hands the engine's pool to the engine after the check
     "contexts/pilots/store.py",   # the pilot thread's statements
     "cli/retention.py",           # the purge
+    "cli/oversight.py",           # gates nobody decided, expired or escalated (ADR-050)
 }
 _SYSTEM_NAMES = {"get_system_pool", "as_system", "connect_as_system"}
 
