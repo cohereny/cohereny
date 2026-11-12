@@ -1,0 +1,451 @@
+"""
+scripts/public_snapshot.py
+
+What goes into the public repository, and a check that nothing internal goes with it
+(CHY-188).
+
+The public GitHub repository is a snapshot. Its history starts fresh: the internal
+history never leaves the self-hosted GitLab, because a cleanup commit removes a file from
+the current tree, not from the commits before it. Each release is copied from `main` into
+the `publish` branch as one commit — never merged, since a merge would bring the whole
+internal history along. Only released state goes public: the export runs from a clean
+checkout of origin/main and refuses anything else (CHY-191).
+
+Since CHY-272 a second stage goes public as well: the state of `test`, which has passed
+verify:test, as the branch `next` on GitHub — the interim versions between releases that
+the OpenSSF Best Practices criterion `repo_interim` asks for (decided by Thomas,
+10.11.2026). The CI job publish:next exports it after every deployment to test into the
+branch `publish-next`, whose CI scans it and pushes it to GitHub `next`. `dev` never goes
+public.
+
+A fix that must not be seen before its release carries the trailer `Embargo: CHY-…`. While
+such a commit is on origin/test but not yet on origin/main, `--export --from test` refuses
+with exit code 3 and names it; the job shows a warning, nothing is published. The release
+brings the commit to main, and the hold ends by itself.
+
+A release, in order (CHY-271, Semantic Versioning since 0.2.0):
+
+  1. On dev: raise `version` in pyproject.toml — its one place (core/version.py). A new
+     minor version for new or changed behaviour, a patch version for corrections only
+  2. On dev: the section `## X.Y.Z — YYYY-MM-DD` in CHANGELOG.md and CHANGELOG.de.md
+  3. dev → test → main, each through a merge request
+  4. Tag the merge commit on main `vX.Y.Z` in GitLab
+  5. --export from a clean checkout of origin/main, commit, push `publish`. Its CI creates
+     the GitHub pre-release `vX.Y.Z` (scripts/changelog.py --release), and refuses when
+     the newest section is not the version pyproject.toml carries
+
+Every tracked file is either PUBLIC or INTERNAL. A file in neither stops the check: a new
+top-level file must be classified on purpose, not slip into the snapshot or out of it by
+default.
+
+The patterns come in two kinds:
+
+  - generic ones, below: private addresses, private keys, token shapes. Safe to publish
+  - internal names, from `.leak-patterns`: one regular expression per line. That file is
+    INTERNAL itself — a check that listed the internal host names would publish them
+
+Usage:
+    python scripts/public_snapshot.py --check
+        Scan the public files of this checkout. Exit 1 on a finding or an unclassified file.
+    python scripts/public_snapshot.py --export DIR [--from main|test] [--docs DOCS_CHECKOUT]
+        Replace the contents of DIR (a checkout of `publish`, `.git` kept) with the public
+        files, the publish CI definition and, with --docs, the whitepaper and arc42 under
+        docs/. Then scan DIR. Exit 1 on a finding. DIR must be a checkout of `publish`, and
+        this checkout must stand on origin/main with no tracked file changed (fetch first).
+        With --from test: DIR a checkout of `publish-next`, this checkout on origin/test;
+        exit 3 while a commit with an `Embargo:` trailer is on test but not on main.
+    python scripts/public_snapshot.py --scan DIR
+        Scan every tracked file of DIR — the publish branch's CI runs this before the push.
+        Internal patterns come from the environment variable LEAK_PATTERNS there. Exit 1
+        on a finding, and also when DIR tracks no file or no internal pattern is loaded:
+        either way the scan would have looked at less than it claims.
+    python scripts/public_snapshot.py --visibility OWNER/NAME --private-until YYYY-MM-DD
+        Ask GitHub whether the repository is private, with GITHUB_TOKEN. Exit 1 if it is
+        public before the date (CHY-132). Reads metadata only; it cannot change anything.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import http.client
+from http import HTTPStatus
+from dataclasses import dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+#: Paths copied into the snapshot. A trailing slash means the whole directory.
+PUBLIC: tuple[str, ...] = (
+    ".dockerignore", ".env.example", ".gitignore", "CHANGELOG.md", "CHANGELOG.de.md", "COMMERCIAL-LICENSE.md",
+    "CONTRIBUTING.md", "CONVENTIONS.md", "CRYPTOGRAPHY.md", "DATA-PROTECTION.md",
+    "DATA-PROTECTION-EXAMPLE.md", "DATA-PROTECTION-EXAMPLE.de.md", "DEPENDENCIES.md",
+    "Dockerfile", "LICENSE.md",
+    "MODEL-DRIFT.md",
+    "README.md", "SECURITY.md", "openapi.yaml", "pyproject.toml", "quality-baseline.json",
+    "api/", "assets/", "cli/", "contexts/", "contracts/", "core/", "deploy/", "docker/",
+    "kernel/", "migrations/", "pilots/", "router/", "scripts/", "steps/", "tests/",
+    # Not in this repository: --export --docs copies the whitepaper and arc42 there
+    # from the documentation repository. Listed so the snapshot classifies them.
+    "docs/",
+)
+
+#: Paths that stay in GitLab. Each for a reason worth one line.
+INTERNAL: tuple[str, ...] = (
+    ".gitlab-ci.yml",        # deploys to the reference installation
+    ".sops.yaml",            # secret encryption setup of the reference installation
+    ".env.dev.example",      # stage templates of the reference installation
+    ".env.test.example",
+    ".env.prod.example",
+    "Makefile",              # drives the reference installation's stack
+    "renovate.json",         # runs against the self-hosted GitLab
+    ".leak-patterns",        # the internal names this check looks for
+    "publish/",              # the publish branch's own CI, copied to its root by --export
+)
+
+#: The CI definition of the publish branch, kept here and copied to its root.
+PUBLISH_CI = "publish/gitlab-ci.yml"
+
+#: The documents published under docs/, and the images they reference.
+DOCS: tuple[str, ...] = (
+    "cohereny-whitepaper.md", "cohereny-arc42.md",
+    "assets/branding/cohereny-logo-horizontal.svg",
+)
+
+GENERIC_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("private IPv4 address",
+     (r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+      r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+      r"|192\.168\.\d{1,3}\.\d{1,3})\b")),
+    ("private key", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    ("GitLab token", r"\bglpat-[A-Za-z0-9_-]{20,}"),
+    ("GitHub token", r"\bgh[pousr]_[A-Za-z0-9]{30,}"),
+    ("YouTrack token", r"\bperm-[A-Za-z0-9=._-]{20,}"),
+)
+
+PATTERNS_FILE = ".leak-patterns"
+
+#: Resolved once. None where git is missing, which _git() reports in words.
+GIT = shutil.which("git")
+
+
+@dataclass(frozen=True)
+class Finding:
+    path: str
+    line: int
+    label: str
+    text: str
+
+    def __str__(self) -> str:
+        return f"{self.path}:{self.line}: {self.label}: {self.text}"
+
+
+def _matches(path: str, entries: tuple[str, ...]) -> bool:
+    return any(path == e or (e.endswith("/") and path.startswith(e)) for e in entries)
+
+
+def _git() -> str:
+    if GIT is None:
+        msg = "git is not installed — the snapshot is defined by `git ls-files`"
+        raise SystemExit(msg)
+    return GIT
+
+
+def _run_git(path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Every git call of this script, in one place: arguments come from the code,
+    never from a file or the command line, and git itself from PATH."""
+    return subprocess.run([_git(), *args], cwd=path, capture_output=True, text=True,
+                          check=check)
+
+
+def tracked_files(root: Path) -> list[str]:
+    return [line for line in _run_git(root, "ls-files").stdout.splitlines() if line]
+
+
+def classify(files: list[str]) -> tuple[list[str], list[str]]:
+    """(public files, files that are neither public nor internal)."""
+    public = [f for f in files if _matches(f, PUBLIC)]
+    unclassified = [f for f in files if not _matches(f, PUBLIC) and not _matches(f, INTERNAL)]
+    return public, unclassified
+
+
+def load_patterns(root: Path) -> list[tuple[str, re.Pattern[str]]]:
+    """Generic patterns plus the internal ones from .leak-patterns, if present.
+
+    In the public repository the file does not exist, and only the generic patterns
+    apply — which is the point: they are the ones that may be read there.
+    """
+    patterns = [(label, re.compile(rx)) for label, rx in GENERIC_PATTERNS]
+    lines: list[str] = []
+    source = root / PATTERNS_FILE
+    if source.exists():
+        lines += source.read_text(encoding="utf-8").splitlines()
+    # The publish branch has no .leak-patterns; its CI hands the same list in here.
+    lines += os.environ.get("LEAK_PATTERNS", "").splitlines()
+    for raw in lines:
+        rx = raw.strip()
+        if rx and not rx.startswith("#"):
+            patterns.append(("internal name", re.compile(rx, re.IGNORECASE)))
+    return patterns
+
+
+def scan(root: Path, files: list[str], patterns: list[tuple[str, re.Pattern[str]]]) -> list[Finding]:
+    """Every pattern hit in the given files. Binary files are skipped."""
+    findings: list[Finding] = []
+    for name in files:
+        data = (root / name).read_bytes()
+        if b"\0" in data:
+            continue
+        text = data.decode("utf-8", errors="replace")
+        for number, line in enumerate(text.splitlines(), start=1):
+            for label, rx in patterns:
+                if rx.search(line):
+                    findings.append(Finding(name, number, label, line.strip()[:120]))
+    return findings
+
+
+#: Each stage that goes public, and the publish branch it is exported to (CHY-272).
+STAGES: dict[str, str] = {"main": "publish", "test": "publish-next"}
+
+#: The trailer that keeps a commit off `next` until its release (CHY-272).
+EMBARGO = "Embargo"
+
+#: The exit code of a held export: a warning in CI, not a failure.
+HELD = 3
+
+
+def _branch(path: Path) -> str | None:
+    if not (path / ".git").exists():
+        return None
+    # symbolic-ref, not rev-parse: it names the branch even before its first commit,
+    # where rev-parse fails — and a failure read as "not publish" refused for the
+    # wrong reason (found by the export dry run on 29.10.2026).
+    out = _run_git(path, "symbolic-ref", "--short", "HEAD", check=False)
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def _commit(path: Path, ref: str) -> str | None:
+    out = _run_git(path, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    return out.stdout.strip() or None
+
+
+def source_problem(source: Path, stage: str = "main") -> str | None:
+    """Why `source` may not be exported as `stage`, or None (CHY-191, CHY-272).
+
+    Only released state goes public (decided 29.10.2026, CHY-188), and since CHY-272
+    the tested state of `test` as `next`. A checkout of `dev` would publish whatever is
+    being worked on, and a tracked file edited but not committed would go out as it
+    lies on disk — under a commit message that names a sha which does not contain it.
+    There is no switch around this: exporting anything else is a change to this
+    script, reviewed like any other.
+    """
+    ref = f"origin/{stage}"
+    tip = _commit(source, ref)
+    if tip is None:
+        return f"this checkout has no {ref} — run `git fetch origin` first"
+    head = _commit(source, "HEAD")
+    if head != tip:
+        return (f"HEAD is {head[:12] if head else 'not a commit'}, {ref} is "
+                f"{tip[:12]} — export from a checkout of {ref} "
+                f"(`git worktree add <dir> {ref}`)")
+    changed = _run_git(source, "status", "--porcelain", "--untracked-files=no").stdout.splitlines()
+    if changed:
+        return (f"{len(changed)} tracked file(s) changed and not committed, "
+                f"e.g. `{changed[0].strip()}`")
+    return None
+
+
+def embargoed(source: Path) -> list[str]:
+    """Commits on origin/test, not yet on origin/main, that carry an `Embargo:` trailer.
+
+    Read from git's own trailer parser, so a mention of the word in a message body is
+    not a hold — only the trailer is. Each entry names the commit and the trailer's value.
+    """
+    out = _run_git(source, "log", "origin/main..origin/test",
+                   f"--format=%H%x1f%(trailers:key={EMBARGO},valueonly,separator=%x2C)")
+    held = []
+    for line in out.stdout.splitlines():
+        sha, _, value = line.partition("\x1f")
+        if value.strip():
+            held.append(f"{sha[:12]} {EMBARGO}: {value.strip()}")
+    return held
+
+
+def export(source: Path, target: Path, docs: Path | None) -> list[str]:
+    """Make `target` hold exactly the snapshot. Returns the files written.
+
+    Everything in the target except `.git` is removed first, so a file dropped from
+    PUBLIC disappears from the snapshot instead of lingering from an earlier copy.
+    """
+    for entry in target.iterdir():
+        if entry.name == ".git":
+            continue
+        shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+
+    public, _ = classify(tracked_files(source))
+    written: list[str] = []
+    for name in public:
+        dest = target / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / name, dest)
+        written.append(name)
+
+    shutil.copy2(source / PUBLISH_CI, target / ".gitlab-ci.yml")
+    written.append(".gitlab-ci.yml")
+
+    if docs is not None:
+        for name in DOCS:
+            dest = target / "docs" / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(docs / name, dest)
+            written.append(f"docs/{name}")
+    return sorted(written)
+
+
+def visibility(repo: str, private_until: datetime.date, today: datetime.date,
+               fetch=None) -> tuple[bool, str]:
+    """(ok, message) for the repository's visibility on `today` (CHY-132).
+
+    Before the date the repository must be private. From the date on this only reports:
+    going public is a deliberate act (CHY-1), and a check that failed every pipeline
+    until somebody clicked would be noise, not a guard.
+    """
+    fetch = fetch or _github_repo
+    data = fetch(repo)
+    private = bool(data["private"])
+    state = "private" if private else "public"
+    if today < private_until and not private:
+        return False, (f"{repo} is PUBLIC, and it must stay private until "
+                       f"{private_until.isoformat()}. Nothing is mirrored.")
+    return True, f"{repo} is {state} ({today.isoformat()})."
+
+
+def _github_repo(repo: str) -> dict:
+    """GET /repos/<repo> on the GitHub API — a fixed host, over HTTPS only."""
+    token = os.environ["GITHUB_TOKEN"]
+    conn = http.client.HTTPSConnection("api.github.com", timeout=20)
+    try:
+        conn.request("GET", f"/repos/{repo}", headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "cohereny-publish-check",
+        })
+        resp = conn.getresponse()
+        body = resp.read()
+    finally:
+        conn.close()
+    if resp.status != HTTPStatus.OK:
+        msg = f"GitHub answered {resp.status} for {repo}: {body[:200]!r}"
+        raise SystemExit(msg)
+    return json.loads(body)
+
+
+def _report(findings: list[Finding], unclassified: list[str]) -> int:
+    for f in findings:
+        print(f, file=sys.stderr)
+    for name in unclassified:
+        print(f"{name}: neither PUBLIC nor INTERNAL — classify it in "
+              f"scripts/public_snapshot.py", file=sys.stderr)
+    if findings or unclassified:
+        print(f"\n{len(findings)} finding(s), {len(unclassified)} unclassified file(s). "
+              "Nothing may be published like this.", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _scan_dir(target: Path, patterns: list[tuple[str, re.Pattern[str]]]) -> int:
+    """--scan: every tracked file of target, against the generic and internal patterns."""
+    files = tracked_files(target)
+    internal = sum(1 for label, _ in patterns if label == "internal name")
+    # Both cases used to end in "no finding". On 29.10.2026 a scan before the first
+    # `git add` reported "0 files scanned, no finding", and the CI variable had been
+    # saved as `Leak_Patterns` — environment names are case-sensitive, so the scan
+    # would have checked the generic shapes only, and said so in the same words.
+    if not files:
+        print(f"{target} tracks no file — nothing was scanned", file=sys.stderr)
+        return 1
+    if not internal:
+        print("No internal patterns loaded: set LEAK_PATTERNS (a protected CI variable "
+              "on the publish branch). Without them only the generic shapes are checked.",
+              file=sys.stderr)
+        return 1
+    code = _report(scan(target, files, patterns), [])
+    if code == 0:
+        print(f"{len(files)} files scanned against {internal} internal and "
+              f"{len(patterns) - internal} generic patterns, no finding.")
+    return code
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check", action="store_true")
+    mode.add_argument("--export", type=Path, metavar="DIR")
+    mode.add_argument("--scan", type=Path, metavar="DIR")
+    mode.add_argument("--visibility", metavar="OWNER/NAME")
+    ap.add_argument("--docs", type=Path, metavar="DOCS_CHECKOUT")
+    ap.add_argument("--from", dest="stage", choices=sorted(STAGES), default="main",
+                    help="the stage to export: main (releases) or test (next, CHY-272)")
+    ap.add_argument("--private-until", type=datetime.date.fromisoformat)
+    args = ap.parse_args(argv)
+
+    if args.visibility:
+        if args.private_until is None:
+            ap.error("--visibility needs --private-until")
+        # UTC, not the machine's zone. For the first hour of a German date UTC is still
+        # on the day before, so the check demands "private" an hour longer, never shorter.
+        today = datetime.datetime.now(datetime.UTC).date()
+        ok, message = visibility(args.visibility, args.private_until, today)
+        print(message, file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 1
+
+    patterns = load_patterns(ROOT)
+    if args.scan:
+        return _scan_dir(args.scan.resolve(), patterns)
+    if args.check:
+        public, unclassified = classify(tracked_files(ROOT))
+        code = _report(scan(ROOT, public, patterns), unclassified)
+        if code == 0:
+            print(f"{len(public)} public files, no finding.")
+        return code
+    return _export(args, patterns)
+
+
+def _export(args: argparse.Namespace, patterns: list[tuple[str, re.Pattern[str]]]) -> int:
+    """--export: refuse what may not go out, hold what must wait, then copy and scan."""
+    target = args.export.resolve()
+    branch = STAGES[args.stage]
+    # The export empties its target. Only a checkout of the stage's publish branch may
+    # be one — not this repository, and not a directory that merely contains a .git.
+    if target == ROOT.resolve() or _branch(target) != branch:
+        print(f"{target} is not a checkout of the {branch} branch — refusing to empty it",
+              file=sys.stderr)
+        return 2
+    problem = source_problem(ROOT, args.stage)
+    if problem is not None:
+        print(f"refusing to export: {problem}", file=sys.stderr)
+        return 2
+    if args.stage == "test":
+        held = embargoed(ROOT)
+        if held:
+            print("held: a fix under embargo is on test and not yet released — nothing "
+                  "is published until it reaches main:", file=sys.stderr)
+            for line in held:
+                print(f"  {line}", file=sys.stderr)
+            return HELD
+    written = export(ROOT, target, args.docs)
+    code = _report(scan(target, written, patterns), [])
+    if code == 0:
+        name = "snapshot" if args.stage == "main" else "next"
+        print(f"{len(written)} files exported to {target}, no finding.")
+        print(f"Commit it there as: {name} from {_commit(ROOT, 'HEAD')} on {args.stage}")
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

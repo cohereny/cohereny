@@ -1,0 +1,32 @@
+{
+  "_tools": {
+    "codespell": "2.4.3",
+    "ruff": "0.16.10"
+  },
+  "api_db_calls": 0,
+  "boundary_context_encapsulation": 0,
+  "boundary_context_isolation": 0,
+  "boundary_framework_free": 0,
+  "boundary_http_below_transport": 0,
+  "boundary_impure_step": 0,
+  "boundary_inward_only": 3,
+  "boundary_kernel_uses_nothing": 0,
+  "codespell": 41,
+  "coverage_percent": 91.1,
+  "planned_operations": 9,
+  "ruff": {
+    "ARG": 26,
+    "ASYNC": 0,
+    "B": 0,
+    "C90": 3,
+    "EM": 10,
+    "N": 0,
+    "PL": 61,
+    "RUF": 5,
+    "S": 11,
+    "SIM": 0,
+    "TRY": 11,
+    "UP": 6
+  },
+  "unused_actor": 17
+}

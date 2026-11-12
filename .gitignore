@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / pnpm / Astro
+node_modules/
+.pnpm-store/
+dist/
+.astro/
+.cache/
+
+# Environment (niemals committen)
+.env
+.env.local
+.env.*.local
+.env.dev
+.env.test
+.env.prod
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Workflow Output
+pilots/*/output/
+
+# Generated PDF exports
+*.pdf
+
+# Banking fixture PDFs (generated, not committed)
+pilots/banking/fixtures/pdfs/*.pdf
+
+coverage.json
+
+.coverage

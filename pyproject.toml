@@ -1,0 +1,209 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cohereny-api"
+version = "0.2.0"
+description = "Cohereny — Context-aware LLM Middleware (FastAPI)"
+# Also the supplier in the SBOM (scripts/sbom_supplier.py, CHY-22).
+authors = [{ name = "Thomas Roth" }]
+# Dual-licensed: AGPLv3 here, a commercial license on request (COMMERCIAL-LICENSE.md)
+license = "AGPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "asyncpg>=0.30",
+    "redis[asyncio]>=5.0",
+    "PyJWT[crypto]>=2.10",
+    "httpx>=0.27",
+    "pydantic-settings>=2.6",
+    "typer>=0.12",
+    "pyyaml>=6",
+    "langfuse>=4.0",
+    # A calibration anchor's json_schema validator runs in the service, not
+    # only in the E2E (CHY-67, ADR-006 layer 1).
+    "jsonschema>=4.23",
+    # Seals a run's placeholder mapping (CHY-234, kernel/mapping_cipher.py).
+    # Came in through PyJWT[crypto] before; named here now that it is used.
+    "cryptography>=44",
+    # Reads a run's PDF documents to text (CHY-174, ADR-049). The banking
+    # pilot brought it into the image already; the runner names it now.
+    "pypdf>=4.0",
+]
+
+[project.scripts]
+cc = "cli.main:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    # The E2E validates every response against openapi.yaml (CHY-124), and
+    # tests/test_e2e_contract_check.py drives that validator.
+    "jsonschema>=4.23",
+    "pyyaml>=6",
+    # The three tools below are PINNED, not floated, and that is deliberate.
+    #
+    # scripts/quality_gate.py compares today's counts against a checked-in
+    # baseline. A floating linter makes the ruler change under the measurement:
+    # `ruff>=0.4` gave 0.15.20 locally and 0.16.3 in CI, and the same commit
+    # scored PL 52 here and 55 there. The gate reported a regression nobody had
+    # written -- the three findings came from three rules that did not exist in
+    # the older version (CHY-84).
+    #
+    # Renovate proposes upgrades as ordinary MRs. That is the right moment to
+    # look at new rules: visible, reviewable, with the baseline re-measured in
+    # the same change. Silently, mid-pipeline, is the wrong moment.
+    #
+    # codespell is pinned for the same reason -- its dictionary grows, and a
+    # bigger dictionary means more hits on unchanged prose.
+    "ruff==0.16.10",
+    "codespell==2.4.3",
+    "pytest-cov==7.1.0",
+]
+# Contract fuzzing against a running app (scripts/contract_fuzz.py, CHY-124).
+# A group of its own so only the `integration` job installs it — every other
+# job would pay for a dependency tree it never uses. Pinned for the reason the
+# linters are: a new release brings new checks, and a finding that appears
+# with an upgrade should be reviewed as an upgrade, not blamed on a commit.
+contract = [
+    "schemathesis==4.30.1",
+]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Eleven families beyond E/F, chosen because production code was already at zero
+# for all of them on 2026-08-14 (CHY-84). Enforcing them costs nothing today and
+# stops the first violation rather than the hundredth.
+#
+#   RET  returns          PTH  pathlib over os.path   A    shadowed builtins
+#   C4   comprehensions   DTZ  naive datetimes        ISC  implicit concat
+#   PIE  misc lint        Q    quote style            RSE  raise style
+#   SLF  private access   TID  banned imports
+#
+# The families that still carry debt — B, SIM, ARG, C90, N, UP, S, EM, TRY, PL,
+# RUF, ASYNC — are ratcheted by scripts/quality_gate.py instead: their counts may
+# fall but not rise. Enabling them here would fail the build 278 times on the
+# first run, and a check that fails on day one is switched off in week one.
+select = ["E", "F", "RET", "PTH", "A", "C4", "DTZ", "ISC", "PIE", "Q", "RSE", "SLF", "TID"]
+ignore = [
+    "E501",   # line too long — handled by formatter, not enforced in CI
+]
+
+[tool.ruff.lint.per-file-ignores]
+# B008 forbids a function call in an argument default. FastAPI *requires* one:
+# `actor: CurrentUser = Depends(require_auth)` is the documented way to declare
+# a dependency, and there is no alternative spelling.
+#
+# 91 of 96 B findings were this, which made the family a count of how many
+# endpoints exist — a metric that rises when the product is built and hides the
+# four real findings (B904, B905) behind it. Noticed while adding four routes
+# in CHY-86 and watching B go up for doing the job.
+"api/*" = ["B008"]
+# Tests may reach into private members to assert on them, and the pool doubles
+# in conftest.py exist precisely to inspect internals.
+"tests/*" = ["SLF"]
+# http.server dispatches requests to do_GET and do_POST by name; there is no
+# other spelling. A noqa per method would count as unused in every ratchet run
+# that does not select N (RUF100), so the exception lives here (CHY-192).
+"scripts/dev_issuer.py" = ["N802"]
+# The publish branch runs it in a bare Python image, so the GitHub call is
+# urllib's urlopen; the URL is the fixed https API base, never user input.
+"scripts/changelog.py" = ["S310"]
+# N818 wants every exception to end in "Error". The zone-3 and zone-2 error
+# modules end the *base* class that way — KernelError, PilotError,
+# RepositoryError — and that is the name a caller catches. The leaves are named
+# for what happened, because `raise BlockNotFound()` at the call site says the
+# thing and `raise BlockNotFoundError()` says it twice.
+#
+# Written down as an ignore rather than absorbed into the ratchet: the ratchet
+# is for debt that should shrink, and this is a decision that should not. It
+# became visible when CHY-105 fixed the source list — before that, kernel/ and
+# contexts/ were not counted at all, and the family read 0.
+# Errors live in an errors module and are named without an `Error` suffix —
+# the shape every context and the kernel already have. Waived per file so the
+# convention holds everywhere rather than everywhere-but-one (CHY-129).
+"core/errors.py" = ["N818"]
+"kernel/errors.py" = ["N818"]
+"contexts/*/errors.py" = ["N818"]
+"router/errors.py" = ["N818"]
+# Ten deliberate multi-line strings inside tuples — the report was checked line
+# by line and none of them is a missing comma, which is what ISC004 exists to
+# catch. A fixture generator for synthetic annual reports; the prose has to
+# wrap somewhere.
+"pilots/banking/generate_jahresabschluss.py" = ["ISC"]
+
+[tool.hatch.build.targets.wheel]
+# domain/ is gone with CHY-121 — ADR-030 point 1 dissolved it, and the last
+# two files went to kernel/schema.py. An empty package left behind is the
+# same kind of artefact as a dead CI workflow: it says something exists.
+# steps/ joined with ADR-048 (CHY-173): the compute steps a workflow runs.
+packages = ["api", "core", "cli", "router", "kernel", "contexts", "steps"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Explicit, because pytest-asyncio announces a different default. Async
+# fixtures share the test's loop; a pool built on another loop fails with
+# "Future attached to a different loop" (CHY-212).
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+# Integration tests need a real PostgreSQL with every migration applied
+# (tests/integration, CHY-124). Deselected here so a checkout without a
+# database runs the unit suite unchanged; the `integration` job selects them
+# with `-m integration`, which overrides this on the command line.
+#
+# `-p no:anyio`: one plugin runs async tests, not two (CHY-212). anyio ships a
+# pytest plugin of its own, installed with httpx and starlette. With both
+# active, which one runs a test depends on the order pytest loads them -- and
+# that order is the order the file system lists site-packages, a hash of the
+# directory names on ext4. A new anyio release renamed its directory, the
+# order flipped, and every integration test ran on a different loop than its
+# `pool` fixture. Nothing in this repository had changed.
+addopts = "-m 'not integration' -p no:anyio"
+markers = [
+    "integration: needs a real PostgreSQL (DATABASE_URL), run by the integration job",
+]
+
+
+[tool.coverage.run]
+# Directories, explicitly, rather than pytest-cov's --cov flags alone.
+#
+# Two things were hiding modules. The flags report only what a test imported, so
+# anything nobody imports looks like nothing rather than like 0 %. And naming
+# `pilots` as a source finds only the importable packages inside it, because
+# coverage descends into what looks like a package and pilots/ has no
+# __init__.py.
+#
+# Between them, eight modules were invisible — including both graph.py, which
+# are the workflow definitions, and the fixture generator from CHY-41. A module
+# nobody imports is not covered; it is 0 % covered, and that difference is the
+# whole point of the number. Measured with everything visible, the figure went
+# 74.5 % → 44.9 % (CHY-111).
+# `kernel` and `contexts` added with CHY-105. They were missing since CHY-101
+# created them, and the effect was worse than an unmeasured directory: every
+# context extracted from api/ took its statements out of the denominator, so
+# the same refactor that moved code somewhere unmeasured *raised* the reported
+# figure. The metric was rewarding the move rather than measuring it — the same
+# shape as CHY-111 above, one zone further out.
+source = [
+    "api", "core", "cli", "router",
+    "kernel", "contexts",
+    # steps/ from its first commit (ADR-048): measured from the start, not
+    # discovered later the way CHY-105 and CHY-111 found their directories.
+    "steps",
+    # pilots/ left again on 09.11.2026 (CHY-262). The two LangGraph pilots are
+    # deprecated since 08.11. and go with CHY-179 (banking) and later (study);
+    # ratcheting code with an expiry date buys nothing, and at 15 % they pulled
+    # the figure down by fifteen points. Measured while they were in use, from
+    # CHY-111 on — that part of the argument above still stands.
+]
+omit = [
+    "*/tests/*",
+    "*/conftest.py",
+    "*/.venv/*",
+]

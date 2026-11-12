@@ -1,0 +1,21 @@
+# Overrides for the CI job `quickstart` (.gitlab-ci.yml). Not for local use.
+#
+# The job runs against the host's Docker daemon (the runner mounts its socket),
+# so whatever the quickstart publishes is published on that host — where port
+# 8000 already belongs to another service. The check runs inside the Compose
+# network instead and needs no published port.
+#
+# The model volume is external here, so `docker compose down -v` at the end of
+# the job keeps it and the next pipeline does not download the model again.
+# The job creates it beforehand.
+
+services:
+  issuer:
+    ports: !reset []
+  api:
+    ports: !reset []
+
+volumes:
+  ollama-models:
+    name: ${OLLAMA_MODELS_VOLUME:-cohereny-quickstart-ollama}
+    external: true

@@ -1,0 +1,136 @@
+{
+  "name": "Kreditanalyse",
+  "description": "Jahresabschluss und Kontoauszug zu einem Votum-Entwurf, den Markt und Marktfolge freigeben; weichen die Voten ab, entscheidet die Kreditkommission (CHY-178, ADR-050).",
+  "risk_class": "high",
+  "nodes": [
+    {"node_ref": "jahresabschluss", "node_type": "document", "name": "Jahresabschluss",
+     "document_name": "jahresabschluss"},
+    {"node_ref": "kontoauszug", "node_type": "document", "name": "Kontoauszug",
+     "document_name": "kontoauszug"},
+
+    {"node_ref": "prompt_einordnung", "node_type": "context_compose",
+     "context_requirements": {"block_types": ["system_prompt"], "tags": ["banking:einordnung"]}},
+    {"node_ref": "einordnung", "node_type": "llm_call", "name": "Dokument einordnen",
+     "task_type": "kredit_einordnung", "join_policy": "wait_all",
+     "input_mapping": {"system": "prompt_einordnung.prompt", "prompt": "jahresabschluss.text"},
+     "output_schema": {
+       "type": "object",
+       "required": ["dokumenttyp", "unternehmen", "jahr"],
+       "additionalProperties": false,
+       "properties": {
+         "dokumenttyp": {"enum": ["Jahresabschluss", "Due-Diligence-Bericht", "Kreditantrag", "Sonstiges"]},
+         "unternehmen": {"type": "string"},
+         "jahr": {"type": "string"}
+       }
+     }},
+
+    {"node_ref": "prompt_kennzahlen", "node_type": "context_compose",
+     "context_requirements": {"block_types": ["system_prompt"], "tags": ["banking:kennzahlen"]}},
+    {"node_ref": "kennzahlen_lesen", "node_type": "llm_call", "name": "Kennzahlen lesen",
+     "task_type": "kredit_kennzahlen", "join_policy": "wait_all",
+     "input_mapping": {"system": "prompt_kennzahlen.prompt", "prompt": "jahresabschluss.text"},
+     "output_schema": {
+       "type": "object",
+       "required": ["bilanzsumme_current", "bilanzsumme_prior", "eigenkapital_current",
+                    "umlaufvermoegen_current", "kurzfristige_verbindlichkeiten_current",
+                    "kurzfristige_verbindlichkeiten_prior", "umsatz_current", "ebit_current",
+                    "abschreibungen_current", "jahresueberschuss_current"],
+       "additionalProperties": false,
+       "properties": {
+         "bilanzsumme_current": {"type": "integer", "minimum": 0},
+         "bilanzsumme_prior": {"type": "integer", "minimum": 0},
+         "eigenkapital_current": {"type": "integer"},
+         "umlaufvermoegen_current": {"type": "integer", "minimum": 0},
+         "kurzfristige_verbindlichkeiten_current": {"type": "integer", "minimum": 0},
+         "kurzfristige_verbindlichkeiten_prior": {"type": "integer", "minimum": 0},
+         "umsatz_current": {"type": "integer", "minimum": 0},
+         "ebit_current": {"type": "integer"},
+         "abschreibungen_current": {"type": "integer", "minimum": 0},
+         "jahresueberschuss_current": {"type": "integer"}
+       }
+     }},
+
+    {"node_ref": "kennzahlen", "node_type": "compute", "name": "Verhältniszahlen",
+     "function": "banking.ratios", "function_version": 1,
+     "input_mapping": {"kpis": "kennzahlen_lesen.data"}},
+    {"node_ref": "auffaelligkeiten", "node_type": "compute", "name": "Auffälligkeiten nach Regeln",
+     "function": "banking.anomalies", "function_version": 1,
+     "input_mapping": {"ratios": "kennzahlen.data"}},
+
+    {"node_ref": "prompt_bewertung", "node_type": "context_compose",
+     "context_requirements": {"block_types": ["system_prompt"], "tags": ["banking:bewertung"]}},
+    {"node_ref": "bewertung", "node_type": "llm_call", "name": "Auffälligkeiten bewerten",
+     "task_type": "kredit_bewertung", "join_policy": "wait_all",
+     "input_mapping": {"system": "prompt_bewertung.prompt",
+                       "prompt.kennzahlen": "kennzahlen.data",
+                       "prompt.auffaelligkeiten": "auffaelligkeiten.data.anomalies"}},
+
+    {"node_ref": "prompt_risiko", "node_type": "context_compose",
+     "context_requirements": {"block_types": ["system_prompt"], "tags": ["banking:risiko"]}},
+    {"node_ref": "risiko", "node_type": "llm_call", "name": "Risiko einstufen",
+     "task_type": "kredit_risiko", "join_policy": "wait_all",
+     "input_mapping": {"system": "prompt_risiko.prompt",
+                       "prompt.unternehmen": "einordnung.data",
+                       "prompt.kennzahlen": "kennzahlen.data",
+                       "prompt.auffaelligkeiten": "auffaelligkeiten.data.anomalies",
+                       "prompt.bewertung": "bewertung.content"},
+     "output_schema": {
+       "type": "object",
+       "required": ["risikoklasse", "grund"],
+       "additionalProperties": false,
+       "properties": {
+         "risikoklasse": {"enum": ["GRÜN", "GELB", "ROT"]},
+         "grund": {"type": "string", "minLength": 1}
+       }
+     }},
+
+    {"node_ref": "prompt_votum", "node_type": "context_compose",
+     "context_requirements": {"block_types": ["system_prompt", "user_context"],
+                              "tags": ["banking:votum"]}},
+    {"node_ref": "votum", "node_type": "llm_call", "name": "Votum entwerfen",
+     "task_type": "kredit_votum", "join_policy": "wait_all",
+     "input_mapping": {"system": "prompt_votum.prompt",
+                       "prompt.unternehmen": "einordnung.data",
+                       "prompt.risiko": "risiko.data",
+                       "prompt.kennzahlen": "kennzahlen.data",
+                       "prompt.auffaelligkeiten": "auffaelligkeiten.data.anomalies",
+                       "prompt.bewertung": "bewertung.content",
+                       "prompt.kontoauszug": "kontoauszug.text"}},
+
+    {"node_ref": "votum_freigabe", "node_type": "human_review", "name": "Voten von Markt und Marktfolge",
+     "review_areas": ["markt", "marktfolge"]},
+    {"node_ref": "kreditkommission", "node_type": "human_review", "name": "Entscheidung der Kreditkommission",
+     "review_areas": ["kreditkommission"]}
+  ],
+  "connections": [
+    {"source_node_ref": "prompt_einordnung", "target_node_ref": "einordnung"},
+    {"source_node_ref": "jahresabschluss", "target_node_ref": "einordnung"},
+
+    {"source_node_ref": "prompt_kennzahlen", "target_node_ref": "kennzahlen_lesen"},
+    {"source_node_ref": "jahresabschluss", "target_node_ref": "kennzahlen_lesen"},
+    {"source_node_ref": "kennzahlen_lesen", "target_node_ref": "kennzahlen"},
+    {"source_node_ref": "kennzahlen", "target_node_ref": "auffaelligkeiten"},
+
+    {"source_node_ref": "prompt_bewertung", "target_node_ref": "bewertung"},
+    {"source_node_ref": "kennzahlen", "target_node_ref": "bewertung"},
+    {"source_node_ref": "auffaelligkeiten", "target_node_ref": "bewertung"},
+
+    {"source_node_ref": "prompt_risiko", "target_node_ref": "risiko"},
+    {"source_node_ref": "einordnung", "target_node_ref": "risiko"},
+    {"source_node_ref": "kennzahlen", "target_node_ref": "risiko"},
+    {"source_node_ref": "auffaelligkeiten", "target_node_ref": "risiko"},
+    {"source_node_ref": "bewertung", "target_node_ref": "risiko"},
+
+    {"source_node_ref": "prompt_votum", "target_node_ref": "votum"},
+    {"source_node_ref": "einordnung", "target_node_ref": "votum"},
+    {"source_node_ref": "kennzahlen", "target_node_ref": "votum"},
+    {"source_node_ref": "auffaelligkeiten", "target_node_ref": "votum"},
+    {"source_node_ref": "bewertung", "target_node_ref": "votum"},
+    {"source_node_ref": "risiko", "target_node_ref": "votum"},
+    {"source_node_ref": "kontoauszug", "target_node_ref": "votum"},
+
+    {"source_node_ref": "votum", "target_node_ref": "votum_freigabe"},
+    {"source_node_ref": "votum_freigabe", "target_node_ref": "kreditkommission",
+     "condition": {"op": "eq", "field": "decision", "value": "escalated"}}
+  ]
+}

@@ -1,0 +1,18 @@
+# Kept out of every image and out of the build context (CHY-85).
+#
+# Environment files hold credentials. Until 06.11.2026 the deploy copied
+# .env.<stage> to pilots/banking/.env before building, and `COPY pilots/banking/`
+# put it into the image: every API container carried the superuser's password
+# for the database, the one credential role separation exists to keep out of it.
+# The containers get their environment from Compose (env_file), never from a
+# file inside the image. tests/test_image_contents.py holds this list.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Not needed to build, and large.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+reports
