@@ -27,7 +27,9 @@ encryption does not help against a dump taken by someone with database access.
 
 ## What Cohereny does itself
 
-- **Token verification.** Every request except `GET /v1/health` carries a bearer token.
+- **Token verification.** Every request except `GET /v1/health` carries a bearer token —
+  and, where a deployment switches on the interactive documentation with `API_DOCS=true`,
+  `/docs`, `/redoc` and `/openapi.json`, which show the contract and no data.
   Cohereny accepts RS256 only — the algorithm is pinned, so a token cannot choose `none` or
   HS256 — and requires `exp`, `iss`, `aud` and `sub`. The issuer must be one of the
   installation's known issuers and the audience must be the surface called (ADR-031). The
@@ -122,8 +124,9 @@ cache holds composed contexts for a short time; the pilots' input files are read
 |---|---|---|---|---|
 | Signing key of the identity provider | Signing tokens | Identity provider | Never; the public key via JWKS | At the identity provider; restart the API afterwards (see above) |
 | Client secret of each UI client | The UI's login | Identity provider, the UI's environment | No | At the identity provider, then the UI's environment |
+| Tokens of a signed-in UI user (access, refresh, ID token) | The UI's calls to the API | The UI's session store: files in the UI container, not encrypted | No | Dropped after eight hours without a request and on every redeploy of the UI; sign out ends them at the identity provider |
 | Credentials of machine clients | CI and automation (`client_credentials`) | Identity provider, the CI's secret store | No | Before their expiry |
-| Password of the runtime role (`<database>_runtime`, in `DATABASE_URL`) | The API, the purge, `cc actor` | Operator | Environment | `python -m migrations.roles` sets it again from the environment; then restart |
+| Password of the runtime role (`<database>_runtime`, in `DATABASE_URL`) | The API, the purge, `cc oversight expire`, `cc actor` | Operator | Environment | `python -m migrations.roles` sets it again from the environment; then restart |
 | Password of the migration role (`<database>_migrator`) | Migrations; owns every table | Operator | Never; only the one-shot migration run | Like the runtime role |
 | Password of the database superuser | Creating the two roles above, nothing else | Operator | Never; only `python -m migrations.roles` | In PostgreSQL |
 | Password in `REDIS_URL` | Cache access | Operator | Environment | Redis first, then the environment; restart |

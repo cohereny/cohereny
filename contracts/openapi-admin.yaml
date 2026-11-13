@@ -314,7 +314,7 @@ info:
 
     Generated from the application — see scripts/export_openapi.py.'
   title: Cohereny API — admin
-  version: 0.2.0
+  version: 0.2.1
 openapi: 3.1.0
 paths:
   /v1/admin/actors/{actor_ref}/anonymize:

@@ -9,6 +9,18 @@ behaviour incompatibly — the section says so —, a patch version (0.X.Y) only
 release has a pre-release on GitHub tagged `vX.Y.Z`. The sections before 0.2.0 are snapshots
 of the development repository, named after their date.
 
+## 0.2.1 — 2026-11-13
+
+### Changed
+- **The documents for operators now say what was missing from them.** The study pilot traces values to Langfuse too, into the same project as the placeholder traces; with `API_DOCS=true` the contract is served without a token; `cc oversight expire` runs as the runtime role; the `author` surface lists `/v1/samples`, the feedback and the learning proposals; the UI's login sessions are in the inventory; and a run whose process ended mid-step is a residual risk until it is reaped, with the way to clear it ([DATA-PROTECTION.md](DATA-PROTECTION.md), [SECURITY.md](SECURITY.md), [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md)).
+
+### Security
+- **Checking a redaction rule could hold the API.** Before it refused a pattern that backtracks without end, the approval tried the pattern on sample text: the check meant to keep such a pattern out ran it first and blocked the server process. The check now reads the pattern before anything runs it.
+- **A technical account could decide at a pilot's gate, and two decisions sent at once could both be recorded.** The rule of the workflow gate — an account in `chy-service-accounts` never decides — did not reach the pilots; it does now, with `403`. And the decision is written only while the run still waits at the gate: of two decisions at the same moment the first stands, the second is refused with `409` and releases nothing.
+- **Every signed-in account could list the names of the pilots' input files and start a pilot run.** A file name can name a person, and starting a run sends a document to a model. Both now need `contributor`: `GET /v1/pilots/files` and `POST /v1/pilots/runs` answer `403` below it.
+- **The decision at a pilot's gate takes the decision and nothing else.** A body with any further field is refused with `422`: a form posted as text/plain can be shaped into JSON that carries the rest of the form in a second field.
+
+
 ## 0.2.0 — 2026-11-12
 
 ### Added

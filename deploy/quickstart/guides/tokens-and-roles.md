@@ -34,7 +34,7 @@ that reads the audit log cannot write blocks with its token, even if its user co
 
 | Surface | Client id | Paths |
 |---|---|---|
-| `author` | `cohereny.author.ci` | `/v1/me`, `/v1/scopes`, `/v1/blocks`, `/v1/workflows`, `/v1/pilots` |
+| `author` | `cohereny.author.ci` | `/v1/me`, `/v1/scopes`, `/v1/blocks`, `/v1/workflows`, `/v1/samples`, `/v1/pilots`, `/v1/executions/{id}/feedback`, `/v1/learning-proposals` |
 | `serve` | `cohereny.serve.ci` | `/v1/compose`, `/v1/complete`, `/v1/route` |
 | `observe` | `cohereny.observe.ci` | `/v1/audit-log`, `/v1/benchmarks`, `/v1/questions` |
 | `admin` | `cohereny.admin.ci` | `/v1/admin/...` |

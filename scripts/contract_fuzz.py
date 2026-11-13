@@ -41,6 +41,13 @@ CHY-192 the target ran with DEV_MODE and no token was sent at all. Without
 that switch a missing or rejected token means 401 on every request, and 401 is
 not a server error: the run would pass having tested nothing past the door. So
 before each surface is fuzzed, its token has to be let in at least once.
+
+Hooks (CHY-274): every run loads scripts/schemathesis_hooks.py through
+SCHEMATHESIS_HOOKS. Schemathesis has no serializer for `application/pdf`, so
+the PDF branch of the document upload was never sent, and cases built to break
+that operation were thrown away until Hypothesis gave up — the strict job then
+failed by chance, with nothing wrong in the API. The hook sends PDF bodies as
+raw bytes; why and what was measured is in that file.
 """
 from __future__ import annotations
 
@@ -65,6 +72,7 @@ SURFACES = ("serve", "author", "observe", "admin")
 PLANNED = '/x-cohereny-status == "planned"'
 METHODS = ("get", "post", "put", "patch", "delete")
 NIL_UUID = "00000000-0000-0000-0000-000000000000"
+HOOKS = ROOT / "scripts" / "schemathesis_hooks.py"
 
 
 def _wait_for(url: str, seconds: int = 30) -> None:
@@ -128,10 +136,12 @@ def let_in(url: str, contract: Path, bearer: str) -> bool:
 
 
 def _schemathesis(contract: Path, url: str, *extra: str) -> tuple[int, str]:
+    """One Schemathesis run, with the hooks loaded (CHY-274). Returns exit code and output."""
     result = subprocess.run(
         [sys.executable, "-m", "schemathesis.cli", "run", str(contract), "--url", url,
          "--no-color", "--max-examples", "15", *extra],
         capture_output=True, text=True, check=False,
+        env={**os.environ, "SCHEMATHESIS_HOOKS": str(HOOKS)},
     )
     return result.returncode, result.stdout + result.stderr
 

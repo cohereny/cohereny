@@ -44,6 +44,7 @@ from contexts.pilots.errors import (
     UnknownPilotConfig,
     OversightGateGone,
     PilotError,
+    PilotServiceAccountMayNotDecide,
     QuestionNotFound,
     RunHasTransparencyRecords,
     RunNotCancellable,
@@ -298,6 +299,8 @@ _PILOT_STATUS: dict[type[PilotError], int] = {
     UnknownPilot: 400,
     InvalidDecision: 400,
     RunNotOwned: 403,
+    # A technical account at the pilot's gate (CHY-321), as at a workflow gate.
+    PilotServiceAccountMayNotDecide: 403,
     RunNotCancellable: 409,
     RunHasTransparencyRecords: 409,
     NotAwaitingOversight: 409,

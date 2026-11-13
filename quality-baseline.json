@@ -12,10 +12,10 @@
   "boundary_inward_only": 3,
   "boundary_kernel_uses_nothing": 0,
   "codespell": 41,
-  "coverage_percent": 91.1,
+  "coverage_percent": 91.0,
   "planned_operations": 9,
   "ruff": {
-    "ARG": 26,
+    "ARG": 25,
     "ASYNC": 0,
     "B": 0,
     "C90": 3,
@@ -28,5 +28,5 @@
     "TRY": 11,
     "UP": 6
   },
-  "unused_actor": 17
+  "unused_actor": 16
 }

@@ -117,8 +117,8 @@ welcome.
   second person with the role `reviewer` ends it; there is no setting for it.
 - **Technical accounts must be marked.** Put CI and automation accounts in the
   identity-provider group `chy-service-accounts`. A marked account never approves a block
-  that decides where data goes, never decides at a workflow gate, never judges a drawn
-  sample, and does not count as a person. An unmarked one with an approving role counts as
+  that decides where data goes, never decides at a gate — of a workflow or of a pilot —,
+  never judges a drawn sample, and does not count as a person. An unmarked one with an approving role counts as
   a second person, and whoever can use its credentials can approve and decide as it.
 - **Identifiers are found by pattern or by name, nothing else.** E-mail addresses, phone
   numbers, IBANs, German tax ids and health insurance numbers and labelled dates of birth
@@ -131,8 +131,8 @@ welcome.
   without a list is planned.
 - **The pilots send and keep the real values.** They are deprecated. A workflow run
   replaces identifiers before the model and is stored with placeholders. The LangGraph
-  pilots do neither: they call the model with the values (the banking pilot traces them
-  to Langfuse as well), and what they took in and gave back is stored with the values,
+  pilots do neither: they call the model with the values (and trace them to Langfuse as
+  well, the study pilot into the same project as the placeholder traces), and what they took in and gave back is stored with the values,
   protected by roles, by the retention periods and by the encryption the installation
   provides ([CRYPTOGRAPHY.md](CRYPTOGRAPHY.md)). So are workflow runs started before
   migration 036, until their content period ends. The banking pilot moves onto the workflow

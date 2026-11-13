@@ -256,6 +256,48 @@ def test_start_run_custom_thread_id():
             _cleanup()
 
 
+class TestWhoSeesAndStartsPilotRuns:
+    """CHY-323: the list of input files and the start of a run, from `contributor` up.
+
+    A file name is content (kernel/retention.py) and can name a person; any
+    signed-in account could list them all, and start a run with one."""
+
+    def test_a_consumer_sees_no_file_names(self):
+        pool = _make_pool(actor=actor_row(role="consumer"))
+        client = _make_client(pool)
+        with _real_input_file("banking-kunde-mueller.pdf"):
+            try:
+                resp = client.get("/v1/pilots/files")
+                assert resp.status_code == 403, resp.text
+                assert "mueller" not in resp.text
+            finally:
+                _cleanup()
+
+    def test_a_contributor_sees_them(self):
+        pool = _make_pool(actor=actor_row(role="contributor"))
+        client = _make_client(pool)
+        with _real_input_file("banking-kunde-mueller.pdf"):
+            try:
+                resp = client.get("/v1/pilots/files")
+                assert resp.status_code == 200, resp.text
+                assert resp.json() == ["banking-kunde-mueller.pdf"]
+            finally:
+                _cleanup()
+
+    def test_a_consumer_starts_no_run(self):
+        pool = _make_pool(actor=actor_row(role="consumer"), conn_fetchrow=_make_run_record())
+        client = _make_client(pool)
+        with _real_input_file(), patch("contexts.pilots.service.run_in_thread") as thread:
+            try:
+                resp = client.post("/v1/pilots/runs", json={"input_file": "study-example.pdf"})
+                assert resp.status_code == 403, resp.text
+                thread.assert_not_called()
+                assert not [c for c in pool.conn.fetchrow.call_args_list
+                            if "INSERT INTO pilot_runs" in c.args[0]]
+            finally:
+                _cleanup()
+
+
 def _start_with(role: str, run_config: dict):
     """POST a run as an actor with this role; returns (response, run_in_thread mock)."""
     pool = _make_pool(actor=actor_row(role=role), conn_fetchrow=_make_run_record(run_config=run_config))
@@ -542,7 +584,7 @@ def test_oversight_records_approver_and_time():
 
         # The UPDATE, not the last call: the connection says for whom it acts
         # and clears that again afterwards (CHY-92).
-        update_sql = next(c.args[0] for c in pool.conn.execute.call_args_list
+        update_sql = next(c.args[0] for c in pool.conn.fetchval.call_args_list
                           if "UPDATE pilot_runs" in c.args[0])
         assert "oversight_by" in update_sql
         assert "oversight_at" in update_sql
@@ -582,6 +624,67 @@ def test_a_reviewer_can_release_the_oversight_gate():
         resp = client.post(f"/v1/pilots/runs/{run_id}/oversight",
                            json={"decision": "approved"})
         assert resp.status_code == 200, resp.text
+    finally:
+        registry.forget(run_id)
+        _cleanup()
+
+
+def test_a_technical_account_does_not_decide_at_the_pilot_gate():
+    """CHY-321: the rule of the workflow gate (CHY-275) holds here too. Refused
+    before anything is written, and the gate stays where it was."""
+    run_id = uuid4()
+    pool = _make_pool(actor=actor_row(role="admin", is_service_account=True),
+                      fetchrow=_awaiting_run())
+    client = _make_client(pool)
+    registry.open_oversight_gate(run_id)
+    try:
+        resp = client.post(f"/v1/pilots/runs/{run_id}/oversight",
+                           json={"decision": "approved"})
+        assert resp.status_code == 403, resp.text
+        assert "technical account" in resp.json()["detail"]
+        assert not [c for c in pool.conn.fetchval.call_args_list if "UPDATE pilot_runs" in c.args[0]]
+        assert registry.has_oversight_gate(run_id)
+    finally:
+        registry.forget(run_id)
+        _cleanup()
+
+
+def test_a_second_decision_that_lost_the_race_is_refused():
+    """CHY-321: two decisions sent at once both passed the status check, and the
+    second overwrote the first. The write now names the state it expects; when
+    it finds no row the answer is 409, nothing is audited and the gate is not
+    released a second time."""
+    run_id = uuid4()
+    pool = _make_pool(actor=actor_row(role="reviewer"), fetchrow=_awaiting_run(),
+                      conn_fetchval=None)
+    client = _make_client(pool)
+    registry.open_oversight_gate(run_id)
+    try:
+        resp = client.post(f"/v1/pilots/runs/{run_id}/oversight",
+                           json={"decision": "approved"})
+        assert resp.status_code == 409, resp.text
+        assert "not awaiting oversight" in resp.json()["detail"]
+        assert not [c for c in pool.conn.fetchval.call_args_list
+                    if len(c.args) > 2 and c.args[2] == "pilot.oversight_decided"]
+        assert registry.has_oversight_gate(run_id), "the gate must not be released twice"
+    finally:
+        registry.forget(run_id)
+        _cleanup()
+
+
+def test_a_decision_with_a_field_besides_it_is_refused():
+    """CHYUI-18: a text/plain form shaped into JSON carries a second field with
+    the rest of the form; the body is refused with 422 and nothing is written."""
+    run_id = uuid4()
+    pool = _make_pool(actor=actor_row(role="reviewer"), fetchrow=_awaiting_run())
+    client = _make_client(pool)
+    registry.open_oversight_gate(run_id)
+    try:
+        resp = client.post(f"/v1/pilots/runs/{run_id}/oversight",
+                           json={"decision": "approved", "x": "=1"})
+        assert resp.status_code == 422, resp.text
+        assert not [c for c in pool.conn.fetchval.call_args_list if "UPDATE pilot_runs" in c.args[0]]
+        assert registry.has_oversight_gate(run_id)
     finally:
         registry.forget(run_id)
         _cleanup()

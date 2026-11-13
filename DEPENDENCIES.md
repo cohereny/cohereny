@@ -26,7 +26,7 @@ Cohereny uses two roles per database and never connects as a superuser (CHY-85):
 | Role | Does | Used by |
 |---|---|---|
 | `<database>_migrator` | Owns the database and every table; runs the migrations | `python -m migrations.runner`, nothing else |
-| `<database>_runtime` | What the application may do, table by table — no ownership, no DDL, no `BYPASSRLS` | The API, `cc retention purge`, `cc actor` |
+| `<database>_runtime` | What the application may do, table by table — no ownership, no DDL, no `BYPASSRLS` | The API, `cc retention purge`, `cc oversight expire`, `cc actor` |
 
 `python -m migrations.roles` creates both, once, with a superuser connection, and hands
 an existing database over to the migration role. The database itself must exist: create

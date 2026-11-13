@@ -17,7 +17,10 @@ The database half -- migration 032, the ratchet, four eyes on a real approval
 """
 from __future__ import annotations
 
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -105,6 +108,32 @@ class TestPatternsThatWouldHangEveryPrompt:
     def test_a_repeated_group_that_varies_inside_is_refused(self, pattern: str):
         with pytest.raises(MalformedRedactionRule, match="upper bound"):
             scope_rule_from(_row({"category": "CODE", "pattern": pattern}))
+
+    def test_the_check_refuses_before_it_runs_the_pattern(self):
+        """The check must not run what it is about to refuse (CHY-320).
+
+        It tried every pattern on its probe text first, and `(\\w+)+§` never
+        finishes there: the probe is a run of word characters with no `§`. The
+        patterns above match the probe at once and never showed the order. In a
+        child process with a time limit, so a regression fails here instead of
+        holding the suite.
+        """
+        code = (
+            "from kernel.redaction import _checked_pattern\n"
+            "try:\n"
+            "    _checked_pattern(r'(\\w+)+\u00a7')\n"
+            "except ValueError as exc:\n"
+            "    print(exc)\n"
+        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", code], cwd=Path(__file__).resolve().parent.parent,
+                capture_output=True, text=True, timeout=20,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail("the check ran the pattern before refusing it and held for 20 s")
+        assert result.returncode == 0, result.stderr
+        assert "upper bound" in result.stdout
 
     @pytest.mark.parametrize("pattern", [
         r"(?:\d{3}){1,5}", r"(?:[A-Z]{2}\d{2}){2}", r"(?P<year>\d{4})-\d{2}",

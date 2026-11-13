@@ -159,13 +159,15 @@ def _frame(event: dict | None) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-@router.get("/files")
+@router.get("/files", responses=FORBIDDEN)
 async def list_files(
     pilot: str | None = None,
     actor: CurrentUser = Depends(require_auth),
+    pool=Depends(get_pool),
 ) -> list[str]:
-    """Available PDF filenames, optionally filtered to one pilot's prefix."""
-    return service.list_input_files(settings.pilot_input_dir, pilot)
+    """Available PDF filenames, optionally filtered to one pilot's prefix.
+    From `contributor` up, like starting a run (CHY-323)."""
+    return await service.list_files(pool, actor, settings.pilot_input_dir, pilot)
 
 
 @router.get("/runs/{run_id}", response_model=PilotRunOut, responses=NOT_FOUND)

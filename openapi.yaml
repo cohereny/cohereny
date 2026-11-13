@@ -1656,6 +1656,15 @@ components:
       title: OversightDecision
       type: object
     OversightRequest:
+      additionalProperties: false
+      description: 'The Art. 14 decision at a pilot''s gate: the decision and nothing else.
+
+
+        Unknown fields are refused, not ignored (CHYUI-18): a form posted as
+
+        text/plain can be shaped into JSON with a second field that carries the
+
+        rest of the form, and a body that only looked like a decision passed.'
       properties:
         decision:
           title: Decision
@@ -3384,7 +3393,7 @@ info:
     \ in the application log by it.\n\nThis specification is generated from the running application and\
     \ checked into\nthe repository as `openapi.yaml`; CI fails when the two disagree (ADR-029).\n"
   title: Cohereny API
-  version: 0.2.0
+  version: 0.2.1
 openapi: 3.1.0
 paths:
   /v1/admin/actors/{actor_ref}/anonymize:
@@ -4930,7 +4939,9 @@ paths:
   /v1/pilots/files:
     get:
       deprecated: true
-      description: Available PDF filenames, optionally filtered to one pilot's prefix.
+      description: 'Available PDF filenames, optionally filtered to one pilot''s prefix.
+
+        From `contributor` up, like starting a run (CHY-323).'
       operationId: list_files_v1_pilots_files_get
       parameters:
       - in: query
@@ -4951,6 +4962,12 @@ paths:
                 title: Response List Files V1 Pilots Files Get
                 type: array
           description: Successful Response
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+          description: The actor's role does not permit this.
         '422':
           content:
             application/json:

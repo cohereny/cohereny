@@ -704,19 +704,23 @@ def _checked_pattern(pattern: object) -> re.Pattern[str]:
     except re.error as exc:
         msg = f"pattern does not compile: {exc}"
         raise ValueError(msg) from exc
-    if any(m.start() == m.end() for m in compiled.finditer(_PROBE_TEXT)) or (
-        compiled.fullmatch("") is not None
-    ):
-        # re.sub replaces an empty match too: a placeholder between every
-        # character, and a prompt nobody can read.
-        msg = "pattern can match empty text"
-        raise ValueError(msg)
+    # The backtracking check reads the pattern's text and runs nothing, so it
+    # comes before anything that runs the pattern: the probe below is a match
+    # over text like any prompt, and a pattern that backtracks badly would hold
+    # this process in the very check meant to refuse it (CHY-320).
     if _backtracks_badly(pattern):
         msg = (
             "a repeated group must have an upper bound — (…){1,5}, not (…)+ — "
             "and may contain only fixed counts such as \\d{3}: no +, *, ? "
             "and no alternatives inside it"
         )
+        raise ValueError(msg)
+    if any(m.start() == m.end() for m in compiled.finditer(_PROBE_TEXT)) or (
+        compiled.fullmatch("") is not None
+    ):
+        # re.sub replaces an empty match too: a placeholder between every
+        # character, and a prompt nobody can read.
+        msg = "pattern can match empty text"
         raise ValueError(msg)
     return compiled
 
