@@ -126,3 +126,25 @@ def test_let_in_asks_reads_without_parameters_first(monkeypatch, tmp_path):
                                     "/v1/a": {"get": {}}})
     assert contract_fuzz.let_in("http://x", contract, "tok") is True
     assert seen == [("GET", "/v1/a")]
+
+
+# ── Every run loads the hooks (CHY-274) ───────────────────────────────────────
+#
+# Schemathesis has no serializer for application/pdf. Without the hook the PDF
+# branch of the document upload is never sent, and the strict job fails by
+# chance when Hypothesis gives up on cases it cannot build. That the hook does
+# its job is shown in tests/integration/test_contract_fuzz_hooks.py, where
+# Schemathesis is installed; here only that every run is handed it.
+
+def test_every_schemathesis_run_is_handed_the_hooks(monkeypatch):
+    seen = {}
+
+    def run(_cmd, **kw):
+        seen.update(kw.get("env") or {})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(contract_fuzz.subprocess, "run", run)
+    monkeypatch.setenv("CHY274_PROBE", "kept")
+    contract_fuzz._schemathesis(contract_fuzz.ROOT / "contracts" / "openapi-author.yaml", "http://x")
+    assert seen.get("SCHEMATHESIS_HOOKS") == str(contract_fuzz.HOOKS)
+    assert contract_fuzz.HOOKS.is_file()
+    assert seen.get("CHY274_PROBE") == "kept", "the rest of the environment must reach the run"

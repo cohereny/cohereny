@@ -82,6 +82,26 @@ async def test_a_run_the_process_lost_is_cancelled_as_failed_and_audited(pool, s
     assert await _audited(pool, ACTION_PILOT_RUN_CANCELLED, run_id) == 1
 
 
+async def test_of_two_decisions_at_the_gate_the_second_finds_no_run_there(pool, system_pool):
+    """CHY-321: the write names the state it expects. Two decisions sent at once
+    both passed the status check, and the second overwrote the first; now the
+    second write finds no row waiting at the gate, and the first stands."""
+    owner = caller("reviewer")
+    owner_id = (await resolve_actor(pool, owner)).id
+    run_id = await _run(system_pool, owner_id, "awaiting_oversight")
+    first, second = caller("reviewer"), caller("reviewer")
+    first_id = (await resolve_actor(pool, first)).id
+    second_id = (await resolve_actor(pool, second)).id
+
+    async with system_pool.acquire() as conn:
+        assert await store.record_oversight(conn, run_id, decision="approved", decided_by=first_id)
+        assert not await store.record_oversight(conn, run_id, decision="rejected", decided_by=second_id)
+
+    row = await system_pool.fetchrow(
+        "SELECT status, oversight_decision, oversight_by FROM pilot_runs WHERE id = $1", run_id)
+    assert (row["status"], row["oversight_decision"], row["oversight_by"]) == ("running", "approved", first_id)
+
+
 async def test_a_finished_run_is_deleted_and_the_deletion_audited(pool, system_pool):
     owner = caller("contributor")
     run_id = await _run(system_pool, (await resolve_actor(pool, owner)).id, "failed")

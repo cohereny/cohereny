@@ -10,6 +10,18 @@ inkompatibel ändern — der Abschnitt sagt es —, eine Patch-Version (0.X.Y) k
 Ausgabe hat auf GitHub ein Pre-Release mit dem Tag `vX.Y.Z`. Die Abschnitte vor 0.2.0 sind
 Schnappschüsse des Entwicklungs-Repositorys und heißen nach ihrem Datum.
 
+## 0.2.1 — 2026-11-13
+
+### Geändert
+- **Die Dokumente für Betreiber sagen jetzt, was ihnen fehlte.** Auch der Study-Pilot trackt Werte nach Langfuse, ins selbe Projekt wie die Platzhalter-Traces; mit `API_DOCS=true` ist der Vertrag ohne Token abrufbar; `cc oversight expire` läuft als Laufzeitrolle; die Oberfläche `author` nennt `/v1/samples`, das Feedback und die Lernvorschläge; die Anmeldesitzungen der UI stehen im Inventar; und ein Lauf, dessen Prozess mitten im Schritt endete, ist bis zu seiner Aufräumung ein Restrisiko, mit dem Weg, ihn zu leeren ([DATA-PROTECTION.md](DATA-PROTECTION.md), [SECURITY.md](SECURITY.md), [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md)).
+
+### Sicherheit
+- **Die Prüfung einer Ersetzungsregel konnte die API anhalten.** Bevor sie ein Muster mit endlosem Backtracking abwies, probierte die Freigabe es an einem Beispieltext aus. Die Prüfung, die ein solches Muster fernhalten soll, führte es also zuerst aus und blockierte den Serverprozess. Jetzt liest die Prüfung das Muster, bevor irgendetwas es ausführt.
+- **Ein technisches Konto konnte am Gate eines Piloten entscheiden, und zwei gleichzeitige Entscheidungen konnten beide aufgezeichnet werden.** Die Regel des Workflow-Gates, dass ein Konto in `chy-service-accounts` nie entscheidet, erreichte die Piloten nicht; jetzt gilt sie dort auch, mit `403`. Und die Entscheidung wird nur geschrieben, solange der Lauf noch am Gate wartet: Von zwei gleichzeitigen Entscheidungen gilt die erste, die zweite wird mit `409` abgewiesen und gibt nichts frei.
+- **Jedes angemeldete Konto konnte die Namen der Eingabedateien der Piloten abrufen und einen Pilotlauf starten.** Ein Dateiname kann eine Person nennen, und ein Start schickt ein Dokument an ein Modell. Beides verlangt jetzt `contributor`: `GET /v1/pilots/files` und `POST /v1/pilots/runs` antworten darunter mit `403`.
+- **Die Entscheidung am Gate eines Piloten nimmt die Entscheidung und sonst nichts.** Ein Body mit einem weiteren Feld wird mit `422` abgewiesen: Ein als text/plain gesendetes Formular lässt sich zu JSON formen, das den Rest des Formulars in einem zweiten Feld trägt.
+
+
 ## 0.2.0 — 2026-11-12
 
 ### Neu

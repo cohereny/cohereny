@@ -30,7 +30,9 @@ from contexts.pilots.errors import (
     NoCoverageData,
     UnknownPilotConfig,
     QuestionNotFound,
+    NotAwaitingOversight,
     OversightGateGone,
+    PilotServiceAccountMayNotDecide,
     RunHasTransparencyRecords,
     RunNotFound,
 )
@@ -155,6 +157,18 @@ def list_input_files(input_dir: str | Path, pilot: str | None = None) -> list[st
     if pilot:
         files = [f for f in files if f.startswith(pilot)]
     return files
+
+
+async def list_files(pool, caller: Caller, input_dir: str | Path, pilot: str | None = None) -> list[str]:
+    """The input files a run can start with — for whoever may start one (CHY-323).
+
+    A file name is content: it can name a person, and kernel/retention.py clears
+    it with a run's content period. Listed to every signed-in account it showed
+    more than any of them could act on; now the list asks for the role a start
+    asks for.
+    """
+    require(await resolve_actor(pool, caller), "contributor")
+    return list_input_files(input_dir, pilot)
 
 
 # ── starting ──────────────────────────────────────────────────────────────────
@@ -332,6 +346,9 @@ async def start_run(
     thread_id = body.thread_id or f"{body.pilot_name}-{uuid4().hex[:8]}"
 
     starter = await resolve_actor(pool, caller)
+    # Starting a run sends a document to a model: `contributor`, as for the list
+    # of files to start with (CHY-323). Until then any signed-in account could.
+    require(starter, "contributor")
     # The same gate as storing the map (put_workflow_config): the model map is
     # the local/cloud boundary, and overriding it for one run moves a prompt as
     # far as rewriting the row does. Without this, any author could send the
@@ -509,6 +526,10 @@ async def submit_oversight(
     rules.check_decision(decision)
     decider = await resolve_actor(pool, caller)
     require(decider, "reviewer")
+    # A technical account decides at no gate, whatever its role (CHY-275 for the
+    # workflow gate, CHY-321 here): refused before anything is read or written.
+    if decider.is_service_account:
+        raise PilotServiceAccountMayNotDecide
 
     # Only someone who may see the run decides it — for a pilot run, which has
     # no scope, that is its starter or an admin (CHY-92).
@@ -527,9 +548,13 @@ async def submit_oversight(
         raise OversightGateGone
 
     async with acting.acting_as(pool, decider.id) as conn, conn.transaction():
-        await store.record_oversight(
+        if not await store.record_oversight(
             conn, run_id, decision=decision, decided_by=decider.id
-        )
+        ):
+            # Someone else's decision landed between the check above and this
+            # write; theirs stands, and the gate is not released a second time.
+            current = await store.run_status_and_owner(conn, run_id)
+            raise NotAwaitingOversight(current["status"] if current else "gone")
         await write_audit(
             conn,
             action=ACTION_PILOT_OVERSIGHT_DECIDED,

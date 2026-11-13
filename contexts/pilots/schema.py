@@ -20,7 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # Mirrors the CHECK on pilot_runs.status (migrations 003 and 006);
@@ -108,6 +108,15 @@ class PilotRunOut(BaseModel):
 
 
 class OversightRequest(BaseModel):
+    """The Art. 14 decision at a pilot's gate: the decision and nothing else.
+
+    Unknown fields are refused, not ignored (CHYUI-18): a form posted as
+    text/plain can be shaped into JSON with a second field that carries the
+    rest of the form, and a body that only looked like a decision passed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     decision: str  # "approved" or "rejected"
 
 

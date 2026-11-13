@@ -85,6 +85,23 @@ class NotAwaitingOversight(PilotError):
         super().__init__(f"Run is not awaiting oversight (status: {status})")
 
 
+class PilotServiceAccountMayNotDecide(PilotError):
+    """A technical account tried to decide at a pilot's gate (CHY-321).
+
+    The same rule as at a workflow gate (CHY-275): an account in the identity
+    provider's group chy-service-accounts holds the role its jobs need and is
+    still not a person, and the Art. 14 decision is a person's. The pilot is
+    deprecated (CHY-172); its gate is closed to automation all the same while
+    it runs.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A technical account (group chy-service-accounts) cannot decide at a gate. "
+            "A person has to."
+        )
+
+
 class OversightGateGone(PilotError):
     """The run waits for a decision, but the in-process gate no longer exists.
 

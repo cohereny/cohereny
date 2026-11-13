@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cohereny-api"
-version = "0.2.0"
+version = "0.2.1"
 description = "Cohereny — Context-aware LLM Middleware (FastAPI)"
 # Also the supplier in the SBOM (scripts/sbom_supplier.py, CHY-22).
 authors = [{ name = "Thomas Roth" }]

@@ -27,6 +27,7 @@ Systemen, die miteinander nichts zu tun haben:
 |---|---|---|
 | Abdeckungskennzahl | nach dem Refactoring besser | die Quellliste war geschrumpft, gemessen wurde weniger |
 | `deploy:dev` | Exit 0 | der Container lief in einer Neustartschleife, 9.915 mal |
+| Deploy-Jobs aller Stufen | Erfolg | die Migration war gescheitert, geprüft wurde nur `up -d`; seit 0.2.1 prüft `scripts/after_deploy.sh` Version und Migrationsstand |
 | Backup-Jobs | alle erfolgreich | seit Wochen wurden dieselben alten Daten kopiert |
 | Qualitätsschranke | „unverändert" | die neuen Dateien waren ungetrackt und wurden nicht gemessen |
 | Grenzen-Wächter | vier von sechs Regeln | zwei wurden erhoben und nie verglichen |

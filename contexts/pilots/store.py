@@ -154,19 +154,25 @@ async def clear_oversight_gate(conn, run_id: UUID) -> None:
     )
 
 
-async def record_oversight(conn, run_id: UUID, *, decision: str, decided_by: UUID) -> None:
-    """Decision, approver and time in one statement.
+async def record_oversight(conn, run_id: UUID, *, decision: str, decided_by: UUID) -> bool:
+    """Decision, approver and time in one statement; False if the run had left
+    the gate.
 
     Migration 014 refuses the UPDATE if the approver or the time is missing —
     recording that "a human decided" without naming the human and the time is
     not a record of oversight (CHY-88). The record follows from Art. 12 of the
     AI Act, the oversight it records from Art. 14 (CHY-152, migration 037).
+
+    Only a run still at the gate is written (CHY-321): two decisions sent at the
+    same time both passed the status check before either wrote, and the second
+    overwrote the first. Now the second finds no row and the caller refuses it.
     """
-    await conn.execute(
+    return await conn.fetchval(
         "UPDATE pilot_runs SET status='running', oversight_pending=FALSE, "
-        "oversight_decision=$1, oversight_by=$2, oversight_at=now() WHERE id=$3",
+        "oversight_decision=$1, oversight_by=$2, oversight_at=now() "
+        "WHERE id=$3 AND status='awaiting_oversight' RETURNING id",
         decision, decided_by, run_id,
-    )
+    ) is not None
 
 
 async def mark_failed(conn, run_id: UUID, message: str) -> None:
